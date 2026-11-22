@@ -1,0 +1,152 @@
+window.__ModuleLoader__.load({
+  id: '@dsh-dock/sandbox-memory',
+  factory(require) {
+    const React = require('react')
+
+    // __CLIENT_MODULES__
+
+    function readActiveLocale(localeSvc) {
+      if (!localeSvc) return undefined
+      if (typeof localeSvc.getSnapshot === 'function') return localeSvc.getSnapshot()?.active
+      if (typeof localeSvc.getLocale === 'function') return localeSvc.getLocale()?.active
+      return undefined
+    }
+
+    function apply(ctx) {
+      ctx.effect(() => installStyles(), 'sandbox-memory: styles')
+
+      const subscribeLocale = (listener) => {
+        if (ctx.locale && typeof ctx.locale.subscribe === 'function') {
+          return ctx.locale.subscribe((snapshot) => listener(snapshot?.active))
+        }
+        if (typeof ctx.on === 'function') {
+          return ctx.on('locale/change', (snapshot) => listener(snapshot?.active))
+        }
+        return () => {}
+      }
+
+      if (ctx.locale && typeof ctx.locale.register === 'function') {
+        const disposeLocale = ctx.locale.register('sandboxMemory', { en, zh })
+        ctx.effect(() => disposeLocale, 'sandbox-memory: locale')
+      }
+
+      const controller = createMemoryController()
+      ctx.effect(() => () => { controller.dispose() }, 'sandbox-memory: controller')
+
+      void controller.syncFromHost()
+
+      // Register native DSH chat tool cards so memory_* & env_snapshot calls render cleanly
+      const MemoryToolCard = createMemoryToolView({
+        React,
+        getLocale: () => readActiveLocale(ctx.locale),
+        subscribeLocale,
+      })
+      const MEMORY_TOOL_NAMES = [
+        'memory_save',
+        'memory_search',
+        'memory_get',
+        'memory_update',
+        'memory_delete',
+        'env_snapshot',
+      ]
+      ctx.slots.inject('tool.call.toolview', () => {
+        const disposers = MEMORY_TOOL_NAMES.map((toolKey) =>
+          ctx.slots.register(
+            {
+              name: 'tool.call.toolview',
+              key: toolKey,
+              priority: 100,
+            },
+            MemoryToolCard,
+          ),
+        )
+        return () => {
+          for (const d of disposers) d?.()
+        }
+      })
+
+      const MemoryMainPage = createMemoryMainPage({
+        React,
+        controller,
+        getLocale: () => readActiveLocale(ctx.locale),
+        subscribeLocale,
+      })
+
+      const MemorySettingsPage = createMemorySettingsPage({
+        React,
+        controller,
+        getLocale: () => readActiveLocale(ctx.locale),
+        subscribeLocale,
+      })
+
+      function PanelIcon({ size = 18 }) {
+        return MemoryNavIcon({ React, size })
+      }
+
+      ctx.slots.inject('sidebar.panellist', () =>
+        ctx.slots.register(
+          {
+            name: 'sidebar.panellist',
+            id: 'sandbox-memory',
+            order: 26,
+            label: () => createTranslator(readActiveLocale(ctx.locale))('panel'),
+            locale: 'sandboxMemory',
+          },
+          PanelIcon,
+        ),
+      )
+
+      ctx.slots.inject('main', () =>
+        ctx.slots.register(
+          {
+            name: 'main',
+            key: 'sandbox-memory',
+            locale: 'sandboxMemory',
+          },
+          MemoryMainPage,
+        ),
+      )
+
+      ctx.slots.inject('settings.section.icon', () =>
+        ctx.slots.register(
+          {
+            name: 'settings.section.icon',
+            id: 'sandbox-memory',
+          },
+          function MemorySectionIcon({ size = 16 }) {
+            return MemoryNavIcon({ React, size })
+          },
+        ),
+      )
+
+      ctx.slots.inject('settings.section', () => {
+        let unregister = null
+        const syncNav = () => {
+          unregister?.()
+          const t = createTranslator(readActiveLocale(ctx.locale))
+          unregister = ctx.slots.register(
+            {
+              name: 'settings.section',
+              id: 'sandbox-memory',
+              order: 29,
+              label: t('nav'),
+            },
+            MemorySettingsPage,
+          )
+        }
+        syncNav()
+        const offLocale = subscribeLocale(() => syncNav())
+        return () => {
+          offLocale()
+          unregister?.()
+          unregister = null
+        }
+      })
+    }
+
+    return {
+      inject: ['slots', 'locale'],
+      apply,
+    }
+  },
+})

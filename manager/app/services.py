@@ -198,6 +198,7 @@ def ensure_default_templates(db: Session, settings: Settings) -> None:
         if (default_tpl.auto_install_plugins or "").strip() in {
             "file-manager",
             "file-manager,workspace-user,custom-theme",
+            "file-manager,workspace-user,custom-theme,sandbox-mesh",
         }:
             default_tpl.auto_install_plugins = default_plugins
 
@@ -205,6 +206,7 @@ def ensure_default_templates(db: Session, settings: Settings) -> None:
         if (sbx.auto_install_plugins or "").strip() in {
             "file-manager",
             "file-manager,workspace-user,custom-theme",
+            "file-manager,workspace-user,custom-theme,sandbox-mesh",
         }:
             sbx.auto_install_plugins = default_plugins
     db.commit()

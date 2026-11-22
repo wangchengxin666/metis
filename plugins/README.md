@@ -10,6 +10,7 @@ inserts the plugin rows into a profile.
 | [workspace-user](workspace-user/README.md) | Bottom-left sidebar launcher showing the current signed-in user's name and email, admin inspection status badge, and quick popup actions (`Settings`, `/my`, `/admin`, `/auth/logout`). |
 | [custom-theme](custom-theme/README.md) | Out-of-the-box Aurora Blue default theme plus interactive Settings editor for presets, light/dark `--dsw-*` tokens, custom CSS variables, sidebar branding, JSON import/export, and Host persistence with zero-flash first paint. |
 | [sandbox-mesh](sandbox-mesh/README.md) | Cross-sandbox 1-on-1 pairing (`Pair`) and LLM-moderated multi-sandbox group chat (`Group`) over Traefik with HMAC-SHA256 auth, per-thread Session context isolation (`New Topic`), live preparing/answering status animations, native Harness tools (`mesh_ask_peer`, `mesh_discuss_group`, `mesh_share_file`), and main-session `@` triggering. |
+| [sandbox-memory](sandbox-memory/README.md) | Token-frugal live sandbox environment awareness + cross-session long-term memory with KV-cache-safe layered injection, zero-token turn-end auto-capture, native Harness tools (`memory_save`, `memory_search`, `memory_get`, `memory_update`, `memory_delete`, `env_snapshot`), and a visual Memory Center UI. |
 
 ## Self-Hosted Discover Index & Registry (via `dsh-manager`)
 
@@ -27,7 +28,7 @@ inserts the plugin rows into a profile.
 By default (and configurable via `SANDBOX_AUTO_INSTALL_PLUGINS` in `manager/.env`), new sandboxes automatically install:
 
 ```dotenv
-SANDBOX_AUTO_INSTALL_PLUGINS=file-manager,workspace-user,custom-theme,sandbox-mesh
+SANDBOX_AUTO_INSTALL_PLUGINS=file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory
 ```
 
 Every sandbox created by the manager will automatically install these plugins from the manager's `/plugins/packages/<slug>.tgz` endpoints during first startup.

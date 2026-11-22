@@ -1,0 +1,64 @@
+{
+  "name": "@dsh-dock/sandbox-memory",
+  "version": "0.1.0",
+  "description": "Token-frugal sandbox environment awareness and cross-session long-term memory with automatic capture, native Harness tools, and a visual Memory Center UI.",
+  "type": "module",
+  "main": "./index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "client.js.template",
+    "src",
+    "scripts",
+    "locale/*.json",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    ".test"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node .test/run.mjs"
+  },
+  "engines": {
+    "dsh": ">=0.2.0 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-tool"
+      ],
+      "external": [
+        "react",
+        "react-dom"
+      ]
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "memory",
+    "long-term-memory",
+    "environment-context",
+    "sandbox-memory"
+  ]
+}

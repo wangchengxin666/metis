@@ -48,7 +48,7 @@ DSH Dock（代码库 `dsh-dock`）用于在 Docker 宿主机上按用户编排�
   - 基础镜像轻量可控（默认 `INSTALL_TOOLCHAIN=false`，含 Debian 13、Node 24、Python 3.13、`uv`、`pnpm`、`git`、`Caddy`、`@deepseek-ai/dsh` 与中文字体/locale）；
   - 按需启用 `INSTALL_TOOLCHAIN=true` 时，按文件名顺序执行 `sandbox/toolchain/toolchain.d/*.sh`（内置 `10-dotnet.sh` 参考脚本），将 SDK 安装至 `/opt/toolchain` 并自动注入交互式 Shell、`DSH` 与 `user-services` 环境。
 - **自托管插件索引与只读 npm 仓库**：
-  - `dsh-manager` 热挂载 `plugins/` 目录，自动提供 `/plugins/index.json`、内联 SVG 图标、`.tgz` 打包下载及只读 `/plugins/npm/*` packument，默认预装并自启安装 `file-manager`、`workspace-user`、`custom-theme` 与 `sandbox-mesh`（支持跨沙箱一对一互联、LLM 主持人多沙箱群聊协同、文件互传与独立话题上下文隔离）。
+  - `dsh-manager` 热挂载 `plugins/` 目录，自动提供 `/plugins/index.json`、内联 SVG 图标、`.tgz` 打包下载及只读 `/plugins/npm/*` packument，默认预装并自启安装 `file-manager`、`workspace-user`、`custom-theme`、`sandbox-mesh`（支持跨沙箱一对一互联、LLM 主持人多沙箱群聊协同、文件互传与独立话题上下文隔离）与 `sandbox-memory`（低 Token 沙箱环境感知与跨会话长期记忆中心，支持自动捕获与可视化手动管理）。
 - **企业内网与国内镜像友好**：支持 `DOCKER_REGISTRY`、`APT_MIRROR`（含 `https://mirrors.aliyun.com` 等 HTTPS 源）、`NODE_MIRROR`（如 `https://mirrors.aliyun.com/nodejs-release`）、`NPM_REGISTRY`、`PIP_INDEX_URL` 与自定义企业 CA 证书。
 
 ## 快速开始
@@ -108,6 +108,7 @@ docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" -w /work/plugi
 docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" -w /work/plugins/workspace-user dsh-sandbox:latest -c "node .test/run.mjs"
 docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" -w /work/plugins/custom-theme dsh-sandbox:latest -c "node .test/run.mjs"
 docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" -w /work/plugins/sandbox-mesh dsh-sandbox:latest -c "node .test/run.mjs"
+docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" -w /work/plugins/sandbox-memory dsh-sandbox:latest -c "node .test/run.mjs"
 ```
 
 ## 开源协议

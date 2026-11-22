@@ -167,9 +167,9 @@ def test_real_repo_plugins_package_cleanly():
     svc = PluginRegistryService(_settings_for(repo_plugins))
     packages = svc.list_packages()
     slugs = {pkg.slug for pkg in packages}
-    assert {"file-manager", "workspace-user", "custom-theme", "sandbox-mesh"}.issubset(slugs)
+    assert {"file-manager", "workspace-user", "custom-theme", "sandbox-mesh", "sandbox-memory"}.issubset(slugs)
 
-    for slug in ("file-manager", "workspace-user", "custom-theme", "sandbox-mesh"):
+    for slug in ("file-manager", "workspace-user", "custom-theme", "sandbox-mesh", "sandbox-memory"):
         pkg = svc.get_by_slug_or_filename(slug)
         assert pkg is not None
         assert svc.resolve_icon(f"{slug}.svg") is not None
@@ -187,4 +187,5 @@ def test_real_repo_plugins_package_cleanly():
         "@dsh-dock/workspace-user",
         "@dsh-dock/custom-theme",
         "@dsh-dock/sandbox-mesh",
+        "@dsh-dock/sandbox-memory",
     }.issubset(names)

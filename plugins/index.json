@@ -158,6 +158,44 @@
           }
         }
       ]
+    },
+    {
+      "name": "@dsh-dock/sandbox-memory",
+      "title": {
+        "en": "Memory Center",
+        "zh": "记忆中心"
+      },
+      "description": {
+        "en": "Token-frugal sandbox environment snapshot and cross-session long-term memory with automatic capture, native Harness recall tools, and full manual inspection and editing.",
+        "zh": "面向沙箱环境的低 Token 长期记忆与实时环境感知插件：支持缓存友好型索引注入、自动捕获、原生 Agent 读写工具以及可视化查看、编辑与开关管理。"
+      },
+      "icon": "icons/sandbox-memory.svg",
+      "author": "DSH Dock",
+      "homepage": "https://github.com/wangchengxin666/dsh-dock/tree/main/plugins/sandbox-memory",
+      "repository": {
+        "url": "https://github.com/wangchengxin666/dsh-dock"
+      },
+      "keywords": [
+        "memory",
+        "long-term-memory",
+        "environment",
+        "context",
+        "auto-capture",
+        "sandbox"
+      ],
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1795269600,
+          "source": {
+            "type": "npm",
+            "registry": "http://localhost:9000/plugins/npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0 <0.3.0"
+          }
+        }
+      ]
     }
   ]
 }

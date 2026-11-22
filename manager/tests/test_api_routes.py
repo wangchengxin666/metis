@@ -876,3 +876,484 @@ def test_plugin_reinstall_disk_stats_backup_restore_and_auto_wake(api_env):
     assert woke.status_code == 200 and woke.json()["ready"] is True
     assert fake_docker.containers["alice"]["status"] == "running"
     assert client.post("/api/wake/bob").status_code == 403
+
+
+def test_digital_workforce_branding_role_presets_team_assembly_clone_and_runtime(api_env):
+    client, fake_docker, _registry = api_env
+    admin_headers = {
+        "Authorization": "Bearer test-admin-token",
+        "X-Admin-Email": "admin@example.com",
+    }
+
+    # 1) Default & custom white-label platform branding (Metis defaults + custom SVG logo/favicon + XSS sanitization)
+    b0 = client.get("/api/branding")
+    assert b0.status_code == 200
+    assert b0.json() == {
+        "brand_name_zh": "Metis",
+        "brand_name_en": "Metis",
+        "brand_logo_svg": "",
+        "brand_favicon": "",
+    }
+    fav_default = client.get("/api/branding/favicon")
+    assert fav_default.status_code == 200
+    assert "image/svg+xml" in fav_default.headers["content-type"]
+    assert "<svg" in fav_default.text
+
+    dirty_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" onload="alert(1)">'
+        '<script>alert(2)</script><circle cx="16" cy="16" r="12" onclick="evil()" fill="#6366f1"/>'
+        "</svg>"
+    )
+    b_upd = client.put(
+        "/api/branding",
+        headers=admin_headers,
+        json={
+            "brand_name_zh": "星辰 · 数字员工云",
+            "brand_name_en": "StarWork Cloud",
+            "brand_logo_svg": dirty_svg,
+            "brand_favicon": dirty_svg,
+        },
+    )
+    assert b_upd.status_code == 200
+    b_data = b_upd.json()
+    assert b_data["brand_name_zh"] == "星辰 · 数字员工云"
+    assert "<circle" in b_data["brand_logo_svg"]
+    assert "<script" not in b_data["brand_logo_svg"]
+    assert "onload" not in b_data["brand_logo_svg"]
+    assert "onclick" not in b_data["brand_logo_svg"]
+    assert client.get("/api/auth/me").json()["brand_name_zh"] == "星辰 · 数字员工云"
+    assert client.get("/api/overview", headers=admin_headers).json()["brand_name_en"] == "StarWork Cloud"
+
+    fav_custom = client.get("/api/branding/favicon")
+    assert fav_custom.status_code == 200 and "<circle" in fav_custom.text and "<script" not in fav_custom.text
+
+    # Invalid non-SVG logo rejected with 400
+    bad_logo = client.put(
+        "/api/branding",
+        headers=admin_headers,
+        json={
+            "brand_name_zh": "星辰",
+            "brand_name_en": "Star",
+            "brand_logo_svg": "<div>not an svg</div>",
+        },
+    )
+    assert bad_logo.status_code == 400
+
+    # 2) All-company role template presets (8 R&D + 6 Corporate/Business = 14) & 1-click seeding
+    presets = client.get("/api/templates/presets", headers=admin_headers)
+    assert presets.status_code == 200
+    assert len(presets.json()["items"]) == 14
+
+    seed_res = client.post("/api/templates/seed-presets", headers=admin_headers)
+    assert seed_res.status_code == 200
+    assert len(seed_res.json()) >= 14
+
+    templates = client.get("/api/templates", headers=admin_headers).json()
+    lead_tpl = next(t for t in templates if t["key"] == "tech-lead")
+    assert lead_tpl["role_title"] == "系统架构师 & Tech Lead"
+    assert "担任架构师与技术统筹主持人" in (lead_tpl["role_sop"] or "")
+    legal_tpl = next(t for t in templates if t["key"] == "legal-counsel")
+    assert legal_tpl["role_title"] == "法务与合规审查专员"
+    finance_tpl = next(t for t in templates if t["key"] == "finance-analyst")
+    assert finance_tpl["role_title"] == "财务与经营分析专员"
+
+    # 3) Hire a digital employee from the tech-lead role template -> inherits role & syncs profile
+    lead_res = client.post(
+        "/api/sandboxes",
+        headers=admin_headers,
+        json={
+            "email": "lead@example.com",
+            "display_name": "Tech Lead",
+            "slug": "lead",
+            "template": "tech-lead",
+            "initial_password": "lead-password-123",
+        },
+    )
+    assert lead_res.status_code == 201
+    lead_data = lead_res.json()
+    lead_id = lead_data["id"]
+    assert lead_data["role_title"] == "系统架构师 & Tech Lead"
+    assert "担任架构师与技术统筹主持人" in (lead_data["role_sop"] or "")
+    assert any(c[0] == "sync_role_profile" and c[1][0] == "lead" for c in fake_docker.calls)
+
+    # Update role persona without container recreation
+    patched_lead = client.patch(
+        f"/api/sandboxes/{lead_id}",
+        headers=admin_headers,
+        json={
+            "role_title": "首席架构师 & Tech Lead",
+            "role_description": "负责核心架构与代码评审",
+        },
+    )
+    assert patched_lead.status_code == 200
+    assert patched_lead.json()["role_title"] == "首席架构师 & Tech Lead"
+
+    # 4) Clone the digital employee (including workspace files & role persona)
+    clone_res = client.post(
+        f"/api/sandboxes/{lead_id}/clone",
+        headers=admin_headers,
+        json={
+            "email": "fullstack@example.com",
+            "display_name": "Fullstack Eng",
+            "slug": "fullstack",
+            "copy_workspace": True,
+        },
+    )
+    assert clone_res.status_code == 201
+    clone_data = clone_res.json()
+    clone_id = clone_data["id"]
+    assert clone_data["slug"] == "fullstack"
+    assert clone_data["role_title"] == "首席架构师 & Tech Lead"
+    assert ("export_workspace_tar", ("lead", True)) in fake_docker.calls
+    assert any(c[0] == "restore_workspace_tar" and c[1][0] == "fullstack" for c in fake_docker.calls)
+
+    # 5) 1-Click Project Team Assembly
+    team_res = client.post(
+        "/api/teams/assemble",
+        headers=admin_headers,
+        json={
+            "name": "核心支付攻坚组",
+            "description": "完成支付网关与自动化回归验证",
+            "member_ids": [lead_id, clone_id],
+            "moderator_id": lead_id,
+        },
+    )
+    assert team_res.status_code == 200
+    assert team_res.json()["ok"] is True
+    assert team_res.json()["room_name"] == "核心支付攻坚组"
+    assert team_res.json()["paired_members"] == 2
+
+    # 6) Workforce Runtime & Delivery Center + User Service Control
+    wf_admin = client.get(f"/api/sandboxes/{lead_id}/workforce", headers=admin_headers)
+    assert wf_admin.status_code == 200
+    assert wf_admin.json()["online"] is True
+    assert "/s/lead/apps/web/" in wf_admin.json()["exposed_apps"][0]["url"]
+
+    svc_admin = client.post(
+        f"/api/sandboxes/{lead_id}/services/dev-server/restart",
+        headers=admin_headers,
+    )
+    assert svc_admin.status_code == 200
+    assert svc_admin.json()["ok"] is True
+
+    # User Portal (/my) workforce inspection & service control with tenant isolation
+    assert client.post(
+        "/api/auth/login",
+        json={"email": "lead@example.com", "password": "lead-password-123", "mode": "user"},
+    ).status_code == 200
+
+    wf_my = client.get(f"/api/my/sandboxes/{lead_id}/workforce")
+    assert wf_my.status_code == 200
+    assert wf_my.json()["online"] is True
+
+    svc_my = client.post(f"/api/my/sandboxes/{lead_id}/services/dev-server/restart")
+    assert svc_my.status_code == 200
+
+    # Forbidden on another user's digital employee
+    assert client.get(f"/api/my/sandboxes/{clone_id}/workforce").status_code == 403
+    assert client.post(f"/api/my/sandboxes/{clone_id}/services/dev-server/stop").status_code == 403
+
+
+def test_enterprise_full_lifecycle_tasks_approvals_webhooks_vault_preview_auth_and_snapshots(
+    api_env,
+):
+    client, fake_docker, _registry = api_env
+    admin_headers = {
+        "Authorization": "Bearer test-admin-token",
+        "X-Admin-Email": "admin@example.com",
+    }
+
+    # Provision two digital employees
+    emp_a_res = client.post(
+        "/api/sandboxes",
+        headers=admin_headers,
+        json={
+            "email": "alice@example.com",
+            "slug": "alice-eng",
+            "initial_password": "alice-password-123",
+            "preview_auth_mode": "public",
+            "daily_token_limit": 250000,
+        },
+    )
+    assert emp_a_res.status_code == 201
+    emp_a = emp_a_res.json()
+    emp_a_id = emp_a["id"]
+    assert emp_a["preview_auth_mode"] == "public"
+    assert emp_a["daily_token_limit"] == 250000
+    assert emp_a["has_webhook_token"] is True
+    assert emp_a["webhook_url"] and "/api/webhooks/sandboxes/alice-eng?token=" in emp_a["webhook_url"]
+
+    emp_b_res = client.post(
+        "/api/sandboxes",
+        headers=admin_headers,
+        json={
+            "email": "bob@example.com",
+            "slug": "bob-qa",
+            "initial_password": "bob-password-123",
+        },
+    )
+    assert emp_b_res.status_code == 201
+    emp_b_id = emp_b_res.json()["id"]
+
+    # 1) Shared project file sync (/home/workspace/shared/PROJECT_BRIEF.md)
+    sync_shared = client.post(
+        "/api/teams/sync-shared",
+        headers=admin_headers,
+        json={
+            "team_name": "支付核心组",
+            "sandbox_ids": [emp_a_id, emp_b_id],
+            "file_name": "PROJECT_BRIEF.md",
+            "content": "# 支付核心组\n\n完成对账与自动化测试。\n",
+        },
+    )
+    assert sync_shared.status_code == 200
+    assert sync_shared.json()["ok"] is True
+    assert sync_shared.json()["synced"] == 2
+
+    # 2) Task dispatch & Human approval decision (admin + tenant isolation for users)
+    task_res = client.post(
+        f"/api/sandboxes/{emp_a_id}/tasks",
+        headers=admin_headers,
+        json={
+            "title": "实现 Webhook 自动触发",
+            "description": "接入 GitHub PR 事件并自动跑单测",
+            "priority": "high",
+            "approval_required": True,
+        },
+    )
+    assert task_res.status_code == 200
+    assert task_res.json()["ok"] is True
+
+    appr_res = client.post(
+        f"/api/sandboxes/{emp_a_id}/approvals/task-999",
+        headers=admin_headers,
+        json={"decision": "approved", "note": "LGTM"},
+    )
+    assert appr_res.status_code == 200
+    assert appr_res.json()["decision"] == "approved"
+
+    # 3) Inbound Event Webhook: bad token -> 401; valid token -> auto-wake + dispatch; rotate invalidates old
+    bad_wh = client.post(
+        "/api/webhooks/sandboxes/alice-eng?token=wrong-token",
+        json={"source": "github", "event": "pull_request", "title": "Review PR #42"},
+    )
+    assert bad_wh.status_code == 401
+
+    old_token = emp_a["webhook_url"].split("token=", 1)[1]
+    fake_docker.containers["alice-eng"]["status"] = "exited"
+    ok_wh = client.post(
+        "/api/webhooks/sandboxes/alice-eng",
+        headers={"X-Webhook-Token": old_token},
+        json={
+            "source": "github",
+            "event": "pull_request",
+            "title": "Review PR #42",
+            "wake_if_sleeping": True,
+        },
+    )
+    assert ok_wh.status_code == 200
+    assert ok_wh.json()["ok"] is True
+    assert fake_docker.containers["alice-eng"]["status"] == "running"
+
+    rotated = client.patch(
+        f"/api/sandboxes/{emp_a_id}",
+        headers=admin_headers,
+        json={"rotate_webhook_token": True},
+    )
+    assert rotated.status_code == 200
+    new_token = rotated.json()["webhook_url"].split("token=", 1)[1]
+    assert new_token != old_token
+    assert (
+        client.post(
+            f"/api/webhooks/sandboxes/alice-eng?token={old_token}",
+            json={"title": "Should fail"},
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            f"/api/webhooks/sandboxes/alice-eng?token={new_token}",
+            json={"title": "Should succeed"},
+        ).status_code
+        == 200
+    )
+
+    # 4) Online Preview App Expose/Unexpose, Service CRUD+Logs, Cron CRUD
+    exp_res = client.post(
+        f"/api/sandboxes/{emp_a_id}/apps",
+        headers=admin_headers,
+        json={"name": "preview-web", "port": 5173},
+    )
+    assert exp_res.status_code == 200 and exp_res.json()["ok"] is True
+    assert (
+        client.delete(
+            f"/api/sandboxes/{emp_a_id}/apps/preview-web", headers=admin_headers
+        ).status_code
+        == 200
+    )
+
+    svc_add = client.post(
+        f"/api/sandboxes/{emp_a_id}/services",
+        headers=admin_headers,
+        json={"name": "api-dev", "command": "uvicorn app:app --port 8000"},
+    )
+    assert svc_add.status_code == 200 and svc_add.json()["ok"] is True
+    svc_logs = client.get(
+        f"/api/sandboxes/{emp_a_id}/services/api-dev/logs?tail=80",
+        headers=admin_headers,
+    )
+    assert svc_logs.status_code == 200 and "api-dev" in svc_logs.json()["logs"]
+    assert (
+        client.delete(
+            f"/api/sandboxes/{emp_a_id}/services/api-dev", headers=admin_headers
+        ).status_code
+        == 200
+    )
+
+    cron_add = client.post(
+        f"/api/sandboxes/{emp_a_id}/cron",
+        headers=admin_headers,
+        json={"schedule": "0 9 * * *", "command": "/home/workspace/daily.sh"},
+    )
+    assert cron_add.status_code == 200 and cron_add.json()["ok"] is True
+    assert (
+        client.delete(
+            f"/api/sandboxes/{emp_a_id}/cron?raw=0%209%20*%20*%20*%20/home/workspace/daily.sh",
+            headers=admin_headers,
+        ).status_code
+        == 200
+    )
+
+    # 5) Preview Access Mode governance: public vs authenticated
+    # Anonymous user can access /s/alice-eng/apps/web/ while preview_auth_mode == "public"
+    pub_verify = client.get(
+        "/api/auth/verify-sandbox/alice-eng",
+        headers={"X-Forwarded-Uri": "/s/alice-eng/apps/web/"},
+        follow_redirects=False,
+    )
+    assert pub_verify.status_code == 200
+
+    # Switch to authenticated -> anonymous access to /apps/ must be rejected
+    switch_auth = client.patch(
+        f"/api/sandboxes/{emp_a_id}",
+        headers=admin_headers,
+        json={"preview_auth_mode": "authenticated", "daily_token_limit": 500000},
+    )
+    assert switch_auth.status_code == 200
+    assert switch_auth.json()["preview_auth_mode"] == "authenticated"
+    assert switch_auth.json()["daily_token_limit"] == 500000
+
+    priv_verify = client.get(
+        "/api/auth/verify-sandbox/alice-eng",
+        headers={"X-Forwarded-Uri": "/s/alice-eng/apps/web/"},
+        follow_redirects=False,
+    )
+    assert priv_verify.status_code in {302, 401}
+
+    # 6) Enterprise Credentials & MCP Vault CRUD + hot-push (no secret leakage)
+    cred_create = client.post(
+        "/api/credential-profiles",
+        headers=admin_headers,
+        json={
+            "name": "Core R&D Vault",
+            "git_user_name": "Digital Bot",
+            "git_user_email": "bot@corp.com",
+            "git_host": "github.com",
+            "git_token": "ghp_super_secret_token",
+            "ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRET\n-----END OPENSSH PRIVATE KEY-----",
+            "env_vars_json": '{"NPM_TOKEN":"npm_123"}',
+            "mcp_servers_json": '{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"]}}',
+        },
+    )
+    assert cred_create.status_code == 201
+    cred_data = cred_create.json()
+    cred_id = cred_data["id"]
+    assert cred_data["has_git_token"] is True
+    assert cred_data["has_ssh_key"] is True
+    assert cred_data["has_env_vars"] is True
+    assert "ghp_super_secret_token" not in str(cred_data)
+    assert "BEGIN OPENSSH" not in str(cred_data)
+
+    cred_list = client.get("/api/credential-profiles", headers=admin_headers)
+    assert cred_list.status_code == 200 and len(cred_list.json()) == 1
+
+    cred_patch = client.patch(
+        f"/api/credential-profiles/{cred_id}",
+        headers=admin_headers,
+        json={"git_host": "gitlab.corp.com"},
+    )
+    assert cred_patch.status_code == 200 and cred_patch.json()["git_host"] == "gitlab.corp.com"
+
+    cred_push = client.post(
+        f"/api/credential-profiles/{cred_id}/push",
+        headers=admin_headers,
+        json={"sandbox_ids": [emp_a_id, emp_b_id]},
+    )
+    assert cred_push.status_code == 200
+    assert cred_push.json()["synced"] == 2
+    assert any(
+        c[0] == "sync_credential_profile" and c[1] == ("alice-eng", "Digital Bot", "gitlab.corp.com")
+        for c in fake_docker.calls
+    )
+
+    assert (
+        client.delete(
+            f"/api/credential-profiles/{cred_id}", headers=admin_headers
+        ).status_code
+        == 200
+    )
+
+    # 7) Server-Side Workspace Snapshots Center + User Portal tenant isolation
+    assert (
+        client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "alice-password-123", "mode": "user"},
+        ).status_code
+        == 200
+    )
+
+    snap_create = client.post(
+        f"/api/my/sandboxes/{emp_a_id}/snapshots",
+        json={"name": "v1.0 上线前快照", "note": "release checkpoint", "exclude_caches": True},
+    )
+    assert snap_create.status_code == 201
+    snap_id = snap_create.json()["id"]
+    assert snap_create.json()["name"] == "v1.0 上线前快照"
+
+    snap_list = client.get(f"/api/my/sandboxes/{emp_a_id}/snapshots")
+    assert snap_list.status_code == 200 and len(snap_list.json()) == 1
+
+    snap_restore = client.post(
+        f"/api/my/sandboxes/{emp_a_id}/snapshots/{snap_id}/restore?mode=merge"
+    )
+    assert snap_restore.status_code == 200 and snap_restore.json()["ok"] is True
+
+    # Cross-user isolation on snapshots, tasks, approvals, apps, services, cron
+    assert client.get(f"/api/my/sandboxes/{emp_b_id}/snapshots").status_code == 403
+    assert (
+        client.post(
+            f"/api/my/sandboxes/{emp_b_id}/tasks", json={"title": "Unauthorized"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            f"/api/my/sandboxes/{emp_b_id}/approvals/t1", json={"decision": "approved"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            f"/api/my/sandboxes/{emp_b_id}/apps", json={"name": "x", "port": 3000}
+        ).status_code
+        == 403
+    )
+
+    # Owner deletes snapshot cleanly
+    assert (
+        client.delete(f"/api/my/sandboxes/{emp_a_id}/snapshots/{snap_id}").status_code
+        == 200
+    )
+    assert client.get(f"/api/my/sandboxes/{emp_a_id}/snapshots").json() == []
+
+

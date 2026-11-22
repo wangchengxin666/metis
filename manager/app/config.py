@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -66,6 +67,7 @@ class Settings(BaseSettings):
     idle_sleep_enabled: bool = False
     idle_sleep_minutes: int = 240
     restore_max_bytes: int = 512 * 1024 * 1024
+    snapshots_dir: str = ""
 
     # Authentication modes:
     # - 'token' (default): built-in admin token + local user password + internal multi-OIDC SSO
@@ -128,6 +130,17 @@ class Settings(BaseSettings):
     @property
     def plugin_index_url(self) -> str:
         return f"{self.manager_base_url}/plugins/index.json"
+
+    @property
+    def data_dir(self) -> Path:
+        if self.snapshots_dir.strip():
+            return Path(self.snapshots_dir.strip())
+        url = (self.database_url or "").strip()
+        if url.startswith("sqlite:///"):
+            raw_path = url[len("sqlite:///") :]
+            if raw_path and raw_path != ":memory:":
+                return Path(raw_path).resolve().parent
+        return Path("/data")
 
 
 @lru_cache

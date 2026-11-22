@@ -144,10 +144,59 @@ def migrate_schema(target_engine: Engine) -> None:
                 connection.exec_driver_sql(
                     f"ALTER TABLE sandboxes ADD COLUMN disk_updated_at {ts_type}"
                 )
+            if "role_title" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN role_title VARCHAR(128)"
+                )
+            if "role_description" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN role_description VARCHAR(600)"
+                )
+            if "role_sop" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN role_sop TEXT"
+                )
+            if "preview_auth_mode" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN preview_auth_mode VARCHAR(32) NOT NULL DEFAULT 'public'"
+                )
+            if "webhook_token" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN webhook_token VARCHAR(128)"
+                )
+            if "daily_token_limit" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN daily_token_limit INTEGER"
+                )
+            if "project_team_name" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN project_team_name VARCHAR(128)"
+                )
             if "port" in columns:
                 if backend in {"sqlite", "postgresql"}:
                     connection.exec_driver_sql("DROP INDEX IF EXISTS ix_sandboxes_port")
                 connection.exec_driver_sql("ALTER TABLE sandboxes DROP COLUMN port")
+
+        if "sandbox_templates" in table_names:
+            tpl_columns = {
+                col["name"] for col in inspector.get_columns("sandbox_templates")
+            }
+            if "role_title" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN role_title VARCHAR(128)"
+                )
+            if "role_description" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN role_description VARCHAR(600)"
+                )
+            if "role_sop" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN role_sop TEXT"
+                )
+            if "default_llm_profile_id" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN default_llm_profile_id VARCHAR(36)"
+                )
 
         if "users" in table_names:
             user_columns = {

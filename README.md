@@ -1,68 +1,82 @@
-# DSH Dock
+<p align="center">
+  <img src="manager/frontend/public/favicon.svg" alt="Metis Logo" width="72" height="72" />
+</p>
 
-**Self-hosted multi-user cloud workspaces & control plane for DeepSeek Harness (DSH).**
+<h1 align="center">Metis</h1>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Gateway: Traefik v3.7](https://img.shields.io/badge/Gateway-Traefik%20v3.7-24a1c1)
-![Backend: FastAPI + SQLite](https://img.shields.io/badge/Control%20Plane-FastAPI%20%2B%20SQLite-009688)
-![Frontend: React 19](https://img.shields.io/badge/Console-React%2019%20%2B%20Tailwind%20v4-61dafb)
+<p align="center">
+  <strong>Self-hosted Enterprise Digital Workforce Cloud &amp; Multi-Agent Collaboration Platform.</strong><br/>
+  Named after the Greek goddess of practical wisdom, counsel, and craft — built for every role across engineering and business teams.
+</p>
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/Gateway-Traefik%20v3.7-24a1c1" alt="Gateway: Traefik v3.7" />
+  <img src="https://img.shields.io/badge/Runtime-Docker%20%7C%20Remote%20Docker%20%7C%20Kubernetes-326ce5" alt="Runtime: Docker / K8s" />
+  <img src="https://img.shields.io/badge/Database-SQLite%20%7C%20PostgreSQL%20%7C%20MySQL-009688" alt="Database: SQLite / Postgres / MySQL" />
+  <img src="https://img.shields.io/badge/Console-React%2019%20%2B%20Tailwind%20v4-61dafb" alt="Console: React 19" />
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
 ---
 
-DSH Dock (`dsh-dock`) provisions isolated, persistent per-user **DeepSeek Harness (DSH)** Agent OS development containers behind a single-port **Traefik v3.7** gateway and a **FastAPI + React** management plane — complete with unified authentication (`OIDC` / local passwords & tokens), built-in plugin hosting, one-click `/home/workspace` backups, and agent-managed dev services.
+**Metis** orchestrates isolated, persistent, autonomous **Digital Employees** (powered by Agent OS containers) behind a single-port **Traefik v3.7** gateway and a modular **FastAPI + React 19** control plane. Each digital employee gets its own role persona, private SOP, persistent `/home/workspace` disk & long-term memory, encrypted LLM brain, enterprise credentials/MCP vault, scheduled routines, web preview publishing, and peer-to-peer multi-agent team collaboration.
 
 ## Architecture
 
 ```text
-                        ┌──────────────────────────────────────────────┐
-                        │        dsh-gateway (Traefik v3.7) :9000      │
-                        │     Single-Domain Router + ForwardAuth       │
-                        └───────┬──────────────────────────────┬───────┘
-                                │                              │
-        /, /admin, /my,         │                              │ /s/<slug>/*
-        /api/*, /plugins/*      ▼                              ▼
-                   ┌─────────────────────────┐    ┌─────────────────────────────┐
-                   │ dsh-manager :9000       │    │ dsh-sbx-<slug> :8080        │
-                   │ FastAPI + SQLite        │    │ (no host ports exposed)     │
-                   │ React 19 Console SPA    │    │ Caddy + DSH + dsh-token     │
-                   │ Built-in Plugin Registry│    │ User supervisord + cron     │
-                   └─────────────────────────┘    │ /home/workspace (persistent)│
-                                                  └─────────────────────────────┘
+                        ┌──────────────────────────────────────────────────────┐
+                        │           Gateway (Traefik v3.7) :9000               │
+                        │    Single-Domain Dynamic HTTP Router + ForwardAuth   │
+                        └───────────┬──────────────────────────────┬───────────┘
+                                    │                              │
+            /, /admin, /my,         │                              │ /s/<slug>/*
+            /api/*, /plugins/*      ▼                              ▼
+                 ┌──────────────────────────────────┐   ┌─────────────────────────────────┐
+                 │ Metis Control Plane (:9000)      │   │ Digital Employee Pod/Container  │
+                 │ FastAPI (Modular Routers/Services│   │ Local Docker / Remote TLS / K8s │
+                 │ SQLite / PostgreSQL / MySQL      │   │ Caddy + Agent OS + dsh-token    │
+                 │ React 19 Console & User Portal   │   │ User supervisord + cron + mesh  │
+                 │ Plugin Registry + Snapshot Vault │   │ /home/workspace (persistent)    │
+                 └──────────────────────────────────┘   └─────────────────────────────────┘
 ```
 
-### Routing & Isolation Model
+### Multi-Runtime & Zero-Port Isolation
 
-- **Zero Host Port Exposure (Managed Mode)**: Sandbox containers join only the internal `dsh-manager` Docker network and expose no host ports (`18000+` port sprawl is eliminated).
-- **ForwardAuth DSH Gate**: Access to `/s/<slug>/`, `/s/<slug>/dsh/*`, and `/s/<slug>/_dsh-token` is verified centrally via `dsh-manager` (`/api/auth/verify-sandbox/{slug}`). Only the workspace owner or an active platform admin is permitted.
-- **Open App & Preview Routes**: User services exposed via `sandbox-expose` (`/s/<slug>/apps/<name>/`) and ephemeral port forwarding (`/s/<slug>/p/<port>/`) stay open by default so apps can implement their own auth or webhooks cleanly.
+- **Pluggable Container Runtimes (`SANDBOX_RUNTIME`)**:
+  - **Local Docker**: Connects via `/var/run/docker.sock` on the internal Docker bridge network with zero host ports exposed.
+  - **Remote Docker over TLS/SSH (`DOCKER_HOST`)**: Manages remote Docker hosts cleanly with automatic ephemeral host port allocation and dynamic Traefik HTTP routing.
+  - **Kubernetes (`SANDBOX_RUNTIME=kubernetes`)**: Provisions per-employee `StatefulSet` + `PersistentVolumeClaim` + `Service`, routing via Traefik HTTP Provider or Traefik CRDs.
+- **Pluggable RDBMS (`DATABASE_URL`)**: Zero-config SQLite for single-node setups, or production PostgreSQL / MySQL with automatic schema migration and connection pooling.
+- **Granular Access Control (Traefik ForwardAuth)**:
+  - Employee desks (`/s/<slug>/`, `/s/<slug>/dsh/*`, `/s/<slug>/_dsh-token`) strictly allow only the owner or platform admins.
+  - Published preview apps (`/s/<slug>/apps/<name>/`) support per-employee **Public** (shareable demo link) or **Authenticated** (platform session required) access modes while preserving HMAC-authenticated `sandbox-mesh` peer traffic (`/s/<slug>/p/4090`).
 
-## Key Features
+## Enterprise Full-Lifecycle Capabilities
 
-- **Control Plane (`/admin`) & Self-Service Portal (`/my`)**:
-  - Provision and manage user sandboxes with CPU, memory, PIDs (`512`), `no-new-privileges`, custom init scripts, Git repo bootstrapping, and reusable `SandboxTemplate` presets (ships with the built-in `agent-os` template).
-  - Manage platform admins, local user accounts (`scrypt` password hashes) or SSO users, and encrypted LLM profiles (Fernet encryption backed by `SECRET_KEY`).
-  - Live container stats, stripped ANSI logs, hot-recreation/image upgrades, and full `/home/workspace` tar archive downloads (`<slug>-home.tar`).
-- **Flexible Authentication (`MANAGER_AUTH_MODE`)**:
-  - `token`: Zero external IdP required. Admins authenticate via `MANAGER_ADMIN_TOKEN`; users sign in at `/login` with admin-provisioned passwords and can rotate their own passwords at `/my`.
-  - `oidc`: Enterprise SSO via any standard OpenID Connect provider (Keycloak, Auth0, Authentik, Okta) with optional split internal discovery (`OIDC_DISCOVERY_URL`).
-  - `none`: Trusted loopback/development mode.
-- **Agent-Ready Runtime Image (`dsh-sandbox`)**:
-  - Debian 13 (`trixie-slim`), Node.js 24, Python 3.13, `uv`, `pnpm`, `git`, `tmux`, `build-essential`, Caddy 2, `@deepseek-ai/dsh`, CJK locale (`zh_CN.UTF-8`), WQY fonts, and corporate CA support (`ca-bundle.crt`).
-  - `WORKDIR /home/workspace` is the default workspace and persisted home volume.
-  - Built-in CLI helpers + `sandbox-services` skill:
-    - `sandbox-service`: manage persistent user services under user-level `supervisord`.
-    - `sandbox-expose`: publish loopback ports at `/s/<slug>/apps/<name>/` via Caddy.
-    - `sandbox-cron`: manage persistent user crontabs surviving container restarts.
-- **Modular Build-Time Toolchains (`/opt/toolchain`)**:
-  - Disabled by default (`INSTALL_TOOLCHAIN=false`) to keep the base image lean.
-  - Enable `INSTALL_TOOLCHAIN=true` to execute custom drop-in installers from `sandbox/toolchain/toolchain.d/*.sh` in sorted order into `/opt/toolchain` (includes `10-dotnet.sh` as a reference).
-- **Self-Hosted Plugin Index & NPM Registry**:
-  - Mounts `plugins/` directly into `dsh-manager` and dynamically serves `/plugins/index.json`, inline SVG icons, `.tgz` bundles (`/plugins/packages/*.tgz`), and read-only npm packuments (`/plugins/npm/*`).
-  - Ships with `@local/dsh-plugin-file-manager`, `@dsh-dock/workspace-user`, `@dsh-dock/custom-theme`, `@dsh-dock/sandbox-mesh`, and `@dsh-dock/sandbox-memory`, and supports automatic first-boot installation via `SANDBOX_AUTO_INSTALL_PLUGINS` (all five enabled by default).
-- **Mirror & Internal Network Ready**:
-  - Supports `DOCKER_REGISTRY`, `APT_MIRROR` (including HTTPS mirrors like `https://mirrors.aliyun.com`), `NODE_MIRROR` (e.g. `https://mirrors.aliyun.com/nodejs-release`), `NPM_REGISTRY`, `PIP_INDEX_URL`, and `CUSTOM_CA_BUNDLE_PATH`.
+### 1. Organization, Roles & White-Label Branding
+- **14 Built-In Company-Wide Role Templates**: One-click import covering both **Engineering** (*Tech Lead, Full-Stack, Frontend, Backend, QA, DevOps/SRE, Product Manager, Security Auditor*) and **Corporate & Business** (*Executive Assistant, Finance Analyst, Legal & Compliance, HR Specialist, Marketing & Growth, BI Data Analyst*), each with tailored `role_title`, `role_description`, private `role_sop`, and compute quotas.
+- **1-Click Project Team Assembly & Shared Knowledge Space**: Automatically establishes pairwise cryptographic trust (`sandbox-mesh`), creates a Moderator-led project room, initializes `/home/workspace/shared/TEAM_README.md`, and syncs shared project briefs (`PROJECT_BRIEF.md`) across team members.
+- **1-Click Employee Cloning**: Duplicate any digital employee's image, role persona, private SOP, LLM profile, and `/home/workspace` files/memory into a new colleague.
+- **White-Label Branding**: Customize bilingual brand names, **top-left Logo SVG**, and **browser Favicon** directly in the Admin Console (with server-side XML/SVG XSS sanitization and live `/api/branding/favicon`).
+
+### 2. Task Intake, Approvals & Event Automation
+- **Task Dispatch & Human Approval Center**: Dispatch prioritized tasks into any employee's board directly from `/admin` or `/my`, and **Approve / Reject** human-in-the-loop checkpoints with one click.
+- **Inbound Event Webhooks (`/api/webhooks/sandboxes/{slug}`)**: Triggered by GitHub, GitLab, Feishu, WeCom, Jira, or CI/CD pipelines — automatically wakes sleeping digital employees and dispatches tasks, with per-employee token rotation.
+
+### 3. Development & Workspace Productivity
+- **Enterprise Credentials & MCP Vault**: Fernet-encrypted central vault for Git author identity, Git PATs, SSH private keys (`id_ed25519`), environment variables (`~/.dsh-sandbox/vault.env`), and MCP servers (`~/.dsh/mcp.json`) — hot-pushed to running employees without container rebuilds.
+- **Multi-Protocol LLM Brain Hub**: Manage OpenAI Completions, OpenAI Responses, Anthropic Messages, and Google Gemini profiles with hot-push to running employees.
+- **Online Services, Preview Apps & Cron CRUD**: Start/stop/add/remove user-level `supervisord` daemons with inline log viewing, expose/unexpose live preview ports (`sandbox-expose`), and manage persistent schedules (`sandbox-cron`) straight from the UI.
+
+### 4. Governance, FinOps & Recovery
+- **Multi-OIDC Enterprise SSO & Hybrid Auth**: Manage multiple OIDC providers (Keycloak, Okta, Auth0, Authentik, Azure AD) in-app with live discovery probing, domain allowlists, and optional local password login.
+- **LLM Token FinOps & Idle Auto-Sleep**: Real-time estimated token usage, session/message telemetry, per-employee daily token budget caps (`daily_token_limit`), and idle auto-sleep with instant auto-wake on access.
+- **Server-Side Workspace Snapshots Center**: Create instant server-side workspace checkpoints, 1-click rollback (`merge` or `clean`), plus streaming `.tar` export/upload restore.
+- **Self-Hosted Plugin Registry**: Dynamically serves `/plugins/index.json`, SVG icons, `.tgz` bundles, and read-only `/plugins/npm/*` packuments for built-in plugins (`file-manager`, `workspace-user`, `custom-theme`, `sandbox-mesh`, `sandbox-memory`).
 
 ## Repository Layout
 
@@ -71,35 +85,41 @@ DSH Dock (`dsh-dock`) provisions isolated, persistent per-user **DeepSeek Harnes
 ├── LICENSE                         # MIT License
 ├── README.md                       # Project overview (English)
 ├── README.zh-CN.md                 # Project overview (简体中文)
-├── sandbox/                        # Sandbox runtime image, supervisor, Caddy, & helpers
-│   ├── Dockerfile                  # Parameterized sandbox image build
-│   ├── docker-compose.yml          # Standalone sandbox compose (publishes :8080)
-│   ├── .env.example                # Build args & standalone compose template
-│   ├── Makefile                    # Convenience targets (env, build, up, logs, token, expose)
+├── sandbox/                        # Digital employee runtime image, Caddy, supervisor & CLIs
+│   ├── Dockerfile                  # Parameterized runtime image build
 │   ├── toolchain/                  # Drop-in /opt/toolchain installers (toolchain.d/*.sh)
-│   ├── docs/                       # Architecture, operations, OIDC, security, & troubleshooting
-│   ├── tests/                      # dsh-token Node tests & containerized shell script tests
-│   └── rootfs/                     # Entrypoint, Caddyfile renderer, supervisor, CLIs & skills
-├── manager/                        # FastAPI control plane, Traefik gateway, & React SPA
-│   ├── app/                        # Backend modules (config, db, models, docker_service, ...)
+│   ├── docs/                       # Architecture, operations, OIDC, security & troubleshooting
+│   ├── tests/                      # Node token tests & containerized shell script tests
+│   └── rootfs/                     # Entrypoint, Caddy renderer, supervisord, CLIs & skills
+├── manager/                        # Metis Control Plane, Traefik Gateway & React 19 SPA
+│   ├── app/
+│   │   ├── main.py                 # FastAPI entrypoint, lifespan, middleware & SPA routes
+│   │   ├── deps.py                 # Auth guards, serializers & wake helpers
+│   │   ├── config.py / db.py / models.py / schemas.py / security.py / oidc.py / scheduler.py
+│   │   ├── routers/                # Domain routers (system, auth, plugins, admin, sandboxes, workforce)
+│   │   ├── services/               # Domain service package (common, templates, sandboxes, policies, vault)
+│   │   └── runtime/                # Runtime backends (base, traefik, sync, workforce, operations, docker, k8s)
 │   ├── frontend/                   # React 19 + TypeScript + Vite 7 + Tailwind v4 SPA
-│   ├── tests/                      # Pytest unit & mock test suite
-│   ├── docker-compose.yml          # Traefik v3.7 gateway + dsh-manager stack
-│   ├── .env.example                # Control plane environment template
-│   └── requirements*.txt           # Runtime and dev/test Python dependencies
-└── plugins/                        # Hot-mounted DSH bundle plugins & index metadata
-    ├── index.json                  # Discover catalog template
-    ├── icons/                      # SVG plugin icons
-    ├── file-manager/               # Built-in Server File Manager bundle + tests
-    ├── workspace-user/             # Built-in Workspace User Identity & launcher menu
-    ├── custom-theme/               # Built-in Custom Theme presets, token editor & branding
-    ├── sandbox-mesh/               # Cross-sandbox pairing, LLM-moderated groups & Agent mesh
-    └── sandbox-memory/             # Token-frugal sandbox environment awareness & long-term memory
+│   │   ├── public/favicon.svg      # Default Metis emblem
+│   │   └── src/
+│   │       ├── App.tsx / types.ts  # App shell & shared contracts
+│   │       ├── lib/                # API client, formatting utils, i18n & locales (zh-CN / en)
+│   │       ├── components/         # UI primitives, BrandMark, BackupRestore, Workforce Inspector cards
+│   │       └── views/              # LoginView, UserPortalView & modular views/admin/* tabs & dialogs
+│   ├── tests/                      # Comprehensive pytest suite (API, runtime, K8s, DB, services, plugins)
+│   ├── docker-compose.yml          # Traefik v3.7 gateway + Metis control plane stack
+│   └── .env.example                # Environment template (Docker, Remote Docker, K8s, SQLite/PG/MySQL)
+└── plugins/                        # Hot-mounted plugins & index catalog
+    ├── file-manager/               # Server File Manager
+    ├── workspace-user/             # Workspace Identity & Launcher
+    ├── custom-theme/               # Custom Theme & Token Editor
+    ├── sandbox-mesh/               # Cross-employee P2P pairing, moderated rooms, task board & approvals
+    └── sandbox-memory/             # Token-frugal environment awareness & long-term memory
 ```
 
 ## Quick Start
 
-### 1. Build the Sandbox Image
+### 1. Build the Runtime Image
 
 ```bash
 cd sandbox
@@ -107,7 +127,7 @@ cp .env.example .env
 docker compose build
 ```
 
-> **Optional mirrors / toolchains**:
+> **Optional mirrors & toolchains**:
 >
 > ```bash
 > docker build \
@@ -119,17 +139,18 @@ docker compose build
 >   -t dsh-sandbox:latest ./sandbox
 > ```
 
-### 2. Start the Gateway & Control Plane
+### 2. Start Metis Gateway & Control Plane
 
 ```bash
 cd manager
 cp .env.example .env
 ```
 
-Edit `manager/.env` and replace the placeholders:
+Edit `manager/.env` and set:
 
-- `SECRET_KEY`: generate a random secret (`openssl rand -hex 32`)
-- `MANAGER_ADMIN_TOKEN` (for `MANAGER_AUTH_MODE=token`) or `OIDC_*` (for `MANAGER_AUTH_MODE=oidc`)
+- `SECRET_KEY`: random secret (`openssl rand -hex 32`)
+- `MANAGER_ADMIN_TOKEN`: admin login token (for `MANAGER_AUTH_MODE=token`) or configure OIDC providers directly in the Admin Console
+- Optional: `DATABASE_URL` (`postgresql+psycopg://...` or `mysql+pymysql://...`), `SANDBOX_RUNTIME=kubernetes`, or `DOCKER_HOST` for remote Docker hosts
 
 Launch the stack:
 
@@ -137,18 +158,18 @@ Launch the stack:
 docker compose up -d --build
 ```
 
-Verify and access:
+Access endpoints:
 
-- Health check: `http://localhost:9000/healthz`
-- Admin console: `http://localhost:9000/admin`
-- User portal: `http://localhost:9000/my`
-- Self-hosted plugin index: `http://localhost:9000/plugins/index.json`
+- Admin Control Center: `http://localhost:9000/admin`
+- User Portal: `http://localhost:9000/my`
+- Health Check: `http://localhost:9000/healthz`
+- Plugin Catalog Index: `http://localhost:9000/plugins/index.json`
 
 ## Documentation
 
 | Component | Documentation |
 | --- | --- |
-| Manager & Control Plane | [manager/README.md](manager/README.md) |
+| Control Plane & Multi-Runtime Setup | [manager/README.md](manager/README.md) |
 | Sandbox Runtime | [sandbox/README.md](sandbox/README.md) |
 | Architecture & Flows | [sandbox/docs/architecture.md](sandbox/docs/architecture.md) |
 | Build & Operations | [sandbox/docs/operations.md](sandbox/docs/operations.md) |
@@ -157,11 +178,11 @@ Verify and access:
 | OIDC & SSO Setup | [sandbox/docs/OIDC.md](sandbox/docs/OIDC.md) |
 | Security Model | [sandbox/docs/security.md](sandbox/docs/security.md) |
 | Troubleshooting | [sandbox/docs/troubleshooting.md](sandbox/docs/troubleshooting.md) |
-| DSH Plugins | [plugins/README.md](plugins/README.md) |
+| Plugins | [plugins/README.md](plugins/README.md) |
 
 ## Running Tests
 
-### Manager Backend (`pytest`)
+### Backend (`pytest`)
 
 ```bash
 cd manager
@@ -171,7 +192,7 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-### Manager Frontend (`Yarn 4` + `Node >= 24`)
+### Frontend (`Yarn 4` + `Node >= 24`)
 
 ```bash
 cd manager/frontend
@@ -181,7 +202,7 @@ corepack yarn test
 corepack yarn build
 ```
 
-### Sandbox Scripts & Helpers
+### Sandbox Scripts & Plugins
 
 ```bash
 # Node token helper unit tests
@@ -190,30 +211,13 @@ node --test sandbox/tests/test_dsh_token.mjs
 # Toolchain installer, Caddyfile renderer (+ caddy validate), expose/cron/service CLIs
 docker run --rm --entrypoint /bin/bash -v "$PWD:/repo:ro" dsh-sandbox:latest \
   /repo/sandbox/tests/test_sandbox_scripts.sh /repo
+
+# Built-in plugin suites
+for p in file-manager workspace-user custom-theme sandbox-mesh sandbox-memory; do
+  docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
+    -w "/work/plugins/$p" dsh-sandbox:latest -c "node .test/run.mjs"
+done
 ```
-
-### DSH Plugins (`file-manager`, `workspace-user`, `custom-theme`, `sandbox-mesh`, `sandbox-memory`)
-
-```bash
-docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
-  -w /work/plugins/file-manager dsh-sandbox:latest -c "node .test/run.mjs"
-
-docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
-  -w /work/plugins/workspace-user dsh-sandbox:latest -c "node .test/run.mjs"
-
-docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
-  -w /work/plugins/custom-theme dsh-sandbox:latest -c "node .test/run.mjs"
-
-docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
-  -w /work/plugins/sandbox-mesh dsh-sandbox:latest -c "node .test/run.mjs"
-
-docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
-  -w /work/plugins/sandbox-memory dsh-sandbox:latest -c "node .test/run.mjs"
-```
-
-## Contributing
-
-Contributions are welcome! Please read the component docs before opening a pull request, preserve LF line endings on shell scripts under `sandbox/`, and verify all test suites pass.
 
 ## License
 

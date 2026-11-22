@@ -69,6 +69,10 @@ class SandboxTemplate(Base):
     key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(Unicode(128))
     description: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    role_title: Mapped[str | None] = mapped_column(Unicode(128), nullable=True)
+    role_description: Mapped[str | None] = mapped_column(Unicode(600), nullable=True)
+    role_sop: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_llm_profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     image_repo: Mapped[str] = mapped_column(String(255), default="dsh-sandbox")
     image_tag: Mapped[str] = mapped_column(String(128), default="latest")
     default_cpu_limit: Mapped[float] = mapped_column(Float, default=2.0)
@@ -100,6 +104,9 @@ class Sandbox(Base):
     template: Mapped[str | None] = mapped_column(
         String(64), default="agent-os", nullable=True
     )
+    role_title: Mapped[str | None] = mapped_column(Unicode(128), nullable=True)
+    role_description: Mapped[str | None] = mapped_column(Unicode(600), nullable=True)
+    role_sop: Mapped[str | None] = mapped_column(Text, nullable=True)
     init_repo_url: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
     init_script: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra_env_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -111,6 +118,10 @@ class Sandbox(Base):
     auto_sleep_exempt: Mapped[bool] = mapped_column(Boolean, default=False)
     disk_usage_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
     disk_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    preview_auth_mode: Mapped[str] = mapped_column(String(32), default="public")
+    webhook_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    daily_token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    project_team_name: Mapped[str | None] = mapped_column(Unicode(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="creating")
     llm_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("llm_profiles.id"), nullable=True
@@ -179,3 +190,48 @@ class OidcProvider(Base):
         if issuer:
             return f"{issuer}/.well-known/openid-configuration"
         return ""
+
+
+class CredentialProfile(Base):
+    __tablename__ = "credential_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(Unicode(128), unique=True)
+    git_user_name: Mapped[str | None] = mapped_column(Unicode(128), nullable=True)
+    git_user_email: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
+    git_host: Mapped[str] = mapped_column(Unicode(255), default="github.com")
+    git_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    ssh_private_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    env_vars_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    mcp_servers_json: Mapped[str | None] = mapped_column(Text, default="{}", nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+    @property
+    def has_git_token(self) -> bool:
+        return bool(self.git_token_ciphertext)
+
+    @property
+    def has_ssh_key(self) -> bool:
+        return bool(self.ssh_private_key_ciphertext)
+
+    @property
+    def has_env_vars(self) -> bool:
+        return bool(self.env_vars_ciphertext)
+
+
+class WorkspaceSnapshot(Base):
+    __tablename__ = "workspace_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    sandbox_id: Mapped[str] = mapped_column(String(36), index=True)
+    sandbox_slug: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(Unicode(128))
+    note: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    file_path: Mapped[str] = mapped_column(Unicode(512))
+    size_mb: Mapped[float] = mapped_column(Float, default=0.0)
+    created_by: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+

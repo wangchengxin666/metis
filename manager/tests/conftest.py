@@ -299,6 +299,205 @@ class FakeDockerService:
         self.calls.append(("remove", (sandbox.slug, purge_volume)))
         self.containers.pop(sandbox.slug, None)
 
+    def sync_role_profile(self, sandbox: Sandbox) -> dict[str, Any]:
+        self.calls.append(("sync_role_profile", (sandbox.slug, sandbox.role_title)))
+        return {"slug": sandbox.slug, "ok": True, "skipped": False, "detail": "ROLE_SYNC_OK"}
+
+    def assemble_mesh_team(
+        self,
+        sandboxes: list[Sandbox],
+        team_name: str,
+        moderator_slug: str | None = None,
+    ) -> dict[str, Any]:
+        slugs = [s.slug for s in sandboxes]
+        eff_mod = moderator_slug if moderator_slug in slugs else slugs[0]
+        self.calls.append(("assemble_mesh_team", (team_name, slugs, eff_mod)))
+        return {
+            "ok": True,
+            "room_id": "grp_test_123",
+            "team_name": team_name,
+            "room_name": team_name,
+            "moderator_slug": eff_mod,
+            "members": slugs,
+            "synced": len(slugs),
+            "paired_members": len(slugs),
+            "total": len(slugs),
+            "results": [{"slug": s, "ok": True, "skipped": False, "detail": "assembled"} for s in slugs],
+        }
+
+    def inspect_workforce_runtime(self, sandbox: Sandbox) -> dict[str, Any]:
+        self.calls.append(("inspect_workforce_runtime", sandbox.slug))
+        return {
+            "online": True,
+            "slug": sandbox.slug,
+            "status": "running",
+            "exposed_apps": [
+                {
+                    "name": "web",
+                    "target": "127.0.0.1:5173",
+                    "mount_path": f"/s/{sandbox.slug}/apps/web/",
+                    "url": f"http://localhost:9000/s/{sandbox.slug}/apps/web/",
+                }
+            ],
+            "user_services": [
+                {
+                    "name": "web-dev",
+                    "status": "RUNNING",
+                    "detail": "pid 120, uptime 0:15:00",
+                    "command": "npm run dev",
+                    "directory": "/home/workspace",
+                }
+            ],
+            "cron_jobs": [
+                {
+                    "schedule": "0 9 * * *",
+                    "command": "/home/workspace/daily-check.sh",
+                    "raw": "0 9 * * * /home/workspace/daily-check.sh",
+                }
+            ],
+            "shared_files": [{"name": "TEAM_README.md", "size_bytes": 128}],
+            "token_usage": {
+                "estimated_tokens": 12500,
+                "sessions_count": 3,
+                "messages_count": 18,
+                "daily_limit": getattr(sandbox, "daily_token_limit", None),
+            },
+            "mesh_summary": {
+                "role": sandbox.role_title or "Full-Stack Engineer",
+                "description": sandbox.role_description or "End-to-end delivery",
+                "has_sop": bool(sandbox.role_sop),
+                "peers": [{"slug": "lead", "owner_name": "Tech Lead", "role": "Architect", "status": "online"}],
+                "groups": [{"id": "grp_test_123", "name": "Core R&D Team", "moderator_slug": "lead", "member_count": 3}],
+                "tasks": [
+                    {
+                        "id": "task_1",
+                        "room_id": "grp_test_123",
+                        "title": "Approve v1.0 release",
+                        "description": "Verify canary metrics before production promotion",
+                        "status": "blocked",
+                        "priority": "high",
+                        "assignee_slug": sandbox.slug,
+                        "approval_required": True,
+                        "approval_status": "pending",
+                    }
+                ],
+                "active_tasks_count": 2,
+                "done_tasks_count": 5,
+                "pending_approvals": [
+                    {"id": "task_1", "room_id": "grp_test_123", "title": "Approve v1.0 release", "assignee_slug": sandbox.slug}
+                ],
+            },
+        }
+
+    def control_user_service(
+        self, sandbox: Sandbox, service_name: str, action: str
+    ) -> dict[str, Any]:
+        self.calls.append(("control_user_service", (sandbox.slug, service_name, action)))
+        return {"ok": True, "service": service_name, "action": action, "detail": f"{service_name}: {action}ed"}
+
+    def add_user_service(
+        self, sandbox: Sandbox, *, name: str, command: str
+    ) -> dict[str, Any]:
+        self.calls.append(("add_user_service", (sandbox.slug, name, command)))
+        return {"ok": True, "service": name, "action": "add", "detail": f"added {name}"}
+
+    def remove_user_service(self, sandbox: Sandbox, service_name: str) -> dict[str, Any]:
+        self.calls.append(("remove_user_service", (sandbox.slug, service_name)))
+        return {"ok": True, "service": service_name, "action": "remove", "detail": f"removed {service_name}"}
+
+    def user_service_logs(self, sandbox: Sandbox, service_name: str, tail: int = 120) -> str:
+        self.calls.append(("user_service_logs", (sandbox.slug, service_name, tail)))
+        return f"[{service_name}] service started\n"
+
+    def expose_user_app(
+        self, sandbox: Sandbox, *, name: str, port: int, prefix: str | None = None
+    ) -> dict[str, Any]:
+        self.calls.append(("expose_user_app", (sandbox.slug, name, port, prefix)))
+        return {
+            "ok": True,
+            "name": name,
+            "port": port,
+            "url": f"http://localhost:9000/s/{sandbox.slug}/apps/{name}/",
+            "detail": f"exposed {name}",
+        }
+
+    def unexpose_user_app(self, sandbox: Sandbox, name: str) -> dict[str, Any]:
+        self.calls.append(("unexpose_user_app", (sandbox.slug, name)))
+        return {"ok": True, "name": name, "detail": f"removed {name}"}
+
+    def add_cron_job(self, sandbox: Sandbox, *, schedule: str, command: str) -> dict[str, Any]:
+        self.calls.append(("add_cron_job", (sandbox.slug, schedule, command)))
+        return {"ok": True, "line": f"{schedule} {command}", "detail": "added cron"}
+
+    def remove_cron_job(self, sandbox: Sandbox, raw_line: str) -> dict[str, Any]:
+        self.calls.append(("remove_cron_job", (sandbox.slug, raw_line)))
+        return {"ok": True, "detail": "CRON_REMOVED_OK"}
+
+    def dispatch_mesh_task(
+        self,
+        sandbox: Sandbox,
+        *,
+        title: str,
+        description: str = "",
+        priority: str = "normal",
+        room_id: str | None = None,
+        approval_required: bool = False,
+        source: str = "portal",
+        actor: str = "User",
+    ) -> dict[str, Any]:
+        self.calls.append(("dispatch_mesh_task", (sandbox.slug, title, priority, source)))
+        return {"ok": True, "task_id": "tsk_fake_1", "room_id": room_id or "inbox:portal"}
+
+    def decide_mesh_approval(
+        self,
+        sandbox: Sandbox,
+        task_id: str,
+        *,
+        decision: str,
+        note: str = "",
+        room_id: str | None = None,
+        actor: str = "User",
+    ) -> dict[str, Any]:
+        self.calls.append(("decide_mesh_approval", (sandbox.slug, task_id, decision, note)))
+        return {"ok": True, "task_id": task_id, "room_id": room_id or "grp_test_123", "decision": decision}
+
+    def sync_credential_profile(
+        self,
+        sandbox: Sandbox,
+        *,
+        git_user_name: str | None = None,
+        git_user_email: str | None = None,
+        git_host: str = "github.com",
+        git_token: str = "",
+        ssh_private_key: str = "",
+        env_vars: dict[str, str] | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(("sync_credential_profile", (sandbox.slug, git_user_name, git_host)))
+        item = self.containers.get(sandbox.slug)
+        if not item or item.get("status") != "running":
+            return {"slug": sandbox.slug, "ok": False, "skipped": True, "detail": "not running"}
+        return {"slug": sandbox.slug, "ok": True, "skipped": False, "detail": "CRED_SYNC_OK"}
+
+    def sync_shared_project_file(
+        self,
+        sandboxes: list[Sandbox],
+        *,
+        team_name: str,
+        file_name: str,
+        content: str,
+    ) -> dict[str, Any]:
+        slugs = [s.slug for s in sandboxes]
+        self.calls.append(("sync_shared_project_file", (team_name, file_name, slugs)))
+        return {
+            "ok": True,
+            "team_name": team_name,
+            "file_name": file_name,
+            "synced": len(slugs),
+            "total": len(slugs),
+            "results": [{"slug": s, "ok": True, "skipped": False, "detail": "SHARED_SYNC_OK"} for s in slugs],
+        }
+
 
 def pytest_sessionfinish(session, exitstatus) -> None:
     shutil.rmtree(_TEST_TMP_DIR, ignore_errors=True)
@@ -310,6 +509,10 @@ def reset_database() -> None:
     init_db()
     main_mod.oidc_registry.clear()
     with SessionLocal() as db:
+        from app.models import CredentialProfile, WorkspaceSnapshot
+
+        db.query(WorkspaceSnapshot).delete()
+        db.query(CredentialProfile).delete()
         db.query(AuditLog).delete()
         db.query(OidcProvider).delete()
         db.query(PlatformSetting).delete()

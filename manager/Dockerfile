@@ -19,6 +19,7 @@ RUN if [ -n "${NPM_REGISTRY}" ]; then \
  && yarn install --immutable
 
 COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
+COPY frontend/public ./public
 COPY frontend/src ./src
 RUN yarn build
 

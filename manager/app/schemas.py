@@ -91,6 +91,10 @@ class TemplateCreate(BaseModel):
     key: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
+    role_title: str | None = Field(default=None, max_length=128)
+    role_description: str | None = Field(default=None, max_length=600)
+    role_sop: str | None = Field(default=None, max_length=2000)
+    default_llm_profile_id: str | None = None
     image_repo: str = "dsh-sandbox"
     image_tag: str = "latest"
     default_cpu_limit: float = Field(default=2.0, gt=0, le=64)
@@ -108,6 +112,10 @@ class TemplateCreate(BaseModel):
 class TemplateUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    role_title: str | None = Field(default=None, max_length=128)
+    role_description: str | None = Field(default=None, max_length=600)
+    role_sop: str | None = Field(default=None, max_length=2000)
+    default_llm_profile_id: str | None = None
     image_repo: str | None = None
     image_tag: str | None = None
     default_cpu_limit: float | None = Field(default=None, gt=0, le=64)
@@ -129,6 +137,10 @@ class TemplateOut(BaseModel):
     key: str
     name: str
     description: str | None
+    role_title: str | None = None
+    role_description: str | None = None
+    role_sop: str | None = None
+    default_llm_profile_id: str | None = None
     image_repo: str
     image_tag: str
     default_cpu_limit: float
@@ -149,6 +161,9 @@ class SandboxCreate(BaseModel):
     image_repo: str | None = None
     image_tag: str | None = None
     template: str = "agent-os"
+    role_title: str | None = Field(default=None, max_length=128)
+    role_description: str | None = Field(default=None, max_length=600)
+    role_sop: str | None = Field(default=None, max_length=2000)
     init_repo_url: str | None = None
     init_script: str | None = None
     auto_install_plugins: str | None = None
@@ -156,6 +171,8 @@ class SandboxCreate(BaseModel):
     cpu_limit: float | None = Field(default=None, gt=0, le=64)
     memory_limit: str | None = None
     auto_sleep_exempt: bool = False
+    preview_auth_mode: Literal["public", "authenticated"] = "public"
+    daily_token_limit: int | None = Field(default=None, ge=1000, le=1_000_000_000)
 
     @field_validator("initial_password")
     @classmethod
@@ -175,6 +192,12 @@ class SandboxPatch(BaseModel):
     cpu_limit: float | None = Field(default=None, gt=0, le=64)
     memory_limit: str | None = None
     auto_sleep_exempt: bool | None = None
+    role_title: str | None = Field(default=None, max_length=128)
+    role_description: str | None = Field(default=None, max_length=600)
+    role_sop: str | None = Field(default=None, max_length=2000)
+    preview_auth_mode: Literal["public", "authenticated"] | None = None
+    daily_token_limit: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    rotate_webhook_token: bool = False
 
     @field_validator("memory_limit")
     @classmethod
@@ -194,6 +217,9 @@ class SandboxOut(BaseModel):
     image_repo: str | None = "dsh-sandbox"
     image_tag: str
     template: str | None = "agent-os"
+    role_title: str | None = None
+    role_description: str | None = None
+    role_sop: str | None = None
     init_repo_url: str | None = None
     auto_install_plugins: str | None = None
     llm_profile_id: str | None = None
@@ -203,6 +229,11 @@ class SandboxOut(BaseModel):
     auto_sleep_exempt: bool = False
     disk_usage_mb: float | None = None
     disk_updated_at: datetime | None = None
+    preview_auth_mode: str = "public"
+    has_webhook_token: bool = False
+    webhook_url: str | None = None
+    daily_token_limit: int | None = None
+    project_team_name: str | None = None
     status: str
     url: str
     created_at: datetime
@@ -549,3 +580,156 @@ class AuthPolicyOut(BaseModel):
 
 class AuthPolicyUpdate(BaseModel):
     allow_local_user_login: bool
+
+
+class BrandingOut(BaseModel):
+    brand_name_zh: str = "Metis"
+    brand_name_en: str = "Metis"
+    brand_logo_svg: str = ""
+    brand_favicon: str = ""
+
+
+class BrandingUpdate(BaseModel):
+    brand_name_zh: str = Field(min_length=1, max_length=64)
+    brand_name_en: str = Field(min_length=1, max_length=64)
+    brand_logo_svg: str | None = Field(default=None, max_length=32768)
+    brand_favicon: str | None = Field(default=None, max_length=65536)
+
+    @field_validator("brand_name_zh", "brand_name_en")
+    @classmethod
+    def validate_brand_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("brand name cannot be empty")
+        return cleaned
+
+
+class TeamAssembleRequest(BaseModel):
+    team_name: str | None = Field(default=None, max_length=80)
+    name: str | None = Field(default=None, max_length=80)
+    description: str | None = Field(default=None, max_length=512)
+    sandbox_ids: list[str] | None = None
+    member_ids: list[str] | None = None
+    moderator_slug: str | None = None
+    moderator_id: str | None = None
+
+
+class SandboxCloneRequest(BaseModel):
+    email: EmailStr | None = None
+    slug: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
+    display_name: str | None = None
+    role_title: str | None = Field(default=None, max_length=128)
+    exclude_caches: bool = True
+    copy_workspace: bool = True
+
+
+class TaskDispatchRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    priority: Literal["low", "normal", "high", "urgent"] = "normal"
+    room_id: str | None = None
+    approval_required: bool = False
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: str = Field(default="", max_length=1000)
+    room_id: str | None = None
+
+
+class WebhookEventPayload(BaseModel):
+    source: str = Field(default="webhook", max_length=64)
+    event: str = Field(default="task", max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    priority: Literal["low", "normal", "high", "urgent"] = "normal"
+    wake_if_sleeping: bool = True
+
+
+class CredentialProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    git_user_name: str | None = Field(default=None, max_length=128)
+    git_user_email: str | None = Field(default=None, max_length=255)
+    git_host: str = Field(default="github.com", max_length=255)
+    git_token: str = ""
+    ssh_private_key: str = ""
+    env_vars_json: str = "{}"
+    mcp_servers_json: str = "{}"
+
+
+class CredentialProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    git_user_name: str | None = Field(default=None, max_length=128)
+    git_user_email: str | None = Field(default=None, max_length=255)
+    git_host: str | None = Field(default=None, max_length=255)
+    git_token: str | None = None
+    clear_git_token: bool = False
+    ssh_private_key: str | None = None
+    clear_ssh_key: bool = False
+    env_vars_json: str | None = None
+    mcp_servers_json: str | None = None
+
+
+class CredentialProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    git_user_name: str | None = None
+    git_user_email: str | None = None
+    git_host: str = "github.com"
+    has_git_token: bool = False
+    has_ssh_key: bool = False
+    has_env_vars: bool = False
+    mcp_servers_json: str | None = "{}"
+    created_at: datetime
+    updated_at: datetime
+
+
+class CredentialProfilePushRequest(BaseModel):
+    sandbox_ids: list[str] | None = None
+
+
+class ExposeAppRequest(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,47}$")
+    port: int = Field(ge=1, le=65535)
+    prefix: str | None = None
+
+
+class UserServiceCreateRequest(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,47}$")
+    command: str = Field(min_length=1, max_length=1024)
+
+
+class CronJobCreateRequest(BaseModel):
+    schedule: str = Field(min_length=5, max_length=128)
+    command: str = Field(min_length=1, max_length=1024)
+
+
+class SnapshotCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=512)
+    exclude_caches: bool = True
+
+
+class SnapshotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    sandbox_id: str
+    sandbox_slug: str
+    name: str
+    note: str | None = None
+    size_mb: float = 0.0
+    created_by: str | None = None
+    created_at: datetime
+
+
+class SharedProjectSyncRequest(BaseModel):
+    team_name: str = Field(min_length=1, max_length=128)
+    sandbox_ids: list[str] = Field(min_length=1)
+    file_name: str = Field(default="PROJECT_BRIEF.md", min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=200000)
+
+
+

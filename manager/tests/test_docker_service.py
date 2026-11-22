@@ -433,3 +433,184 @@ def test_sync_llm_profile_exec_payload_and_stopped_skip():
     assert ant_payload["maxTokens"] == 64000
     sbx_ant = _make_sandbox(slug="claude-box", llm_profile=anthropic_profile)
     assert "DSH_DEFAULT_LLM_THINKING_FORMAT" not in svc.environment(sbx_ant)
+
+
+def test_sync_role_profile_assemble_team_inspect_workforce_and_control_service(monkeypatch):
+    import json
+
+    svc = DockerService(Settings())
+    mock_client = MagicMock()
+    svc._client = mock_client
+
+    sbx1 = _make_sandbox(slug="lead", status="running")
+    sbx1.role_title = "Tech Lead"
+    sbx1.role_description = "Architecture & Code Review"
+    sbx1.role_sop = "Lead the squad"
+
+    sbx2 = _make_sandbox(slug="fullstack", status="running")
+    sbx2.role_title = "Full-Stack Engineer"
+    sbx2.role_description = "Frontend & API"
+    sbx2.role_sop = "Run tests and expose preview"
+
+    container1 = MagicMock(status="running", id="c1")
+    container2 = MagicMock(status="running", id="c2")
+
+    def get_container(name):
+        if name.endswith("lead"):
+            return container1
+        if name.endswith("fullstack"):
+            return container2
+        raise NotFound("missing")
+
+    mock_client.containers.get.side_effect = get_container
+
+    # 1) sync_role_profile
+    container1.exec_run.return_value = (0, b"ROLE_SYNC_OK:lead\n")
+    res_role = svc.sync_role_profile(sbx1)
+    assert res_role["ok"] is True
+
+    # 2) assemble_mesh_team
+    container1.exec_run.return_value = (0, b"TEAM_ASSEMBLE_OK:grp_123\n")
+    container2.exec_run.return_value = (0, b"TEAM_ASSEMBLE_OK:grp_123\n")
+    team_res = svc.assemble_mesh_team(
+        [sbx1, sbx2],
+        team_name="Core Squad",
+        moderator_slug="lead",
+    )
+    assert team_res["ok"] is True
+    assert team_res["paired_members"] == 2
+    assert team_res["moderator_slug"] == "lead"
+
+    # 3) inspect_workforce_runtime
+    container1.exec_run.return_value = (
+        0,
+        json.dumps(
+            {
+                "exposed_apps": [
+                    {"name": "web", "target": "127.0.0.1:3000", "mount_path": "/s/lead/apps/web/", "url": "http://localhost:9000/s/lead/apps/web/"}
+                ],
+                "user_services": [
+                    {
+                        "name": "dev-server",
+                        "status": "RUNNING",
+                        "command": "yarn dev",
+                        "directory": "/home/workspace",
+                    }
+                ],
+                "cron_jobs": [
+                    {"schedule": "0 2 * * *", "command": "pytest", "raw": "0 2 * * * pytest"}
+                ],
+                "mesh_summary": {
+                    "role": "Tech Lead",
+                    "description": "Architecture",
+                    "has_sop": True,
+                    "peers": [{"slug": "fullstack", "role": "Full-Stack Engineer"}],
+                    "groups": [{"id": "team-1", "name": "Core Squad", "member_count": 2, "moderator_slug": "lead"}],
+                    "active_tasks_count": 2,
+                    "done_tasks_count": 3,
+                    "pending_approvals": [{"id": "t1", "title": "Approve release"}],
+                },
+            }
+        ).encode("utf-8"),
+    )
+    wf = svc.inspect_workforce_runtime(sbx1)
+    assert wf["online"] is True
+    assert wf["exposed_apps"][0]["target"] == "127.0.0.1:3000"
+    assert wf["user_services"][0]["status"] == "RUNNING"
+    assert wf["cron_jobs"][0]["command"] == "pytest"
+    assert len(wf["mesh_summary"]["pending_approvals"]) == 1
+
+    # 4) control_user_service
+    container1.exec_run.return_value = (0, b"dev-server: stopped\ndev-server: started\n")
+    ctl = svc.control_user_service(sbx1, "dev-server", "restart")
+    assert ctl["ok"] is True
+    assert ctl["action"] == "restart"
+
+
+def test_phase3_runtime_operations_and_traefik_preview_auth():
+    import json
+    from app.runtime.base import build_traefik_dynamic_config
+
+    settings = Settings()
+    svc = DockerService(settings)
+    mock_client = MagicMock()
+    svc._client = mock_client
+
+    sbx = _make_sandbox(slug="lead", status="running")
+    sbx.preview_auth_mode = "authenticated"
+    container = MagicMock(status="running", id="c1")
+    mock_client.containers.get.return_value = container
+
+    # 1) build_traefik_dynamic_config respects preview_auth_mode='authenticated' while keeping mesh /p/4090 open
+    cfg = build_traefik_dynamic_config(settings, [(sbx, "http://dsh-sbx-lead:8080")])
+    routers = cfg["http"]["routers"]
+    assert "dsh-sbx-lead-mesh" in routers
+    assert "/s/lead/p/4090" in routers["dsh-sbx-lead-mesh"]["rule"]
+    assert "middlewares" not in routers["dsh-sbx-lead-mesh"]
+    assert "dsh-auth-lead" in routers["dsh-sbx-lead"]["middlewares"]
+
+    sbx.preview_auth_mode = "public"
+    cfg_pub = build_traefik_dynamic_config(settings, [(sbx, "http://dsh-sbx-lead:8080")])
+    assert "dsh-sbx-lead-mesh" not in cfg_pub["http"]["routers"]
+    assert "middlewares" not in cfg_pub["http"]["routers"]["dsh-sbx-lead"]
+
+    # 2) dispatch_mesh_task & decide_mesh_approval
+    container.exec_run.return_value = (
+        0,
+        json.dumps({"ok": True, "room_id": "portal-inbox", "task": {"id": "t-1", "title": "Fix bug"}}).encode("utf-8"),
+    )
+    t_res = svc.dispatch_mesh_task(sbx, title="Fix bug", priority="high", approval_required=True)
+    assert t_res["ok"] is True
+    t_payload = json.loads(container.exec_run.call_args.kwargs["environment"]["TASK_DISPATCH_PAYLOAD"])
+    assert t_payload["title"] == "Fix bug"
+    assert t_payload["approvalRequired"] is True
+
+    container.exec_run.return_value = (
+        0,
+        json.dumps({"ok": True, "task_id": "t-1", "decision": "approved"}).encode("utf-8"),
+    )
+    a_res = svc.decide_mesh_approval(sbx, "t-1", decision="approved", note="ok")
+    assert a_res["ok"] is True and a_res["decision"] == "approved"
+
+    # 3) sync_credential_profile passes secrets via env (never argv)
+    container.exec_run.return_value = (0, b"CRED_SYNC_OK\n")
+    c_res = svc.sync_credential_profile(
+        sbx,
+        git_user_name="Bot",
+        git_user_email="bot@corp.com",
+        git_host="github.com",
+        git_token="ghp_abc123",
+        ssh_private_key="SSH_PRIVATE_KEY_BODY",
+        env_vars={"FOO": "bar"},
+        mcp_servers={"github": {"command": "npx", "args": ["-y", "mcp-github"]}},
+    )
+    assert c_res["ok"] is True
+    c_payload = json.loads(container.exec_run.call_args.kwargs["environment"]["CRED_SYNC_PAYLOAD"])
+    assert c_payload["gitToken"] == "ghp_abc123"
+    assert c_payload["sshPrivateKey"] == "SSH_PRIVATE_KEY_BODY"
+    assert c_payload["envVars"] == {"FOO": "bar"}
+    assert "github" in c_payload["mcpServers"]
+
+    # 4) expose/unexpose app, add/remove/logs service, add/remove cron, sync shared project doc
+    container.exec_run.return_value = (0, b"Exposed web on 5173\n")
+    assert svc.expose_user_app(sbx, name="web", port=5173)["ok"] is True
+    container.exec_run.return_value = (0, b"Removed web\n")
+    assert svc.unexpose_user_app(sbx, "web")["ok"] is True
+
+    container.exec_run.return_value = (0, b"Added svc api\n")
+    assert svc.add_user_service(sbx, name="api", command="yarn dev")["ok"] is True
+    container.exec_run.return_value = (0, b"server started on 8000\n")
+    assert "server started" in svc.user_service_logs(sbx, "api", tail=50)
+    container.exec_run.return_value = (0, b"Removed svc api\n")
+    assert svc.remove_user_service(sbx, "api")["ok"] is True
+
+    container.exec_run.return_value = (0, b"Added cron\n")
+    assert svc.add_cron_job(sbx, schedule="0 9 * * *", command="~/daily.sh")["ok"] is True
+    container.exec_run.return_value = (0, b"CRON_REMOVED\n")
+    assert svc.remove_cron_job(sbx, "0 9 * * * ~/daily.sh")["ok"] is True
+
+    container.exec_run.return_value = (0, b"SHARED_SYNC_OK:/home/workspace/shared/PRD.md\n")
+    sh_res = svc.sync_shared_project_file([sbx], team_name="Core", file_name="PRD.md", content="# PRD")
+    assert sh_res["ok"] is True and sh_res["synced"] == 1
+
+

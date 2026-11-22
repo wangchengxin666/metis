@@ -5,25 +5,33 @@ import pytest
 from app.config import Settings
 from app.docker_service import SandboxRuntimeError
 from app.models import AuditLog, SandboxTemplate
-from app.schemas import TemplateCreate, TemplateUpdate
+from app.schemas import OidcProviderCreate, OidcProviderUpdate, TemplateCreate, TemplateUpdate
+from app.security import decrypt_secret
 from app.services import (
     Conflict,
     NotFoundError,
     add_platform_admin,
     create_llm_profile,
+    create_oidc_provider,
     create_sandbox,
     create_template,
     deactivate_platform_admin,
+    delete_oidc_provider,
     delete_sandbox,
     delete_template,
     ensure_bootstrap_admin,
+    ensure_bootstrap_oidc_provider,
     ensure_default_templates,
+    get_allow_local_user_login,
     get_or_create_user,
+    list_oidc_providers,
     list_templates,
     restart_sandbox,
+    set_allow_local_user_login,
     start_sandbox,
     stop_sandbox,
     unique_slug,
+    update_oidc_provider,
     update_sandbox_limits,
     update_template,
     upgrade_sandbox,
@@ -207,3 +215,99 @@ def test_sandbox_lifecycle_rollback_and_upgrade(db_session, fake_docker):
 
     with pytest.raises(NotFoundError):
         start_sandbox(db_session, fake_docker, "missing-id")  # type: ignore[arg-type]
+
+
+def test_oidc_provider_crud_and_env_bootstrap(db_session):
+    token_settings = Settings(_env_file=None, manager_auth_mode="token")
+    oidc_settings = Settings(
+        _env_file=None,
+        manager_auth_mode="oidc",
+        oidc_issuer_url="https://idp.example.com/realms/main",
+        oidc_client_id="legacy-client",
+        oidc_client_secret="legacy-secret",
+        oidc_email_claim="preferred_username",
+    )
+
+    # Defaults depend on mode until explicitly saved in DB
+    assert get_allow_local_user_login(db_session, token_settings) is True
+    assert get_allow_local_user_login(db_session, oidc_settings) is False
+    assert set_allow_local_user_login(db_session, True, actor="admin@example.com") is True
+    assert get_allow_local_user_login(db_session, oidc_settings) is True
+
+    # Legacy env OIDC vars bootstrap once into DB with encrypted secret
+    seeded = ensure_bootstrap_oidc_provider(db_session, oidc_settings)
+    assert seeded is not None
+    assert seeded.slug == "default"
+    assert seeded.client_id == "legacy-client"
+    assert seeded.has_client_secret is True
+    assert seeded.client_secret_ciphertext != "legacy-secret"
+    assert decrypt_secret(seeded.client_secret_ciphertext) == "legacy-secret"
+    assert seeded.email_claim == "preferred_username"
+
+    # Deleting the bootstrapped provider must NOT cause it to resurrect on next startup
+    delete_oidc_provider(db_session, seeded, actor="admin@example.com")
+    assert list_oidc_providers(db_session) == []
+    assert ensure_bootstrap_oidc_provider(db_session, oidc_settings) is None
+    assert list_oidc_providers(db_session) == []
+
+    # Manual CRUD + duplicate slug + secret rotation / clear + validation
+    p1 = create_oidc_provider(
+        db_session,
+        OidcProviderCreate(
+            slug="keycloak",
+            name="Keycloak",
+            issuer_url="https://kc.example.com/realms/corp",
+            client_id="kc-web",
+            client_secret="sec-1",
+            sort_order=20,
+        ),
+        actor="admin@example.com",
+    )
+    p2 = create_oidc_provider(
+        db_session,
+        OidcProviderCreate(
+            slug="okta",
+            name="Okta",
+            issuer_url="https://okta.example.com",
+            client_id="okta-web",
+            sort_order=10,
+        ),
+        actor="admin@example.com",
+    )
+    assert [p.slug for p in list_oidc_providers(db_session)] == ["okta", "keycloak"]
+
+    with pytest.raises(Conflict):
+        create_oidc_provider(
+            db_session,
+            OidcProviderCreate(
+                slug="keycloak",
+                name="Duplicate",
+                issuer_url="https://kc.example.com",
+                client_id="dup",
+            ),
+        )
+
+    updated = update_oidc_provider(
+        db_session,
+        p1,
+        OidcProviderUpdate(name="Corp Keycloak", client_secret="sec-2", enabled=False),
+        actor="admin@example.com",
+    )
+    assert updated.name == "Corp Keycloak"
+    assert updated.enabled is False
+    assert decrypt_secret(updated.client_secret_ciphertext) == "sec-2"
+    assert [p.slug for p in list_oidc_providers(db_session, enabled_only=True)] == ["okta"]
+
+    cleared = update_oidc_provider(
+        db_session,
+        updated,
+        OidcProviderUpdate(clear_client_secret=True),
+    )
+    assert cleared.has_client_secret is False
+
+    with pytest.raises(ValueError):
+        update_oidc_provider(
+            db_session,
+            p2,
+            OidcProviderUpdate(issuer_url="", discovery_url=None),
+        )

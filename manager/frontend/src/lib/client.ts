@@ -25,6 +25,26 @@ export function parseApiErrorDetail(payload: unknown, fallbackStatus: number): s
   return `HTTP ${fallbackStatus}`
 }
 
+/** Resolve a safe relative in-app redirect path from query string (e.g. `?next=/s/alice/`). */
+export function resolveSafeNextPath(raw: string | null | undefined): string | null {
+  if (!raw || typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return null
+  return trimmed
+}
+
+/** Suggest a URL-safe OIDC provider slug from a human display name. */
+export function slugifyOidcName(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 62)
+  if (!slug || slug === 'start' || slug === 'callback') return ''
+  return slug
+}
+
 /** Decide initial SPA view from auth state and current browser pathname. */
 export function resolveInitialView(auth: AuthSummary, pathname: string): PortalView {
   if (!auth.authenticated) {

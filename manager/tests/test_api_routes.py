@@ -375,6 +375,8 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     client, _fake_docker, _registry = api_env
     import app.main as main_mod
 
+    admin_headers = {"Authorization": "Bearer test-admin-token"}
+
     # Mode: none
     monkeypatch.setattr(main_mod.settings, "manager_auth_mode", "none")
     me = client.get("/api/auth/me").json()
@@ -388,13 +390,24 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     assert created.status_code == 201
     client.post("/api/auth/logout")
 
-    # Mode: oidc
+    # Mode: oidc with DB-configured 'default' provider (and no admin token fallback)
     monkeypatch.setattr(main_mod.settings, "manager_auth_mode", "oidc")
-    monkeypatch.setattr(main_mod.settings, "oidc_email_claim", "email")
-    monkeypatch.setattr(main_mod.settings, "oidc_client_id", "dsh-client")
-    monkeypatch.setattr(main_mod.settings, "oidc_logout_url", "")
-    monkeypatch.setattr(main_mod.settings, "oidc_issuer_url", "")
-    monkeypatch.setattr(main_mod.settings, "oidc_discovery_url", "")
+    monkeypatch.setattr(main_mod.settings, "manager_admin_token", "test-admin-token")
+
+    prov_res = client.post(
+        "/api/oidc-providers",
+        headers=admin_headers,
+        json={
+            "slug": "default",
+            "name": "Enterprise SSO",
+            "issuer_url": "https://idp.example.com/realms/main",
+            "client_id": "dsh-client",
+            "client_secret": "dsh-secret",
+            "email_claim": "email",
+        },
+    )
+    assert prov_res.status_code == 201
+    prov_id = prov_res.json()["id"]
 
     redirect_calls: list[dict] = []
 
@@ -415,19 +428,20 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
             "end_session_endpoint": "https://idp.example.com/protocol/openid-connect/logout",
         }
 
-    monkeypatch.setattr(
-        main_mod.oauth,
-        "oidc",
-        SimpleNamespace(
-            authorize_redirect=fake_authorize_redirect,
-            authorize_access_token=fake_authorize_access_token,
-            load_server_metadata=fake_load_server_metadata,
-            server_metadata={},
-        ),
-        raising=False,
+    fake_client = SimpleNamespace(
+        authorize_redirect=fake_authorize_redirect,
+        authorize_access_token=fake_authorize_access_token,
+        load_server_metadata=fake_load_server_metadata,
+        server_metadata={},
     )
+    monkeypatch.setattr(main_mod.oidc_registry, "get_client", lambda _prov: fake_client)
 
+    # In oidc mode, local user login is disabled by default; when admin token is unset, admin login returns 400
+    monkeypatch.setattr(main_mod.settings, "manager_admin_token", "")
     assert client.post("/api/auth/login", json={"email": "a@b.com", "token": "x"}).status_code == 400
+    assert client.post("/api/auth/login", json={"email": "sso-user@example.com", "password": "pw", "mode": "user"}).status_code == 403
+    monkeypatch.setattr(main_mod.settings, "manager_admin_token", "test-admin-token")
+
     unauth_verify = client.get(
         "/api/auth/verify-sandbox/sso-user",
         headers={"Accept": "text/html"},
@@ -450,6 +464,8 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     assert me_oidc["email"] == "sso-user@example.com"
     assert me_oidc["display_name"] == "SSO User"
     assert me_oidc["admin"] is False
+    assert me_oidc["auth_method"] == "oidc"
+    assert me_oidc["oidc_provider_slug"] == "default"
     assert me_oidc["sandbox"]["owner_email"] == "sso-user@example.com"
     oidc_verify = client.get("/api/auth/verify-sandbox/sso-user")
     assert oidc_verify.status_code == 200
@@ -469,9 +485,15 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     assert client.get("/api/auth/verify-sandbox/sso-user").status_code == 401
 
     # Browser GET /auth/logout redirects to IdP logout URL and rewrites split-horizon internal origin
-    monkeypatch.setattr(main_mod.settings, "oidc_discovery_url", "http://dsh-keycloak:8080/realms/main/.well-known/openid-configuration")
-    monkeypatch.setattr(main_mod.settings, "oidc_issuer_url", "https://sso.example.com/realms/main")
-    main_mod.oauth.oidc.server_metadata = {
+    assert client.patch(
+        f"/api/oidc-providers/{prov_id}",
+        headers=admin_headers,
+        json={
+            "discovery_url": "http://dsh-keycloak:8080/realms/main/.well-known/openid-configuration",
+            "issuer_url": "https://sso.example.com/realms/main",
+        },
+    ).status_code == 200
+    fake_client.server_metadata = {
         "end_session_endpoint": "http://dsh-keycloak:8080/realms/main/protocol/openid-connect/logout"
     }
     assert client.get("/auth/callback", follow_redirects=False).status_code == 303
@@ -481,14 +503,17 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     assert client.get("/api/auth/me").json()["authenticated"] is False
 
     # Fallback when IdP lacks end_session_endpoint: next login forces prompt=login
-    monkeypatch.setattr(main_mod.settings, "oidc_discovery_url", "")
-    monkeypatch.setattr(main_mod.settings, "oidc_issuer_url", "")
-    main_mod.oauth.oidc.server_metadata = {}
+    assert client.patch(
+        f"/api/oidc-providers/{prov_id}",
+        headers=admin_headers,
+        json={"discovery_url": None},
+    ).status_code == 200
+    fake_client.server_metadata = {}
 
     async def empty_metadata():
         return {}
 
-    main_mod.oauth.oidc.load_server_metadata = empty_metadata
+    fake_client.load_server_metadata = empty_metadata
     assert client.get("/auth/callback", follow_redirects=False).status_code == 303
     fallback_logout = client.post("/api/auth/logout")
     assert fallback_logout.status_code == 200
@@ -497,11 +522,235 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     assert client.get("/auth/oidc/start", follow_redirects=False).status_code == 302
     assert redirect_calls[-1]["kwargs"] == {"prompt": "login"}
 
-    # Explicit OIDC_LOGOUT_URL override
-    monkeypatch.setattr(main_mod.settings, "oidc_logout_url", "https://custom-idp.example.com/v2/logout")
+    # Explicit logout_url override per provider
+    assert client.patch(
+        f"/api/oidc-providers/{prov_id}",
+        headers=admin_headers,
+        json={"logout_url": "https://custom-idp.example.com/v2/logout"},
+    ).status_code == 200
     assert client.get("/auth/callback", follow_redirects=False).status_code == 303
     override_logout = client.post("/api/auth/logout")
     assert override_logout.json()["logout_url"].startswith("https://custom-idp.example.com/v2/logout?")
+
+
+def test_internal_multi_oidc_hybrid_auth_and_policies(api_env, monkeypatch):
+    client, _fake_docker, _registry = api_env
+    import app.main as main_mod
+    import app.oidc as oidc_mod
+
+    admin_headers = {"Authorization": "Bearer test-admin-token"}
+
+    # Create local user + extra platform admins for role-gating checks
+    assert client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"email": "local@corp.com", "display_name": "Local User", "password": "local-password-1"},
+    ).status_code == 201
+    assert client.post(
+        "/api/admins",
+        headers=admin_headers,
+        json={"email": "boss@corp.com", "display_name": "Corp Admin"},
+    ).status_code == 201
+    assert client.post(
+        "/api/admins",
+        headers=admin_headers,
+        json={"email": "ext-admin@partner.org", "display_name": "Partner Admin"},
+    ).status_code == 201
+
+    # Configure two internal OIDC providers via API without touching Docker/env
+    kc_res = client.post(
+        "/api/oidc-providers",
+        headers=admin_headers,
+        json={
+            "slug": "keycloak",
+            "name": "Corp Keycloak",
+            "issuer_url": "https://kc.corp.com/realms/main",
+            "client_id": "kc-client",
+            "client_secret": "kc-secret",
+            "allowed_domains": "corp.com",
+            "allow_admin_login": True,
+            "sort_order": 10,
+        },
+    )
+    assert kc_res.status_code == 201
+    kc_data = kc_res.json()
+    assert "client_secret" not in kc_data
+    assert kc_data["has_client_secret"] is True
+    assert kc_data["redirect_uri"] == "http://localhost:9000/auth/oidc/keycloak/callback"
+    assert kc_data["post_logout_redirect_uri"] == "http://localhost:9000/login"
+
+    partner_res = client.post(
+        "/api/oidc-providers",
+        headers=admin_headers,
+        json={
+            "slug": "partner",
+            "name": "Partner SSO",
+            "issuer_url": "https://sso.partner.org",
+            "client_id": "partner-client",
+            "client_secret": "partner-secret",
+            "logout_url": "https://sso.partner.org/logout",
+            "allowed_domains": "partner.org",
+            "allow_admin_login": False,
+            "sort_order": 20,
+        },
+    )
+    assert partner_res.status_code == 201
+    partner_id = partner_res.json()["id"]
+
+    # Unauthenticated /api/auth/me exposes enabled providers in sort order without secrets
+    me_anon = client.get("/api/auth/me").json()
+    assert me_anon["authenticated"] is False
+    assert me_anon["allow_local_user_login"] is True
+    assert me_anon["admin_token_configured"] is True
+    assert me_anon["oidc_providers"] == [
+        {"slug": "keycloak", "name": "Corp Keycloak", "login_url": "/auth/oidc/keycloak/start"},
+        {"slug": "partner", "name": "Partner SSO", "login_url": "/auth/oidc/partner/start"},
+    ]
+
+    # Hybrid login: local user login works alongside OIDC and logs out locally (no IdP redirect)
+    local_login = client.post(
+        "/api/auth/login",
+        json={"email": "local@corp.com", "password": "local-password-1", "mode": "user"},
+    )
+    assert local_login.status_code == 200
+    assert client.get("/api/auth/me").json()["auth_method"] == "local"
+    local_logout = client.post("/api/auth/logout").json()
+    assert local_logout["logout_url"] is None
+
+    # Mock per-provider OIDC clients
+    next_userinfo: dict[str, dict] = {
+        "keycloak": {"email": "boss@corp.com", "name": "Corp Boss"},
+        "partner": {"email": "ext-admin@partner.org", "name": "Partner Admin"},
+    }
+
+    def make_fake_client(provider):
+        slug = provider.slug
+
+        async def _redirect(_request, redirect_uri, **kwargs):
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(f"https://{slug}.idp/auth?redirect_uri={redirect_uri}", status_code=302)
+
+        async def _token(_request):
+            return {"id_token": f"id-{slug}", "userinfo": next_userinfo[slug]}
+
+        async def _meta():
+            return {"end_session_endpoint": f"https://{slug}.idp/end-session"}
+
+        return SimpleNamespace(
+            authorize_redirect=_redirect,
+            authorize_access_token=_token,
+            load_server_metadata=_meta,
+            server_metadata={},
+        )
+
+    monkeypatch.setattr(main_mod.oidc_registry, "get_client", make_fake_client)
+
+    # 1) Provider 'keycloak' grants admin to corp admin email and routes logout to keycloak
+    s1 = client.get("/auth/oidc/keycloak/start?next=/admin", follow_redirects=False)
+    assert s1.status_code == 302
+    assert "/auth/oidc/keycloak/callback" in s1.headers["location"]
+    cb1 = client.get("/auth/oidc/keycloak/callback", follow_redirects=False)
+    assert cb1.status_code == 303
+    assert cb1.headers["location"] == "/admin"
+    me1 = client.get("/api/auth/me").json()
+    assert me1["admin"] is True
+    assert me1["oidc_provider_slug"] == "keycloak"
+    assert client.get("/api/overview").status_code == 200
+    lo1 = client.post("/api/auth/logout").json()
+    assert lo1["logout_url"].startswith("https://keycloak.idp/end-session?")
+    assert "client_id=kc-client" in lo1["logout_url"]
+
+    # 2) Domain whitelist blocks disallowed email domain on 'keycloak'
+    next_userinfo["keycloak"] = {"email": "outsider@gmail.com", "name": "Outsider"}
+    denied = client.get("/auth/oidc/keycloak/callback", follow_redirects=False)
+    assert denied.status_code == 303
+    assert denied.headers["location"] == "/login?error=domain_not_allowed"
+    assert client.get("/api/auth/me").json()["authenticated"] is False
+
+    # 3) Provider 'partner' has allow_admin_login=False -> even platform_admins email gets non-admin session
+    s2 = client.get("/auth/oidc/partner/start?next=/admin", follow_redirects=False)
+    assert s2.status_code == 302
+    cb2 = client.get("/auth/oidc/partner/callback", follow_redirects=False)
+    assert cb2.status_code == 303
+    assert cb2.headers["location"] == "/my"
+    me2 = client.get("/api/auth/me").json()
+    assert me2["authenticated"] is True
+    assert me2["admin"] is False
+    assert me2["oidc_provider_slug"] == "partner"
+    assert client.get("/api/overview").status_code == 403
+    lo2 = client.post("/api/auth/logout").json()
+    assert lo2["logout_url"].startswith("https://sso.partner.org/logout?")
+    assert "client_id=partner-client" in lo2["logout_url"]
+
+    # 4) Auth policy toggle disables local user login while keeping Admin Token fallback active
+    pol_res = client.put(
+        "/api/auth/policy",
+        headers=admin_headers,
+        json={"allow_local_user_login": False},
+    )
+    assert pol_res.status_code == 200
+    assert pol_res.json()["allow_local_user_login"] is False
+    assert client.post(
+        "/api/auth/login",
+        json={"email": "local@corp.com", "password": "local-password-1", "mode": "user"},
+    ).status_code == 403
+    admin_fallback = client.post(
+        "/api/auth/login",
+        json={"email": "admin@example.com", "token": "test-admin-token", "mode": "admin"},
+    )
+    assert admin_fallback.status_code == 200
+    assert admin_fallback.json()["admin"] is True
+    assert client.post("/api/auth/logout").json()["logout_url"] is None
+
+    # 5) Disabling a provider removes it from /api/auth/me and blocks its start route
+    assert client.patch(
+        f"/api/oidc-providers/{partner_id}",
+        headers=admin_headers,
+        json={"enabled": False},
+    ).status_code == 200
+    assert [p["slug"] for p in client.get("/api/auth/me").json()["oidc_providers"]] == ["keycloak"]
+    disabled_start = client.get("/auth/oidc/partner/start", follow_redirects=False)
+    assert disabled_start.status_code == 303
+    assert disabled_start.headers["location"] == "/login?error=oidc_provider_disabled"
+
+    # 6) Discovery test endpoint validates remote discovery JSON
+    async def fake_probe(issuer_url, discovery_url=None):
+        if "broken" in (issuer_url or ""):
+            return {"ok": False, "discovery_url": f"{issuer_url}/.well-known/openid-configuration", "detail": "unreachable"}
+        return {
+            "ok": True,
+            "discovery_url": f"{issuer_url}/.well-known/openid-configuration",
+            "issuer": issuer_url,
+            "authorization_endpoint": f"{issuer_url}/auth",
+            "token_endpoint": f"{issuer_url}/token",
+            "end_session_endpoint": f"{issuer_url}/logout",
+            "supports_logout": True,
+            "detail": "ok",
+        }
+
+    monkeypatch.setattr(main_mod, "probe_oidc_discovery", fake_probe)
+    ok_test = client.post(
+        "/api/oidc-providers/test",
+        headers=admin_headers,
+        json={"issuer_url": "https://kc.corp.com/realms/main"},
+    )
+    assert ok_test.status_code == 200
+    assert ok_test.json()["ok"] is True
+    assert ok_test.json()["supports_logout"] is True
+
+    bad_test = client.post(
+        "/api/oidc-providers/test",
+        headers=admin_headers,
+        json={"issuer_url": "https://broken.example.com"},
+    )
+    assert bad_test.status_code == 200
+    assert bad_test.json()["ok"] is False
+
+    # Delete provider cleans up cleanly
+    assert client.delete(f"/api/oidc-providers/{partner_id}", headers=admin_headers).status_code == 200
+    assert [p["slug"] for p in client.get("/api/oidc-providers", headers=admin_headers).json()] == ["keycloak"]
+    _ = oidc_mod
 
 
 def test_plugin_reinstall_disk_stats_backup_restore_and_auto_wake(api_env):

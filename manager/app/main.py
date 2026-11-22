@@ -11,9 +11,9 @@ import time
 from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit
 
-from authlib.integrations.starlette_client import OAuth
+from authlib.integrations.starlette_client import OAuthError
 from fastapi import (
     Body,
     Depends,
@@ -45,12 +45,28 @@ from starlette.middleware.sessions import SessionMiddleware
 from .config import Settings, get_settings
 from .db import SessionLocal, get_db, init_db
 from .docker_service import DockerService, SandboxRuntimeError
-from .models import AuditLog, LlmProfile, PlatformAdmin, Sandbox, SandboxTemplate, User
+from .models import (
+    AuditLog,
+    LlmProfile,
+    OidcProvider,
+    PlatformAdmin,
+    Sandbox,
+    SandboxTemplate,
+    User,
+)
+from .oidc import (
+    OidcClientRegistry,
+    build_provider_logout_url,
+    is_email_domain_allowed,
+    probe_oidc_discovery,
+)
 from .plugin_registry import PluginRegistryService
 from .scheduler import BackgroundWorker
 from .schemas import (
     AdminCreate,
     AdminOut,
+    AuthPolicyOut,
+    AuthPolicyUpdate,
     HealthOut,
     IdleSleepPolicyOut,
     IdleSleepPolicyUpdate,
@@ -58,6 +74,11 @@ from .schemas import (
     LlmProfileOut,
     LlmProfilePushRequest,
     LlmProfileUpdate,
+    OidcProviderCreate,
+    OidcProviderOut,
+    OidcProviderTestOut,
+    OidcProviderTestRequest,
+    OidcProviderUpdate,
     PluginSyncRequest,
     SandboxCreate,
     SandboxList,
@@ -79,24 +100,32 @@ from .services import (
     add_platform_admin,
     audit,
     create_llm_profile,
+    create_oidc_provider,
     update_llm_profile,
     create_sandbox,
     create_template,
     deactivate_platform_admin,
+    delete_oidc_provider,
     ensure_bootstrap_admin,
+    ensure_bootstrap_oidc_provider,
     ensure_default_templates,
+    get_allow_local_user_login,
     get_idle_sleep_policy,
+    get_oidc_provider_by_slug,
     is_platform_admin,
+    list_oidc_providers,
     list_platform_admins,
     list_templates,
     load_sandbox,
     load_sandbox_by_slug,
     refresh_status,
     restart_sandbox,
+    set_allow_local_user_login,
     set_idle_sleep_policy,
     start_sandbox,
     stop_sandbox,
     touch_sandbox_activity,
+    update_oidc_provider,
     update_sandbox_limits,
     update_template,
     upgrade_sandbox,
@@ -112,27 +141,30 @@ SESSION_COOKIE_NAME = "dsh_manager_session"
 OIDC_ID_TOKEN_COOKIE = "dsh_manager_id_token"
 OIDC_PROMPT_LOGIN_COOKIE = "dsh_oidc_prompt_login"
 
-oauth = OAuth()
-if settings.manager_auth_mode == "oidc" and (
-    settings.oidc_discovery_url or settings.oidc_issuer_url
-):
-    discovery_url = (
-        settings.oidc_discovery_url.strip()
-        or f"{settings.oidc_issuer_url.rstrip('/')}/.well-known/openid-configuration"
-    )
-    oauth.register(
-        name="oidc",
-        client_id=settings.oidc_client_id,
-        client_secret=settings.oidc_client_secret,
-        server_metadata_url=discovery_url,
-        client_kwargs={
-            "scope": settings.oidc_scope,
-            **(
-                {"verify": os.environ["SSL_CERT_FILE"]}
-                if os.environ.get("SSL_CERT_FILE")
-                else {}
-            ),
-        },
+oidc_registry = OidcClientRegistry()
+
+
+def oidc_provider_out(provider: OidcProvider) -> OidcProviderOut:
+    base = settings.manager_base_url
+    return OidcProviderOut(
+        id=provider.id,
+        slug=provider.slug,
+        name=provider.name,
+        enabled=bool(provider.enabled),
+        issuer_url=provider.issuer_url,
+        discovery_url=provider.discovery_url,
+        client_id=provider.client_id,
+        has_client_secret=provider.has_client_secret,
+        scope=provider.scope,
+        email_claim=provider.email_claim,
+        logout_url=provider.logout_url,
+        allowed_domains=provider.allowed_domains,
+        allow_admin_login=bool(provider.allow_admin_login),
+        sort_order=provider.sort_order,
+        redirect_uri=f"{base}/auth/oidc/{provider.slug}/callback",
+        post_logout_redirect_uri=f"{base}/login",
+        created_at=provider.created_at,
+        updated_at=provider.updated_at,
     )
 
 
@@ -147,32 +179,24 @@ async def lifespan(_app: FastAPI):
     if not settings.manager_admin_email:
         raise RuntimeError("MANAGER_ADMIN_EMAIL is required")
 
-    if settings.manager_auth_mode == "oidc":
-        missing = [
-            name
-            for name, value in {
-                "OIDC_ISSUER_URL (or OIDC_DISCOVERY_URL)": (
-                    settings.oidc_issuer_url or settings.oidc_discovery_url
-                ),
-                "OIDC_CLIENT_ID": settings.oidc_client_id,
-                "OIDC_CLIENT_SECRET": settings.oidc_client_secret,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise RuntimeError(
-                f"MANAGER_AUTH_MODE=oidc requires: {', '.join(missing)}"
-            )
-    elif settings.manager_auth_mode == "token":
-        if not settings.manager_admin_token:
-            raise RuntimeError(
-                "MANAGER_AUTH_MODE=token requires MANAGER_ADMIN_TOKEN to be set"
-            )
+    if settings.manager_auth_mode == "token" and not settings.manager_admin_token:
+        raise RuntimeError(
+            "MANAGER_AUTH_MODE=token requires MANAGER_ADMIN_TOKEN to be set"
+        )
 
     init_db()
     with SessionLocal() as db:
         ensure_bootstrap_admin(db, settings.manager_admin_email)
         ensure_default_templates(db, settings)
+        ensure_bootstrap_oidc_provider(db, settings)
+        if settings.manager_auth_mode == "oidc":
+            enabled_providers = list_oidc_providers(db, enabled_only=True)
+            if not enabled_providers and not settings.manager_admin_token:
+                raise RuntimeError(
+                    "MANAGER_AUTH_MODE=oidc requires at least one enabled OIDC provider "
+                    "(configure in Admin Console or set OIDC_ISSUER_URL/OIDC_DISCOVERY_URL + OIDC_CLIENT_ID) "
+                    "or MANAGER_ADMIN_TOKEN"
+                )
 
     worker_task: asyncio.Task | None = None
     if settings.background_tasks:
@@ -493,9 +517,9 @@ def _is_authenticated_admin(request: Request, db: Session) -> bool:
     email = session_email(request)
     if not email or not is_platform_admin(db, email):
         return False
-    if settings.manager_auth_mode == "token":
-        return request.session.get("role") == "admin"
-    return True
+    if settings.manager_auth_mode == "none":
+        return True
+    return request.session.get("role") == "admin"
 
 
 def require_admin_api(
@@ -606,6 +630,14 @@ def auth_me(
                         user_row=sandbox.user,
                     ),
                 }
+    enabled_providers = list_oidc_providers(db, enabled_only=True)
+    allow_local_user = get_allow_local_user_login(db, settings)
+    auth_method = request.session.get("auth_method")
+    if not auth_method:
+        if settings.manager_auth_mode == "none":
+            auth_method = "none"
+        elif email:
+            auth_method = "local"
     return {
         "authenticated": bool(email),
         "email": email,
@@ -614,6 +646,19 @@ def auth_me(
         "user_status": user_row.status if user_row else "active",
         "has_password": bool(user_row and user_row.password_hash),
         "auth_mode": settings.manager_auth_mode,
+        "auth_method": auth_method,
+        "oidc_provider_slug": request.session.get("oidc_provider_slug"),
+        "oidc_provider_name": request.session.get("oidc_provider_name"),
+        "allow_local_user_login": allow_local_user,
+        "admin_token_configured": bool(settings.manager_admin_token),
+        "oidc_providers": [
+            {
+                "slug": p.slug,
+                "name": p.name,
+                "login_url": f"/auth/oidc/{p.slug}/start",
+            }
+            for p in enabled_providers
+        ],
         "default_admin_email": settings.manager_admin_email,
         "public_url": settings.manager_base_url,
         "plugin_index_url": settings.plugin_index_url,
@@ -640,6 +685,8 @@ def verify_sandbox_access(
 
     if not email and not is_admin:
         if wants_html:
+            safe_slug = html_lib.escape(slug)
+            login_href = f"/login?next={quote(f'/s/{slug}/', safe='/')}"
             html = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>需要登录 - DSH Sandbox Cloud</title>
 <style>body{{margin:0;background:#09090b;color:#f4f4f5;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}}
@@ -647,8 +694,8 @@ def verify_sandbox_access(
 h2{{margin:0 0 10px;font-size:18px}}p{{margin:0 0 20px;font-size:13px;color:#a1a1aa;line-height:1.6}}
 a.btn{{display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500}}</style></head>
 <body><div class="card"><h2>请先登录工作区平台</h2>
-<p>访问工作区 <code>/s/{slug}/</code> 需要验证您的身份，仅工作区归属人本人或平台管理员可进入。</p>
-<a class="btn" href="/login">前往登录</a></div></body></html>"""
+<p>访问工作区 <code>/s/{safe_slug}/</code> 需要验证您的身份，仅工作区归属人本人或平台管理员可进入。</p>
+<a class="btn" href="{login_href}">前往登录</a></div></body></html>"""
             return HTMLResponse(content=html, status_code=401)
         raise HTTPException(status_code=401, detail="请先登录平台后再访问工作区")
 
@@ -731,61 +778,80 @@ def api_auth_login(
         raise HTTPException(status_code=400, detail="请输入有效的邮箱地址")
 
     if settings.manager_auth_mode == "none":
+        is_admin = is_platform_admin(db, clean_email)
         request.session["email"] = clean_email
+        request.session["role"] = "admin" if is_admin else "user"
+        request.session["auth_method"] = "none"
+        request.session.pop("oidc_provider_slug", None)
+        request.session.pop("oidc_provider_name", None)
         return {
             "authenticated": True,
             "email": clean_email,
-            "admin": is_platform_admin(db, clean_email),
+            "admin": is_admin,
         }
 
-    if settings.manager_auth_mode == "token":
-        if payload.mode == "user":
-            if is_platform_admin(db, clean_email):
-                raise HTTPException(
-                    status_code=401,
-                    detail="管理员账号请切换至“管理员控制台”并输入 Admin Token 登录",
-                )
-            user = db.scalar(select(User).where(User.email == clean_email))
-            secret = (
-                payload.password if payload.password is not None else payload.token
-            ) or ""
-            if not user:
-                raise HTTPException(status_code=401, detail="邮箱或密码错误")
-            if user.status != "active":
-                raise HTTPException(
-                    status_code=403, detail="该账号已被管理员禁用，请联系平台管理员"
-                )
-            if not user.password_hash:
-                raise HTTPException(
-                    status_code=401,
-                    detail="该账号尚未设置登录密码，请联系管理员设置初始密码",
-                )
-            if not verify_password(secret, user.password_hash):
-                raise HTTPException(status_code=401, detail="邮箱或密码错误")
-            request.session["email"] = clean_email
-            request.session["role"] = "user"
-            return {
-                "authenticated": True,
-                "email": clean_email,
-                "admin": False,
-            }
-        if not payload.token or not hmac.compare_digest(
-            payload.token.strip(), settings.manager_admin_token
-        ):
-            raise HTTPException(status_code=401, detail="管理员口令 (Admin Token) 错误")
-        if not is_platform_admin(db, clean_email):
+    if payload.mode == "user":
+        if not get_allow_local_user_login(db, settings):
             raise HTTPException(
-                status_code=403, detail=f"邮箱 {clean_email} 不是平台管理员"
+                status_code=403,
+                detail="当前已禁用普通用户本地密码登录，请通过 OIDC 单点登录",
             )
+        if is_platform_admin(db, clean_email):
+            raise HTTPException(
+                status_code=401,
+                detail="管理员账号请切换至“管理员控制台”并输入 Admin Token 登录",
+            )
+        user = db.scalar(select(User).where(User.email == clean_email))
+        secret = (
+            payload.password if payload.password is not None else payload.token
+        ) or ""
+        if not user:
+            raise HTTPException(status_code=401, detail="邮箱或密码错误")
+        if user.status != "active":
+            raise HTTPException(
+                status_code=403, detail="该账号已被管理员禁用，请联系平台管理员"
+            )
+        if not user.password_hash:
+            raise HTTPException(
+                status_code=401,
+                detail="该账号尚未设置登录密码，请联系管理员设置初始密码",
+            )
+        if not verify_password(secret, user.password_hash):
+            raise HTTPException(status_code=401, detail="邮箱或密码错误")
         request.session["email"] = clean_email
-        request.session["role"] = "admin"
+        request.session["role"] = "user"
+        request.session["auth_method"] = "local"
+        request.session.pop("oidc_provider_slug", None)
+        request.session.pop("oidc_provider_name", None)
         return {
             "authenticated": True,
             "email": clean_email,
-            "admin": True,
+            "admin": False,
         }
 
-    raise HTTPException(status_code=400, detail="当前已启用 OIDC 登录，请通过 SSO 跳转")
+    if not settings.manager_admin_token:
+        raise HTTPException(
+            status_code=400,
+            detail="未配置管理员口令 (MANAGER_ADMIN_TOKEN)，请通过 OIDC 登录",
+        )
+    if not payload.token or not hmac.compare_digest(
+        payload.token.strip(), settings.manager_admin_token
+    ):
+        raise HTTPException(status_code=401, detail="管理员口令 (Admin Token) 错误")
+    if not is_platform_admin(db, clean_email):
+        raise HTTPException(
+            status_code=403, detail=f"邮箱 {clean_email} 不是平台管理员"
+        )
+    request.session["email"] = clean_email
+    request.session["role"] = "admin"
+    request.session["auth_method"] = "local"
+    request.session.pop("oidc_provider_slug", None)
+    request.session.pop("oidc_provider_name", None)
+    return {
+        "authenticated": True,
+        "email": clean_email,
+        "admin": True,
+    }
 
 
 def _set_auth_cookie(response: Response, key: str, value: str) -> None:
@@ -809,72 +875,138 @@ def _delete_auth_cookie(response: Response, key: str) -> None:
     )
 
 
-async def _build_oidc_logout_url(id_token: str | None = None) -> str | None:
-    if settings.manager_auth_mode != "oidc":
-        return None
-
-    endpoint = settings.oidc_logout_url.strip()
-    if not endpoint:
-        oidc_client = getattr(oauth, "oidc", None)
-        if oidc_client is None:
-            return None
-        metadata: dict = {}
-        server_metadata = getattr(oidc_client, "server_metadata", None)
-        if isinstance(server_metadata, dict) and server_metadata.get(
-            "end_session_endpoint"
-        ):
-            metadata = server_metadata
-        elif hasattr(oidc_client, "load_server_metadata"):
-            try:
-                loaded = await oidc_client.load_server_metadata()
-                if isinstance(loaded, dict):
-                    metadata = loaded
-            except Exception as exc:
-                logger.warning(
-                    "Failed to load OIDC discovery metadata for logout: %s", exc
-                )
-        endpoint = str(metadata.get("end_session_endpoint") or "").strip()
-
-    if not endpoint:
-        return None
-
-    if settings.oidc_discovery_url and settings.oidc_issuer_url:
-        disc_parts = urlsplit(settings.oidc_discovery_url.strip())
-        issuer_parts = urlsplit(settings.oidc_issuer_url.strip())
-        ep_parts = urlsplit(endpoint)
-        if (
-            disc_parts.scheme
-            and disc_parts.netloc
-            and issuer_parts.scheme
-            and issuer_parts.netloc
-            and ep_parts.scheme == disc_parts.scheme
-            and ep_parts.netloc == disc_parts.netloc
-            and (ep_parts.scheme, ep_parts.netloc)
-            != (issuer_parts.scheme, issuer_parts.netloc)
-        ):
-            endpoint = urlunsplit(
-                (
-                    issuer_parts.scheme,
-                    issuer_parts.netloc,
-                    ep_parts.path,
-                    ep_parts.query,
-                    ep_parts.fragment,
-                )
-            )
-
-    query: dict[str, str] = {
-        "post_logout_redirect_uri": f"{settings.manager_base_url}/login",
-    }
-    if id_token:
-        query["id_token_hint"] = id_token
-    if settings.oidc_client_id:
-        query["client_id"] = settings.oidc_client_id
-
-    sep = "&" if "?" in endpoint else "?"
-    return f"{endpoint}{sep}{urlencode(query)}"
+def _resolve_default_oidc_provider(
+    db: Session, slug: str | None = None
+) -> OidcProvider | None:
+    if slug:
+        return get_oidc_provider_by_slug(db, slug, enabled_only=True)
+    default_provider = get_oidc_provider_by_slug(db, "default", enabled_only=True)
+    if default_provider is not None:
+        return default_provider
+    enabled = list_oidc_providers(db, enabled_only=True)
+    if len(enabled) == 1:
+        return enabled[0]
+    return None
 
 
-async def _perform_logout(request: Request, response: Response) -> str | None:
+async def _start_oidc_login(
+    request: Request, provider: OidcProvider, redirect_uri: str
+) -> Response:
+    next_url = safe_next(request.query_params.get("next", "/admin"))
+    request.session["next"] = next_url
+    request.session["oidc_login_provider"] = provider.slug
+    try:
+        client = oidc_registry.get_client(provider)
+    except Exception as exc:
+        logger.warning("Failed to initialize OIDC client (%s): %s", provider.slug, exc)
+        return RedirectResponse("/login?error=oidc_failed", status_code=303)
+
+    prompt_cookie = request.cookies.get(OIDC_PROMPT_LOGIN_COOKIE)
+    if prompt_cookie in {"1", provider.slug}:
+        resp = await client.authorize_redirect(request, redirect_uri, prompt="login")
+        _delete_auth_cookie(resp, OIDC_PROMPT_LOGIN_COOKIE)
+        return resp
+    return await client.authorize_redirect(request, redirect_uri)
+
+
+async def _complete_oidc_callback(
+    request: Request, db: Session, provider: OidcProvider
+) -> Response:
+    try:
+        client = oidc_registry.get_client(provider)
+        token = await client.authorize_access_token(request)
+    except (OAuthError, Exception) as exc:
+        logger.warning("OIDC callback failed for provider '%s': %s", provider.slug, exc)
+        request.session.pop("oidc_login_provider", None)
+        return RedirectResponse("/login?error=oidc_failed", status_code=303)
+
+    userinfo = token.get("userinfo") if isinstance(token, dict) else None
+    if not isinstance(userinfo, dict):
+        userinfo = {}
+    claim = (provider.email_claim or "email").strip() or "email"
+    email = userinfo.get(claim) or userinfo.get("email")
+
+    if not email and isinstance(token, dict) and token.get("id_token") and hasattr(client, "parse_id_token"):
+        try:
+            parsed = await client.parse_id_token(token, nonce=None)
+        except TypeError:
+            parsed = await client.parse_id_token(request, token)
+        except Exception as exc:
+            logger.warning("OIDC parse_id_token failed (%s): %s", provider.slug, exc)
+            parsed = None
+        if isinstance(parsed, dict):
+            userinfo = {**userinfo, **parsed}
+            email = userinfo.get(claim) or userinfo.get("email")
+
+    if not email and isinstance(token, dict) and token.get("access_token") and hasattr(client, "userinfo"):
+        try:
+            fetched = await client.userinfo(token=token)
+            if isinstance(fetched, dict):
+                userinfo = {**userinfo, **fetched}
+                email = userinfo.get(claim) or userinfo.get("email")
+        except Exception as exc:
+            logger.warning("OIDC userinfo fetch failed (%s): %s", provider.slug, exc)
+
+    email = str(email or "").strip().lower()
+    if not email or "@" not in email:
+        request.session.clear()
+        resp = RedirectResponse("/login?error=oidc_no_email", status_code=303)
+        _delete_auth_cookie(resp, OIDC_ID_TOKEN_COOKIE)
+        return resp
+
+    if not is_email_domain_allowed(email, provider.allowed_domains):
+        request.session.clear()
+        audit(
+            db,
+            "auth.oidc_denied",
+            target=email,
+            detail=f"provider={provider.slug},reason=domain_not_allowed",
+        )
+        db.commit()
+        resp = RedirectResponse("/login?error=domain_not_allowed", status_code=303)
+        _delete_auth_cookie(resp, OIDC_ID_TOKEN_COOKIE)
+        return resp
+
+    is_admin_email = is_platform_admin(db, email)
+    granted_admin = is_admin_email and bool(provider.allow_admin_login)
+
+    if not granted_admin:
+        existing_user = db.scalar(select(User).where(User.email == email))
+        if existing_user and existing_user.status != "active":
+            request.session.clear()
+            resp = RedirectResponse("/login?error=disabled", status_code=303)
+            _delete_auth_cookie(resp, OIDC_ID_TOKEN_COOKIE)
+            return resp
+
+    request.session["email"] = email
+    request.session["name"] = userinfo.get("name") or email
+    request.session["role"] = "admin" if granted_admin else "user"
+    request.session["auth_method"] = "oidc"
+    request.session["oidc_provider_slug"] = provider.slug
+    request.session["oidc_provider_name"] = provider.name
+    request.session.pop("oidc_login_provider", None)
+
+    next_url = safe_next(request.session.pop("next", "/admin"))
+    if granted_admin:
+        target = next_url
+    elif next_url.startswith(("/my", "/s/")):
+        target = next_url
+    else:
+        target = "/my"
+
+    resp = RedirectResponse(target, status_code=303)
+    _delete_auth_cookie(resp, OIDC_PROMPT_LOGIN_COOKIE)
+    id_token = token.get("id_token") if isinstance(token, dict) else None
+    if isinstance(id_token, str) and id_token:
+        _set_auth_cookie(resp, OIDC_ID_TOKEN_COOKIE, id_token)
+    return resp
+
+
+async def _perform_logout(
+    request: Request, response: Response, db: Session
+) -> str | None:
+    auth_method = request.session.get("auth_method")
+    provider_slug = request.session.get("oidc_provider_slug")
     id_token = request.cookies.get(OIDC_ID_TOKEN_COOKIE)
     had_session_data = bool(request.session)
     request.session.clear()
@@ -882,75 +1014,105 @@ async def _perform_logout(request: Request, response: Response) -> str | None:
         _delete_auth_cookie(response, SESSION_COOKIE_NAME)
     _delete_auth_cookie(response, OIDC_ID_TOKEN_COOKIE)
 
-    logout_url = await _build_oidc_logout_url(id_token=id_token)
-    if settings.manager_auth_mode == "oidc" and not logout_url:
-        _set_auth_cookie(response, OIDC_PROMPT_LOGIN_COOKIE, "1")
+    logout_url: str | None = None
+    if auth_method == "oidc" and isinstance(provider_slug, str) and provider_slug:
+        provider = get_oidc_provider_by_slug(db, provider_slug)
+        if provider is not None:
+            client = None
+            try:
+                client = oidc_registry.get_client(provider)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to build OIDC client for logout (%s): %s",
+                    provider.slug,
+                    exc,
+                )
+            logout_url = await build_provider_logout_url(
+                provider,
+                client,
+                settings.manager_base_url,
+                id_token=id_token,
+            )
+            if not logout_url:
+                _set_auth_cookie(response, OIDC_PROMPT_LOGIN_COOKIE, provider.slug)
+            else:
+                _delete_auth_cookie(response, OIDC_PROMPT_LOGIN_COOKIE)
+        else:
+            _delete_auth_cookie(response, OIDC_PROMPT_LOGIN_COOKIE)
     else:
         _delete_auth_cookie(response, OIDC_PROMPT_LOGIN_COOKIE)
     return logout_url
 
 
 @app.post("/api/auth/logout")
-async def api_auth_logout(request: Request, response: Response):
+async def api_auth_logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     response.headers["Cache-Control"] = "no-store"
-    logout_url = await _perform_logout(request, response)
+    logout_url = await _perform_logout(request, response, db)
     return {"ok": True, "logout_url": logout_url}
 
 
 @app.get("/auth/oidc/start", include_in_schema=False)
-async def auth_oidc_start(request: Request):
-    next_url = safe_next(request.query_params.get("next", "/admin"))
-    request.session["next"] = next_url
-    if settings.manager_auth_mode != "oidc":
-        return RedirectResponse("/login", status_code=303)
-    redirect_uri = f"{settings.manager_base_url}/auth/callback"
-    if request.cookies.get(OIDC_PROMPT_LOGIN_COOKIE) == "1":
-        resp = await oauth.oidc.authorize_redirect(
-            request, redirect_uri, prompt="login"
-        )
-        _delete_auth_cookie(resp, OIDC_PROMPT_LOGIN_COOKIE)
-        return resp
-    return await oauth.oidc.authorize_redirect(request, redirect_uri)
+async def auth_oidc_start(
+    request: Request,
+    provider: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    resolved = _resolve_default_oidc_provider(db, provider)
+    if resolved is None:
+        return RedirectResponse("/login?error=oidc_provider_disabled", status_code=303)
+    redirect_uri = (
+        f"{settings.manager_base_url}/auth/oidc/{resolved.slug}/callback"
+        if provider
+        else f"{settings.manager_base_url}/auth/callback"
+    )
+    return await _start_oidc_login(request, resolved, redirect_uri)
+
+
+@app.get("/auth/oidc/{slug}/start", include_in_schema=False)
+async def auth_oidc_provider_start(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    provider = get_oidc_provider_by_slug(db, slug, enabled_only=True)
+    if provider is None:
+        return RedirectResponse("/login?error=oidc_provider_disabled", status_code=303)
+    redirect_uri = f"{settings.manager_base_url}/auth/oidc/{provider.slug}/callback"
+    return await _start_oidc_login(request, provider, redirect_uri)
+
+
+@app.get("/auth/oidc/{slug}/callback", include_in_schema=False)
+async def auth_oidc_provider_callback(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    provider = get_oidc_provider_by_slug(db, slug, enabled_only=True)
+    if provider is None:
+        return RedirectResponse("/login?error=oidc_provider_disabled", status_code=303)
+    return await _complete_oidc_callback(request, db, provider)
 
 
 @app.get("/auth/callback", include_in_schema=False)
 async def auth_callback(request: Request, db: Session = Depends(get_db)):
-    if settings.manager_auth_mode != "oidc":
-        return RedirectResponse("/admin", status_code=303)
-    token = await oauth.oidc.authorize_access_token(request)
-    userinfo = token.get("userinfo") or {}
-    claim = settings.oidc_email_claim
-    email = userinfo.get(claim) or userinfo.get("email")
-    if not email:
-        userinfo = await oauth.oidc.parse_id_token(request, token)
-        email = userinfo.get(claim) or userinfo.get("email")
-    email = str(email or "").lower()
-    if not email:
-        raise HTTPException(status_code=400, detail="ID token has no email")
-    if not is_platform_admin(db, email):
-        existing_user = db.scalar(select(User).where(User.email == email))
-        if existing_user and existing_user.status != "active":
-            request.session.clear()
-            resp = RedirectResponse("/login?error=disabled", status_code=303)
-            _delete_auth_cookie(resp, OIDC_ID_TOKEN_COOKIE)
-            return resp
-    request.session["email"] = email
-    request.session["name"] = userinfo.get("name") or email
-    next_url = request.session.pop("next", "/admin")
-    target = "/my" if not is_platform_admin(db, email) else safe_next(next_url)
-    resp = RedirectResponse(target, status_code=303)
-    _delete_auth_cookie(resp, OIDC_PROMPT_LOGIN_COOKIE)
-    id_token = token.get("id_token")
-    if isinstance(id_token, str) and id_token:
-        _set_auth_cookie(resp, OIDC_ID_TOKEN_COOKIE, id_token)
-    return resp
+    session_slug = request.session.get("oidc_login_provider")
+    provider = _resolve_default_oidc_provider(
+        db, session_slug if isinstance(session_slug, str) else None
+    )
+    if provider is None:
+        return RedirectResponse("/login?error=oidc_provider_disabled", status_code=303)
+    return await _complete_oidc_callback(request, db, provider)
 
 
 @app.get("/auth/logout", include_in_schema=False)
-async def auth_logout(request: Request):
+async def auth_logout(request: Request, db: Session = Depends(get_db)):
     # RedirectResponse is created after _perform_logout determines target; apply cookies onto it.
     temp_resp = Response()
-    logout_url = await _perform_logout(request, temp_resp)
+    logout_url = await _perform_logout(request, temp_resp, db)
     resp = RedirectResponse(logout_url or "/login", status_code=303)
     for k, v in temp_resp.raw_headers:
         if k.lower() == b"set-cookie":
@@ -1146,10 +1308,10 @@ def api_change_my_password(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    if settings.manager_auth_mode == "oidc":
+    if not get_allow_local_user_login(db, settings):
         raise HTTPException(
             status_code=400,
-            detail="当前已启用企业 OIDC 登录，请前往统一身份认证平台修改密码",
+            detail="当前已禁用本地密码登录，请前往统一身份认证平台修改密码",
         )
     email = require_user_api(request)
     user = _ensure_active_user(db, email)
@@ -1226,6 +1388,9 @@ def api_overview(
         for s in sandboxes
     )
     idle_enabled, idle_minutes = get_idle_sleep_policy(db, settings)
+    oidc_providers = list_oidc_providers(db)
+    enabled_oidc_count = sum(1 for p in oidc_providers if p.enabled)
+    allow_local_user = get_allow_local_user_login(db, settings)
     return {
         "total_sandboxes": len(sandboxes),
         "running_sandboxes": running_count,
@@ -1234,6 +1399,10 @@ def api_overview(
         "users_count": users_count,
         "templates_count": templates_count,
         "plugins_count": len(plugins),
+        "oidc_providers_count": len(oidc_providers),
+        "enabled_oidc_providers_count": enabled_oidc_count,
+        "allow_local_user_login": allow_local_user,
+        "admin_token_configured": bool(settings.manager_admin_token),
         "default_image_repo": settings.dsh_image_repo,
         "default_image_tag": settings.dsh_image_tag,
         "default_cpus": settings.sandbox_cpus,
@@ -1379,6 +1548,135 @@ def api_update_idle_sleep_policy(
         actor=session_email(request) or settings.manager_admin_email,
     )
     return IdleSleepPolicyOut(enabled=enabled, idle_minutes=idle_minutes)
+
+
+# ---------------------------------------------------------------------------
+# Auth Policy & Multi-OIDC Providers CRUD API
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/auth/policy", response_model=AuthPolicyOut)
+def api_get_auth_policy(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    return AuthPolicyOut(
+        allow_local_user_login=get_allow_local_user_login(db, settings),
+        admin_token_configured=bool(settings.manager_admin_token),
+        auth_mode=settings.manager_auth_mode,
+    )
+
+
+@app.put("/api/auth/policy", response_model=AuthPolicyOut)
+def api_update_auth_policy(
+    payload: AuthPolicyUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    allow = set_allow_local_user_login(
+        db,
+        allow=payload.allow_local_user_login,
+        actor=session_email(request) or settings.manager_admin_email,
+    )
+    return AuthPolicyOut(
+        allow_local_user_login=allow,
+        admin_token_configured=bool(settings.manager_admin_token),
+        auth_mode=settings.manager_auth_mode,
+    )
+
+
+@app.get("/api/oidc-providers", response_model=list[OidcProviderOut])
+def api_list_oidc_providers(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    return [oidc_provider_out(p) for p in list_oidc_providers(db)]
+
+
+@app.post("/api/oidc-providers", response_model=OidcProviderOut, status_code=201)
+def api_create_oidc_provider(
+    payload: OidcProviderCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    try:
+        provider = create_oidc_provider(
+            db,
+            payload,
+            actor=session_email(request) or settings.manager_admin_email,
+        )
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+    oidc_registry.invalidate(provider.slug)
+    return oidc_provider_out(provider)
+
+
+@app.patch("/api/oidc-providers/{provider_id}", response_model=OidcProviderOut)
+def api_update_oidc_provider(
+    provider_id: str,
+    payload: OidcProviderUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    provider = db.get(OidcProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="OIDC 提供方不存在")
+    try:
+        updated = update_oidc_provider(
+            db,
+            provider,
+            payload,
+            actor=session_email(request) or settings.manager_admin_email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+    oidc_registry.invalidate(updated.slug)
+    return oidc_provider_out(updated)
+
+
+@app.delete("/api/oidc-providers/{provider_id}")
+def api_delete_oidc_provider(
+    provider_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    provider = db.get(OidcProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="OIDC 提供方不存在")
+    slug = provider.slug
+    delete_oidc_provider(
+        db,
+        provider,
+        actor=session_email(request) or settings.manager_admin_email,
+    )
+    oidc_registry.invalidate(slug)
+    return {"ok": True}
+
+
+@app.post("/api/oidc-providers/test", response_model=OidcProviderTestOut)
+async def api_test_oidc_provider(
+    payload: OidcProviderTestRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    issuer_url = payload.issuer_url
+    discovery_url = payload.discovery_url
+    if payload.provider_id:
+        provider = db.get(OidcProvider, payload.provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="OIDC 提供方不存在")
+        if issuer_url is None:
+            issuer_url = provider.issuer_url
+        if discovery_url is None:
+            discovery_url = provider.discovery_url
+    result = await probe_oidc_discovery(issuer_url, discovery_url)
+    return OidcProviderTestOut(**result)
 
 
 # ---------------------------------------------------------------------------

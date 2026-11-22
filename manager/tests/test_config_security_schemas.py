@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.models import OidcProvider
+from app.oidc import (
+    OidcClientRegistry,
+    is_email_domain_allowed,
+    probe_oidc_discovery,
+    rewrite_split_horizon_url,
+)
 from app.schemas import (
     LlmProfileCreate,
+    OidcProviderCreate,
     SandboxCreate,
     SandboxPatch,
     TemplateCreate,
@@ -124,3 +133,143 @@ def test_schema_memory_and_password_validators():
         api_key="sk-123",
     )
     assert llm.name == "OpenAI"
+
+
+def test_oidc_provider_schema_and_helpers():
+    created = OidcProviderCreate(
+        slug="corp-sso",
+        name=" Corp SSO ",
+        issuer_url="https://idp.corp.com/realms/main",
+        client_id="dsh-web",
+        client_secret="top-secret",
+        allowed_domains=" @Corp.COM , example.org ; corp.com ",
+    )
+    assert created.slug == "corp-sso"
+    assert created.name == "Corp SSO"
+    assert created.allowed_domains == "corp.com,example.org"
+
+    # Reserved slugs rejected
+    for reserved in ("start", "callback"):
+        with pytest.raises(ValidationError):
+            OidcProviderCreate(
+                slug=reserved,
+                name="Bad",
+                issuer_url="https://idp.example.com",
+                client_id="cid",
+            )
+
+    # Requires at least one of issuer_url or discovery_url
+    with pytest.raises(ValidationError):
+        OidcProviderCreate(slug="missing-url", name="Bad", client_id="cid")
+
+    # Invalid scheme or domain rejected
+    with pytest.raises(ValidationError):
+        OidcProviderCreate(
+            slug="bad-scheme",
+            name="Bad",
+            issuer_url="ftp://idp.example.com",
+            client_id="cid",
+        )
+    with pytest.raises(ValidationError):
+        OidcProviderCreate(
+            slug="bad-domain",
+            name="Bad",
+            issuer_url="https://idp.example.com",
+            client_id="cid",
+            allowed_domains="not a valid domain!",
+        )
+
+    assert is_email_domain_allowed("alice@corp.com", None) is True
+    assert is_email_domain_allowed("alice@corp.com", "corp.com,example.org") is True
+    assert is_email_domain_allowed("alice@other.io", "corp.com,example.org") is False
+    assert is_email_domain_allowed("not-an-email", "corp.com") is False
+
+    rewritten = rewrite_split_horizon_url(
+        "http://dsh-keycloak:8080/realms/main/protocol/openid-connect/logout",
+        "http://dsh-keycloak:8080/realms/main/.well-known/openid-configuration",
+        "https://sso.example.com/realms/main",
+    )
+    assert rewritten == "https://sso.example.com/realms/main/protocol/openid-connect/logout"
+    unchanged = rewrite_split_horizon_url(
+        "https://idp.example.com/logout",
+        "http://dsh-keycloak:8080/.well-known/openid-configuration",
+        "https://sso.example.com",
+    )
+    assert unchanged == "https://idp.example.com/logout"
+
+
+def test_oidc_client_registry_caching_and_discovery_probe(monkeypatch):
+    registry = OidcClientRegistry()
+    secret_ct = encrypt_secret("real-client-secret")
+    provider = OidcProvider(
+        id="prov-1",
+        slug="corp-kc",
+        name="Corp KC",
+        enabled=True,
+        issuer_url="https://idp.corp.com/realms/main",
+        discovery_url=None,
+        client_id="dsh-web",
+        client_secret_ciphertext=secret_ct,
+        scope="openid profile email",
+        email_claim="email",
+    )
+    c1 = registry.get_client(provider)
+    c2 = registry.get_client(provider)
+    assert c1 is c2
+    assert c1.client_id == "dsh-web"
+    assert c1.client_secret == "real-client-secret"
+
+    # Changing client_id invalidates cache automatically via fingerprint
+    provider.client_id = "dsh-web-v2"
+    c3 = registry.get_client(provider)
+    assert c3 is not c1
+    assert c3.client_id == "dsh-web-v2"
+
+    # Explicit invalidate forces recreation
+    registry.invalidate("corp-kc")
+    c4 = registry.get_client(provider)
+    assert c4 is not c3
+
+    # Test probe_oidc_discovery with mocked httpx.AsyncClient
+    import app.oidc as oidc_mod
+
+    class _FakeResp:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url: str):
+            if "good" in url:
+                return _FakeResp(
+                    200,
+                    {
+                        "issuer": "https://good.idp",
+                        "authorization_endpoint": "https://good.idp/auth",
+                        "token_endpoint": "https://good.idp/token",
+                        "end_session_endpoint": "https://good.idp/logout",
+                    },
+                )
+            return _FakeResp(404, {})
+
+    monkeypatch.setattr(oidc_mod.httpx, "AsyncClient", _FakeAsyncClient)
+    ok = asyncio.run(probe_oidc_discovery("https://good.idp"))
+    assert ok["ok"] is True
+    assert ok["supports_logout"] is True
+    assert ok["discovery_url"] == "https://good.idp/.well-known/openid-configuration"
+
+    fail = asyncio.run(probe_oidc_discovery("https://missing.idp"))
+    assert fail["ok"] is False
+    assert "404" in fail["detail"]

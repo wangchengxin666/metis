@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from .config import DEFAULT_AUTO_INSTALL_PLUGINS
 
@@ -314,3 +315,237 @@ class LlmProfilePushRequest(BaseModel):
     sandbox_ids: list[str] | None = None
     set_as_default: bool = True
     replace_managed: bool = False
+
+
+_OIDC_RESERVED_SLUGS = {"start", "callback"}
+_DOMAIN_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+)
+
+
+def _normalize_optional_http_url(value: str | None, field_name: str) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    parsed = urlsplit(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{field_name} must be a valid http:// or https:// URL")
+    return cleaned
+
+
+def _normalize_allowed_domains(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw_items = re.split(r"[\s,;]+", value.strip())
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        cleaned = item.strip().lower().lstrip("@")
+        if not cleaned:
+            continue
+        if not _DOMAIN_RE.fullmatch(cleaned):
+            raise ValueError(f"invalid email domain: {item}")
+        if cleaned not in seen:
+            seen.add(cleaned)
+            normalized.append(cleaned)
+    return ",".join(normalized) if normalized else None
+
+
+class OidcProviderCreate(BaseModel):
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    name: str = Field(min_length=1, max_length=128)
+    enabled: bool = True
+    issuer_url: str = Field(default="", max_length=512)
+    discovery_url: str | None = Field(default=None, max_length=512)
+    client_id: str = Field(min_length=1, max_length=255)
+    client_secret: str = Field(default="", max_length=1024)
+    scope: str = Field(default="openid profile email", max_length=255)
+    email_claim: str = Field(default="email", max_length=128)
+    logout_url: str | None = Field(default=None, max_length=512)
+    allowed_domains: str | None = Field(default=None, max_length=512)
+    allow_admin_login: bool = True
+    sort_order: int = Field(default=100, ge=0, le=10000)
+
+    @field_validator("slug")
+    @classmethod
+    def validate_slug(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned in _OIDC_RESERVED_SLUGS:
+            raise ValueError(f"slug '{cleaned}' is reserved")
+        return cleaned
+
+    @field_validator("name", "client_id")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value cannot be empty")
+        return cleaned
+
+    @field_validator("issuer_url")
+    @classmethod
+    def validate_issuer_url(cls, value: str) -> str:
+        return _normalize_optional_http_url(value, "issuer_url") or ""
+
+    @field_validator("discovery_url")
+    @classmethod
+    def validate_discovery_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "discovery_url")
+
+    @field_validator("logout_url")
+    @classmethod
+    def validate_logout_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "logout_url")
+
+    @field_validator("scope")
+    @classmethod
+    def validate_scope(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        return cleaned or "openid profile email"
+
+    @field_validator("email_claim")
+    @classmethod
+    def validate_email_claim(cls, value: str) -> str:
+        cleaned = value.strip()
+        return cleaned or "email"
+
+    @field_validator("allowed_domains")
+    @classmethod
+    def validate_allowed_domains(cls, value: str | None) -> str | None:
+        return _normalize_allowed_domains(value)
+
+    @model_validator(mode="after")
+    def validate_endpoints(self) -> OidcProviderCreate:
+        if not self.issuer_url and not self.discovery_url:
+            raise ValueError("issuer_url or discovery_url is required")
+        return self
+
+
+class OidcProviderUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    enabled: bool | None = None
+    issuer_url: str | None = Field(default=None, max_length=512)
+    discovery_url: str | None = Field(default=None, max_length=512)
+    client_id: str | None = Field(default=None, min_length=1, max_length=255)
+    client_secret: str | None = Field(default=None, max_length=1024)
+    clear_client_secret: bool = False
+    scope: str | None = Field(default=None, max_length=255)
+    email_claim: str | None = Field(default=None, max_length=128)
+    logout_url: str | None = Field(default=None, max_length=512)
+    allowed_domains: str | None = Field(default=None, max_length=512)
+    allow_admin_login: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+
+    @field_validator("name", "client_id")
+    @classmethod
+    def validate_optional_non_empty(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value cannot be empty")
+        return cleaned
+
+    @field_validator("issuer_url")
+    @classmethod
+    def validate_issuer_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_optional_http_url(value, "issuer_url") or ""
+
+    @field_validator("discovery_url")
+    @classmethod
+    def validate_discovery_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "discovery_url")
+
+    @field_validator("logout_url")
+    @classmethod
+    def validate_logout_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "logout_url")
+
+    @field_validator("scope")
+    @classmethod
+    def validate_scope(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return " ".join(value.split()) or "openid profile email"
+
+    @field_validator("email_claim")
+    @classmethod
+    def validate_email_claim(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or "email"
+
+    @field_validator("allowed_domains")
+    @classmethod
+    def validate_allowed_domains(cls, value: str | None) -> str | None:
+        return _normalize_allowed_domains(value)
+
+
+class OidcProviderOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    slug: str
+    name: str
+    enabled: bool
+    issuer_url: str
+    discovery_url: str | None = None
+    client_id: str
+    has_client_secret: bool = False
+    scope: str = "openid profile email"
+    email_claim: str = "email"
+    logout_url: str | None = None
+    allowed_domains: str | None = None
+    allow_admin_login: bool = True
+    sort_order: int = 100
+    redirect_uri: str = ""
+    post_logout_redirect_uri: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PublicOidcProviderOut(BaseModel):
+    slug: str
+    name: str
+    login_url: str
+
+
+class OidcProviderTestRequest(BaseModel):
+    provider_id: str | None = None
+    issuer_url: str | None = Field(default=None, max_length=512)
+    discovery_url: str | None = Field(default=None, max_length=512)
+
+    @field_validator("issuer_url")
+    @classmethod
+    def validate_issuer_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "issuer_url")
+
+    @field_validator("discovery_url")
+    @classmethod
+    def validate_discovery_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "discovery_url")
+
+
+class OidcProviderTestOut(BaseModel):
+    ok: bool
+    discovery_url: str = ""
+    issuer: str | None = None
+    authorization_endpoint: str | None = None
+    token_endpoint: str | None = None
+    end_session_endpoint: str | None = None
+    supports_logout: bool = False
+    detail: str = ""
+
+
+class AuthPolicyOut(BaseModel):
+    allow_local_user_login: bool = True
+    admin_token_configured: bool = False
+    auth_mode: str = "token"
+
+
+class AuthPolicyUpdate(BaseModel):
+    allow_local_user_login: bool

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { apiFetch, parseApiErrorDetail, resolveInitialView } from './client.ts'
+import {
+  apiFetch,
+  parseApiErrorDetail,
+  resolveInitialView,
+  resolveSafeNextPath,
+  slugifyOidcName,
+} from './client.ts'
 
 test('parseApiErrorDetail handles string detail, Pydantic list detail, and fallbacks', () => {
   assert.equal(parseApiErrorDetail({ detail: '未授权访问' }, 401), '未授权访问')
@@ -42,4 +48,21 @@ test('apiFetch returns parsed JSON on success and surfaces FastAPI detail on HTT
     })
 
   await assert.rejects(() => apiFetch('/api/overview'), { message: 'permission denied' })
+})
+
+test('resolveSafeNextPath permits relative paths and rejects protocol/external URLs', () => {
+  assert.equal(resolveSafeNextPath('/s/alice/'), '/s/alice/')
+  assert.equal(resolveSafeNextPath('  /my?foo=1 '), '/my?foo=1')
+  assert.equal(resolveSafeNextPath('//evil.com/phish'), null)
+  assert.equal(resolveSafeNextPath('https://evil.com'), null)
+  assert.equal(resolveSafeNextPath(''), null)
+  assert.equal(resolveSafeNextPath(null), null)
+})
+
+test('slugifyOidcName normalizes names and rejects reserved route slugs', () => {
+  assert.equal(slugifyOidcName('Keycloak Corp SSO'), 'keycloak-corp-sso')
+  assert.equal(slugifyOidcName('  Okta_EU (Prod) '), 'okta-eu-prod')
+  assert.equal(slugifyOidcName('start'), '')
+  assert.equal(slugifyOidcName('callback'), '')
+  assert.equal(slugifyOidcName('企业微信'), '')
 })

@@ -99,7 +99,16 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.db import SessionLocal, init_db
 from app.main import app
-from app.models import AuditLog, LlmProfile, PlatformAdmin, PlatformSetting, Sandbox, SandboxTemplate, User
+from app.models import (
+    AuditLog,
+    LlmProfile,
+    OidcProvider,
+    PlatformAdmin,
+    PlatformSetting,
+    Sandbox,
+    SandboxTemplate,
+    User,
+)
 from app.plugin_registry import PluginRegistryService
 from app.services import ensure_bootstrap_admin, ensure_default_templates
 
@@ -290,9 +299,13 @@ def pytest_sessionfinish(session, exitstatus) -> None:
 
 
 def reset_database() -> None:
+    import app.main as main_mod
+
     init_db()
+    main_mod.oidc_registry.clear()
     with SessionLocal() as db:
         db.query(AuditLog).delete()
+        db.query(OidcProvider).delete()
         db.query(PlatformSetting).delete()
         db.query(Sandbox).delete()
         db.query(SandboxTemplate).delete()

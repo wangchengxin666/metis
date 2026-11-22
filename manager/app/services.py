@@ -11,14 +11,15 @@ from .docker_service import DockerService, SandboxRuntimeError
 from .models import (
     AuditLog,
     LlmProfile,
+    OidcProvider,
     PlatformAdmin,
     PlatformSetting,
     Sandbox,
     SandboxTemplate,
     User,
 )
-from .schemas import TemplateCreate, TemplateUpdate
-from .security import hash_password
+from .schemas import OidcProviderCreate, OidcProviderUpdate, TemplateCreate, TemplateUpdate
+from .security import encrypt_secret, hash_password
 
 
 class ManagerError(RuntimeError):
@@ -727,4 +728,220 @@ def touch_sandbox_activity(
     if last is not None and (now - last).total_seconds() < min_interval_seconds:
         return
     sandbox.last_seen_at = now
+    db.commit()
+
+
+def get_allow_local_user_login(db: Session, settings: Settings) -> bool:
+    """Return whether local email+password user login is enabled (DB overrides mode default)."""
+    row = db.get(PlatformSetting, "allow_local_user_login")
+    if row is not None:
+        return row.value.strip().lower() in {"1", "true", "yes", "on"}
+    return settings.manager_auth_mode != "oidc"
+
+
+def set_allow_local_user_login(
+    db: Session,
+    allow: bool,
+    actor: str | None = None,
+) -> bool:
+    """Persist whether local user email+password login is allowed."""
+    val = "true" if allow else "false"
+    now = utcnow()
+    row = db.get(PlatformSetting, "allow_local_user_login")
+    if row is None:
+        db.add(PlatformSetting(key="allow_local_user_login", value=val, updated_at=now))
+    else:
+        row.value = val
+        row.updated_at = now
+    audit(
+        db,
+        "policy.auth",
+        target="platform",
+        detail=f"allow_local_user_login={allow}",
+        actor=actor,
+    )
+    db.commit()
+    return allow
+
+
+def ensure_bootstrap_oidc_provider(
+    db: Session, settings: Settings
+) -> OidcProvider | None:
+    """One-time migration of legacy .env OIDC_* variables into the oidc_providers table."""
+    if db.get(PlatformSetting, "env_oidc_bootstrapped") is not None:
+        return None
+
+    issuer = (settings.oidc_issuer_url or "").strip()
+    discovery = (settings.oidc_discovery_url or "").strip() or None
+    client_id = (settings.oidc_client_id or "").strip()
+    if not ((issuer or discovery) and client_id):
+        return None
+
+    existing = db.scalar(select(OidcProvider).limit(1))
+    now = utcnow()
+    if existing is not None:
+        db.add(PlatformSetting(key="env_oidc_bootstrapped", value="true", updated_at=now))
+        db.commit()
+        return None
+
+    raw_secret = (settings.oidc_client_secret or "").strip()
+    provider = OidcProvider(
+        slug="default",
+        name="Enterprise SSO",
+        enabled=True,
+        issuer_url=issuer,
+        discovery_url=discovery,
+        client_id=client_id,
+        client_secret_ciphertext=encrypt_secret(raw_secret) if raw_secret else "",
+        scope=" ".join((settings.oidc_scope or "openid profile email").split())
+        or "openid profile email",
+        email_claim=(settings.oidc_email_claim or "email").strip() or "email",
+        logout_url=(settings.oidc_logout_url or "").strip() or None,
+        allowed_domains=None,
+        allow_admin_login=True,
+        sort_order=10,
+    )
+    db.add(provider)
+    db.add(PlatformSetting(key="env_oidc_bootstrapped", value="true", updated_at=now))
+    audit(
+        db,
+        "oidc.bootstrap",
+        target=provider.slug,
+        detail=f"issuer={issuer or discovery}",
+    )
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+def list_oidc_providers(
+    db: Session, *, enabled_only: bool = False
+) -> list[OidcProvider]:
+    query = select(OidcProvider)
+    if enabled_only:
+        query = query.where(OidcProvider.enabled.is_(True))
+    query = query.order_by(
+        OidcProvider.sort_order.asc(),
+        OidcProvider.name.asc(),
+        OidcProvider.slug.asc(),
+    )
+    return list(db.scalars(query).all())
+
+
+def get_oidc_provider_by_slug(
+    db: Session, slug: str, *, enabled_only: bool = False
+) -> OidcProvider | None:
+    clean_slug = (slug or "").strip().lower()
+    if not clean_slug:
+        return None
+    query = select(OidcProvider).where(OidcProvider.slug == clean_slug)
+    if enabled_only:
+        query = query.where(OidcProvider.enabled.is_(True))
+    return db.scalar(query)
+
+
+def create_oidc_provider(
+    db: Session,
+    payload: OidcProviderCreate,
+    *,
+    actor: str | None = None,
+) -> OidcProvider:
+    if get_oidc_provider_by_slug(db, payload.slug):
+        raise Conflict(f"OIDC 标识 '{payload.slug}' 已存在")
+    raw_secret = (payload.client_secret or "").strip()
+    provider = OidcProvider(
+        slug=payload.slug,
+        name=payload.name,
+        enabled=bool(payload.enabled),
+        issuer_url=payload.issuer_url,
+        discovery_url=payload.discovery_url,
+        client_id=payload.client_id,
+        client_secret_ciphertext=encrypt_secret(raw_secret) if raw_secret else "",
+        scope=payload.scope,
+        email_claim=payload.email_claim,
+        logout_url=payload.logout_url,
+        allowed_domains=payload.allowed_domains,
+        allow_admin_login=bool(payload.allow_admin_login),
+        sort_order=payload.sort_order,
+    )
+    db.add(provider)
+    audit(
+        db,
+        "oidc.create",
+        target=provider.slug,
+        detail=f"name={provider.name},enabled={provider.enabled}",
+        actor=actor,
+    )
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+def update_oidc_provider(
+    db: Session,
+    provider: OidcProvider,
+    payload: OidcProviderUpdate,
+    *,
+    actor: str | None = None,
+) -> OidcProvider:
+    provided = set(payload.model_fields_set)
+    next_issuer = (
+        payload.issuer_url if "issuer_url" in provided and payload.issuer_url is not None else provider.issuer_url
+    )
+    next_discovery = (
+        payload.discovery_url if "discovery_url" in provided else provider.discovery_url
+    )
+    if not (next_issuer or "").strip() and not (next_discovery or "").strip():
+        raise ValueError("issuer_url 和 discovery_url 不能同时为空")
+
+    if payload.name is not None:
+        provider.name = payload.name
+    if payload.enabled is not None:
+        provider.enabled = bool(payload.enabled)
+    if "issuer_url" in provided and payload.issuer_url is not None:
+        provider.issuer_url = payload.issuer_url
+    if "discovery_url" in provided:
+        provider.discovery_url = payload.discovery_url
+    if payload.client_id is not None:
+        provider.client_id = payload.client_id
+    if payload.clear_client_secret:
+        provider.client_secret_ciphertext = ""
+    elif payload.client_secret is not None:
+        raw_secret = payload.client_secret.strip()
+        if raw_secret:
+            provider.client_secret_ciphertext = encrypt_secret(raw_secret)
+    if payload.scope is not None:
+        provider.scope = payload.scope
+    if payload.email_claim is not None:
+        provider.email_claim = payload.email_claim
+    if "logout_url" in provided:
+        provider.logout_url = payload.logout_url
+    if "allowed_domains" in provided:
+        provider.allowed_domains = payload.allowed_domains
+    if payload.allow_admin_login is not None:
+        provider.allow_admin_login = bool(payload.allow_admin_login)
+    if payload.sort_order is not None:
+        provider.sort_order = payload.sort_order
+
+    audit(
+        db,
+        "oidc.update",
+        target=provider.slug,
+        detail=f"enabled={provider.enabled},allow_admin={provider.allow_admin_login}",
+        actor=actor,
+    )
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+def delete_oidc_provider(
+    db: Session,
+    provider: OidcProvider,
+    *,
+    actor: str | None = None,
+) -> None:
+    slug = provider.slug
+    audit(db, "oidc.delete", target=slug, actor=actor)
+    db.delete(provider)
     db.commit()

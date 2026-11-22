@@ -143,3 +143,39 @@ class PlatformSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow
     )
+
+
+class OidcProvider(Base):
+    __tablename__ = "oidc_providers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(Unicode(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    issuer_url: Mapped[str] = mapped_column(Unicode(512), default="")
+    discovery_url: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    client_id: Mapped[str] = mapped_column(Unicode(255))
+    client_secret_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    scope: Mapped[str] = mapped_column(Unicode(255), default="openid profile email")
+    email_claim: Mapped[str] = mapped_column(String(128), default="email")
+    logout_url: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    allowed_domains: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    allow_admin_login: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+    @property
+    def has_client_secret(self) -> bool:
+        return bool(self.client_secret_ciphertext)
+
+    @property
+    def effective_discovery_url(self) -> str:
+        if self.discovery_url and self.discovery_url.strip():
+            return self.discovery_url.strip()
+        issuer = (self.issuer_url or "").strip().rstrip("/")
+        if issuer:
+            return f"{issuer}/.well-known/openid-configuration"
+        return ""

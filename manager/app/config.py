@@ -29,11 +29,13 @@ class Settings(BaseSettings):
     restore_max_bytes: int = 512 * 1024 * 1024
 
     # Authentication modes:
-    # - 'oidc': IdP SSO (Keycloak / Auth0 / Okta / Authentik)
-    # - 'token': built-in admin token + per-user password login
+    # - 'token' (default): built-in admin token + local user password + internal multi-OIDC SSO
+    # - 'oidc': OIDC-first mode (auto-seeds legacy OIDC_* env vars into DB, defaults local user login off)
     # - 'none': passwordless local dev
-    manager_auth_mode: Literal["oidc", "token", "none"] = "oidc"
+    manager_auth_mode: Literal["oidc", "token", "none"] = "token"
 
+    # Optional legacy/bootstrap OIDC settings (one-time seeded into DB on first start if configured).
+    # Recommended: manage one or multiple OIDC providers directly in Admin Console -> Auth / SSO.
     oidc_issuer_url: str = ""
     # Optional internal OIDC discovery URL when manager runs inside Docker and
     # OIDC_ISSUER_URL is only resolvable from the host browser.

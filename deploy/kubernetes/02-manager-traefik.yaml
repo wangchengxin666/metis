@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dsh-manager-env
+  namespace: dsh-sandboxes
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql+psycopg://dsh:change-me-postgres-password@dsh-postgres.dsh-sandboxes.svc.cluster.local:5432/dsh_manager"
+  SANDBOX_RUNTIME: "kubernetes"
+  K8S_NAMESPACE: "dsh-sandboxes"
+  K8S_IN_CLUSTER: "true"
+  K8S_WORKSPACE_STORAGE_SIZE: "20Gi"
+  K8S_ROUTING_MODE: "traefik-http"
+  DSH_IMAGE_REPO: "dsh-sandbox"
+  DSH_IMAGE_TAG: "latest"
+  MANAGER_AUTH_MODE: "token"
+  MANAGER_ADMIN_EMAIL: "admin@example.com"
+  MANAGER_ADMIN_TOKEN: "replace-with-admin-token"
+  MANAGER_PUBLIC_URL: "http://localhost:9000"
+  MANAGER_INTERNAL_URL: "http://dsh-manager.dsh-sandboxes.svc.cluster.local:9000"
+  SECRET_KEY: "replace-with-a-long-random-secret-key-at-least-32-chars"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dsh-gateway-static
+  namespace: dsh-sandboxes
+data:
+  dynamic-fallback.yml: |
+    http:
+      routers:
+        dsh-manager:
+          rule: "PathPrefix(`/`)"
+          entryPoints:
+            - web
+          priority: 1
+          service: dsh-manager
+      services:
+        dsh-manager:
+          loadBalancer:
+            servers:
+              - url: "http://dsh-manager.dsh-sandboxes.svc.cluster.local:9000"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsh-manager
+  namespace: dsh-sandboxes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dsh-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dsh-manager
+    spec:
+      serviceAccountName: dsh-manager
+      containers:
+        - name: manager
+          image: dsh-manager:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 9000
+          envFrom:
+            - secretRef:
+                name: dsh-manager-env
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dsh-manager
+  namespace: dsh-sandboxes
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dsh-manager
+  ports:
+    - name: http
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsh-gateway
+  namespace: dsh-sandboxes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dsh-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dsh-gateway
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: traefik
+          image: traefik:v3.7
+          args:
+            - "--entrypoints.web.address=:80"
+            - "--providers.file.filename=/etc/traefik/dynamic/dynamic-fallback.yml"
+            - "--providers.http.endpoint=http://dsh-manager.dsh-sandboxes.svc.cluster.local:9000/api/internal/traefik/config"
+            - "--providers.http.pollInterval=2s"
+          ports:
+            - name: web
+              containerPort: 80
+          volumeMounts:
+            - name: static-config
+              mountPath: /etc/traefik/dynamic
+              readOnly: true
+      volumes:
+        - name: static-config
+          configMap:
+            name: dsh-gateway-static
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dsh-gateway
+  namespace: dsh-sandboxes
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: dsh-gateway
+  ports:
+    - name: web
+      port: 9000
+      targetPort: 80

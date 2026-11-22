@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dsh-sandboxes
+  labels:
+    app.kubernetes.io/managed-by: dsh-manager
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dsh-manager
+  namespace: dsh-sandboxes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dsh-manager-sandbox-role
+  namespace: dsh-sandboxes
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+      - pods/log
+      - services
+      - persistentvolumeclaims
+      - secrets
+      - configmaps
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources:
+      - pods/exec
+    verbs: ["create", "get"]
+  - apiGroups: ["apps"]
+    resources:
+      - statefulsets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - pods
+    verbs: ["get", "list"]
+  - apiGroups: ["traefik.io"]
+    resources:
+      - ingressroutes
+      - middlewares
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dsh-manager-sandbox-binding
+  namespace: dsh-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: dsh-manager
+    namespace: dsh-sandboxes
+roleRef:
+  kind: Role
+  name: dsh-manager-sandbox-role
+  apiGroup: rbac.authorization.k8s.io

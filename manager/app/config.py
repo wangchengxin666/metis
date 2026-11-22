@@ -11,6 +11,45 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "sqlite:////data/dsh-manager.db"
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+
+    # Sandbox runtime backend: 'docker' (local sock or remote TCP/SSH) or 'kubernetes'
+    sandbox_runtime: Literal["docker", "kubernetes"] = "docker"
+
+    # Optional remote Docker daemon & TLS configuration (defaults to docker.from_env())
+    docker_host: str = ""
+    docker_tls_verify: bool = False
+    docker_tls_ca_cert: str = ""
+    docker_tls_client_cert: str = ""
+    docker_tls_client_key: str = ""
+    # When set (e.g. '10.0.0.20'), publishes container :8080 to an ephemeral host port
+    # on the remote Docker host and routes health checks + Traefik to http://<docker_public_host>:<port>.
+    docker_public_host: str = ""
+    docker_host_port_bind_ip: str = "0.0.0.0"
+
+    # Kubernetes runtime settings (used when sandbox_runtime='kubernetes')
+    k8s_namespace: str = "dsh-sandboxes"
+    k8s_in_cluster: bool = True
+    k8s_kubeconfig_path: str = ""
+    k8s_context: str = ""
+    k8s_storage_class: str = ""
+    k8s_workspace_storage_size: str = "20Gi"
+    k8s_image_pull_secret: str = ""
+    k8s_image_pull_policy: Literal["IfNotPresent", "Always", "Never"] = "IfNotPresent"
+    k8s_service_domain: str = "cluster.local"
+    k8s_service_type: Literal["ClusterIP", "NodePort"] = "ClusterIP"
+    # Optional K8s node IP/host (e.g. '127.0.0.1' or 'host.docker.internal') when dsh-manager
+    # runs outside the K8s cluster and reaches sandbox pods via NodePort.
+    k8s_public_host: str = ""
+    k8s_routing_mode: Literal["traefik-http", "traefik-crd", "none"] = "traefik-http"
+    k8s_traefik_entrypoint: str = "web"
+
+    # Traefik dynamic HTTP provider settings (/api/internal/traefik/config)
+    traefik_provider_token: str = ""
+    traefik_entrypoint: str = "web"
 
     dsh_image_repo: str = "dsh-sandbox"
     dsh_image_tag: str = "latest"
@@ -52,6 +91,8 @@ class Settings(BaseSettings):
     manager_public_url: str = "http://localhost:9000"
     # Internal URL reachable by sandbox containers (defaults to manager_base_url).
     manager_internal_url: str = ""
+    # Optional internal Traefik gateway URL reachable by sandbox containers for sandbox-mesh (/s/<slug>/p/4090).
+    gateway_internal_url: str = ""
     secret_key: str = "change-me-in-production"
 
     # Self-hosted plugin index & registry settings

@@ -84,7 +84,7 @@ def _seed_plugin_dir(root: Path) -> None:
 
 _seed_plugin_dir(_TEST_PLUGINS_DIR)
 
-os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH.as_posix()}"
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_PATH.as_posix()}")
 os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-32-chars-minimum"
 os.environ["MANAGER_AUTH_MODE"] = "token"
 os.environ["MANAGER_ADMIN_EMAIL"] = "admin@example.com"
@@ -126,6 +126,12 @@ class FakeDockerService:
 
     def container_name(self, sandbox: Sandbox) -> str:
         return f"dsh-sbx-{sandbox.slug}"
+
+    def ping(self) -> bool:
+        return bool(self.client.ping())
+
+    def upstream_origin(self, sandbox: Sandbox) -> str:
+        return f"http://dsh-sbx-{sandbox.slug}:8080"
 
     def list_local_images(self) -> list[dict[str, str | float]]:
         return [

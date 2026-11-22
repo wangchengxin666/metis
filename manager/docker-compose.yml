@@ -9,6 +9,8 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=dsh-manager"
+      - "--providers.http.endpoint=http://dsh-manager:9000/api/internal/traefik/config"
+      - "--providers.http.pollInterval=2s"
       - "--entrypoints.web.address=:80"
     ports:
       - "${GATEWAY_PORT:-9000}:80"
@@ -47,9 +49,31 @@ services:
     networks:
       - sandbox-net
 
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    container_name: dsh-postgres
+    profiles:
+      - postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dsh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dsh-secret-password}
+      POSTGRES_DB: ${POSTGRES_DB:-dsh_manager}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dsh} -d ${POSTGRES_DB:-dsh_manager}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - sandbox-net
+
 volumes:
   manager-data:
     name: dsh-manager-data
+  postgres-data:
+    name: dsh-postgres-data
 
 networks:
   sandbox-net:

@@ -1,60 +1,104 @@
+from __future__ import annotations
+
+import importlib.util
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from .config import get_settings
+from .config import Settings, get_settings
 
 
 class Base(DeclarativeBase):
     pass
 
 
+def normalize_database_url(raw_url: str) -> str:
+    """Normalize database URLs across SQLite, PostgreSQL (psycopg v3/v2), and MySQL (pymysql)."""
+    cleaned = (raw_url or "").strip()
+    if cleaned.startswith("postgres://"):
+        cleaned = "postgresql://" + cleaned[len("postgres://") :]
+
+    parsed = make_url(cleaned)
+    if parsed.drivername == "postgresql":
+        if (
+            importlib.util.find_spec("psycopg") is not None
+            and importlib.util.find_spec("psycopg2") is None
+        ):
+            parsed = parsed.set(drivername="postgresql+psycopg")
+            return parsed.render_as_string(hide_password=False)
+    elif parsed.drivername in {"mysql", "mariadb"}:
+        if (
+            importlib.util.find_spec("pymysql") is not None
+            and importlib.util.find_spec("MySQLdb") is None
+        ):
+            parsed = parsed.set(drivername=f"{parsed.drivername}+pymysql")
+            return parsed.render_as_string(hide_password=False)
+    return cleaned
+
+
+def build_engine(
+    database_url: str | None = None,
+    app_settings: Settings | None = None,
+) -> Engine:
+    """Create a SQLAlchemy Engine tuned for the target relational database dialect."""
+    cfg = app_settings or get_settings()
+    normalized_url = normalize_database_url(database_url or cfg.database_url)
+    parsed_url = make_url(normalized_url)
+    backend = parsed_url.get_backend_name()
+
+    engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    if backend == "sqlite":
+        database = parsed_url.database or ""
+        if database and database != ":memory:":
+            Path(database).parent.mkdir(parents=True, exist_ok=True)
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        engine_kwargs.update(
+            {
+                "pool_size": cfg.db_pool_size,
+                "max_overflow": cfg.db_max_overflow,
+                "pool_timeout": cfg.db_pool_timeout,
+                "pool_recycle": cfg.db_pool_recycle,
+            }
+        )
+
+    eng = create_engine(normalized_url, **engine_kwargs)
+
+    if backend == "sqlite":
+
+        @event.listens_for(eng, "connect")
+        def _sqlite_pragmas(dbapi_connection, _record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return eng
+
+
 settings = get_settings()
-_url = make_url(settings.database_url)
-
-if _url.get_backend_name() == "sqlite":
-    database = _url.database or ""
-    if database and database != ":memory:":
-        Path(database).parent.mkdir(parents=True, exist_ok=True)
-    connect_args = {"check_same_thread": False}
-else:
-    connect_args = {}
-
-engine = create_engine(
-    settings.database_url,
-    connect_args=connect_args,
-    pool_pre_ping=True,
-)
-
-
-if _url.get_backend_name() == "sqlite":
-
-    @event.listens_for(engine, "connect")
-    def _sqlite_pragmas(dbapi_connection, _record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-
+engine = build_engine(settings.database_url, settings)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def init_db() -> None:
-    from . import models  # noqa: F401
+def migrate_schema(target_engine: Engine) -> None:
+    """Apply idempotent, dialect-agnostic column migrations for SQLite, PostgreSQL, and MySQL."""
+    backend = target_engine.dialect.name
+    bool_false = "0" if backend == "sqlite" else "FALSE"
+    ts_type = "TIMESTAMP" if backend == "postgresql" else "DATETIME"
 
-    Base.metadata.create_all(bind=engine)
+    with target_engine.begin() as connection:
+        inspector = inspect(connection)
+        table_names = set(inspector.get_table_names())
 
-    # MVP migration for SQLite DBs created before per-sandbox limits existed.
-    if _url.get_backend_name() == "sqlite":
-        with engine.begin() as connection:
+        if "sandboxes" in table_names:
             columns = {
-                row[1]
-                for row in connection.exec_driver_sql("PRAGMA table_info(sandboxes)")
+                col["name"] for col in inspector.get_columns("sandboxes")
             }
             if "cpu_limit" not in columns:
                 connection.exec_driver_sql(
@@ -90,7 +134,7 @@ def init_db() -> None:
                 )
             if "auto_sleep_exempt" not in columns:
                 connection.exec_driver_sql(
-                    "ALTER TABLE sandboxes ADD COLUMN auto_sleep_exempt BOOLEAN NOT NULL DEFAULT 0"
+                    f"ALTER TABLE sandboxes ADD COLUMN auto_sleep_exempt BOOLEAN NOT NULL DEFAULT {bool_false}"
                 )
             if "disk_usage_mb" not in columns:
                 connection.exec_driver_sql(
@@ -98,48 +142,58 @@ def init_db() -> None:
                 )
             if "disk_updated_at" not in columns:
                 connection.exec_driver_sql(
-                    "ALTER TABLE sandboxes ADD COLUMN disk_updated_at DATETIME"
+                    f"ALTER TABLE sandboxes ADD COLUMN disk_updated_at {ts_type}"
                 )
             if "port" in columns:
-                connection.exec_driver_sql("DROP INDEX IF EXISTS ix_sandboxes_port")
+                if backend in {"sqlite", "postgresql"}:
+                    connection.exec_driver_sql("DROP INDEX IF EXISTS ix_sandboxes_port")
                 connection.exec_driver_sql("ALTER TABLE sandboxes DROP COLUMN port")
+
+        if "users" in table_names:
             user_columns = {
-                row[1]
-                for row in connection.exec_driver_sql("PRAGMA table_info(users)")
+                col["name"] for col in inspector.get_columns("users")
             }
             if "password_hash" not in user_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"
                 )
+
+        if "llm_profiles" in table_names:
             llm_columns = {
-                row[1]
-                for row in connection.exec_driver_sql("PRAGMA table_info(llm_profiles)")
+                col["name"] for col in inspector.get_columns("llm_profiles")
             }
-            if llm_columns:
-                if "api_protocol" not in llm_columns:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE llm_profiles ADD COLUMN api_protocol VARCHAR(64) NOT NULL DEFAULT 'openai-completions'"
-                    )
-                if "context_window" not in llm_columns:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE llm_profiles ADD COLUMN context_window INTEGER"
-                    )
-                if "max_tokens" not in llm_columns:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE llm_profiles ADD COLUMN max_tokens INTEGER"
-                    )
-                if "supports_image" not in llm_columns:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE llm_profiles ADD COLUMN supports_image BOOLEAN NOT NULL DEFAULT 0"
-                    )
-                if "reasoning_effort" not in llm_columns:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE llm_profiles ADD COLUMN reasoning_effort VARCHAR(32)"
-                    )
-                if "thinking_format" not in llm_columns:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE llm_profiles ADD COLUMN thinking_format VARCHAR(64)"
-                    )
+            if "api_protocol" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN api_protocol VARCHAR(64) NOT NULL DEFAULT 'openai-completions'"
+                )
+            if "context_window" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN context_window INTEGER"
+                )
+            if "max_tokens" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN max_tokens INTEGER"
+                )
+            if "supports_image" not in llm_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE llm_profiles ADD COLUMN supports_image BOOLEAN NOT NULL DEFAULT {bool_false}"
+                )
+            if "reasoning_effort" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN reasoning_effort VARCHAR(32)"
+                )
+            if "thinking_format" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN thinking_format VARCHAR(64)"
+                )
+
+
+def init_db(target_engine: Engine | None = None) -> None:
+    from . import models  # noqa: F401
+
+    active_engine = target_engine or engine
+    Base.metadata.create_all(bind=active_engine)
+    migrate_schema(active_engine)
 
 
 def get_db() -> Generator[Session, None, None]:

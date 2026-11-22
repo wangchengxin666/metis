@@ -4,10 +4,11 @@ import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from .config import DEFAULT_AUTO_INSTALL_PLUGINS, Settings
-from .docker_service import DockerService, SandboxRuntimeError
+from .docker_service import BaseSandboxRuntime, DockerService, SandboxRuntimeError
 from .models import (
     AuditLog,
     LlmProfile,
@@ -98,7 +99,10 @@ def ensure_bootstrap_admin(db: Session, email: str) -> None:
     email = email.strip().lower()
     if db.get(PlatformAdmin, email) is None:
         db.add(PlatformAdmin(email=email, display_name="bootstrap", active=True))
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
 
 
 def list_platform_admins(db: Session) -> list[PlatformAdmin]:
@@ -210,7 +214,10 @@ def ensure_default_templates(db: Session, settings: Settings) -> None:
             "file-manager,workspace-user,custom-theme,sandbox-mesh",
         }:
             sbx.auto_install_plugins = default_plugins
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
 
 
 def list_templates(db: Session) -> list[SandboxTemplate]:
@@ -809,7 +816,11 @@ def ensure_bootstrap_oidc_provider(
         target=provider.slug,
         detail=f"issuer={issuer or discovery}",
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return None
     db.refresh(provider)
     return provider
 

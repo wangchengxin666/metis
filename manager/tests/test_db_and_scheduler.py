@@ -180,3 +180,93 @@ def test_background_worker_idle_sleep_respects_policy_exempt_and_active_work(
     assert db_session.get(Sandbox, s_idle.id).status == "stopped"
     assert db_session.get(Sandbox, s_exempt.id).status == "running"
     assert db_session.get(Sandbox, s_busy.id).status == "running"
+
+
+def test_normalize_database_url_and_dialect_engine_pool_kwargs(monkeypatch):
+    # 1. postgres:// alias rewrites to postgresql:// (or +psycopg when psycopg v3 is present)
+    monkeypatch.setattr(
+        "app.db.importlib.util.find_spec",
+        lambda name: object() if name in {"psycopg", "pymysql"} else None,
+    )
+    assert (
+        db_mod.normalize_database_url("postgres://dsh:secret@db.internal:5432/dsh_mgr")
+        == "postgresql+psycopg://dsh:secret@db.internal:5432/dsh_mgr"
+    )
+    assert (
+        db_mod.normalize_database_url("postgresql://dsh:secret@db.internal:5432/dsh_mgr")
+        == "postgresql+psycopg://dsh:secret@db.internal:5432/dsh_mgr"
+    )
+    assert (
+        db_mod.normalize_database_url("mysql://dsh:secret@db.internal:3306/dsh_mgr")
+        == "mysql+pymysql://dsh:secret@db.internal:3306/dsh_mgr"
+    )
+    # Explicit driver is preserved
+    assert (
+        db_mod.normalize_database_url("postgresql+psycopg2://dsh:secret@db:5432/dsh")
+        == "postgresql+psycopg2://dsh:secret@db:5432/dsh"
+    )
+
+    # 2. build_engine passes pool parameters for non-SQLite relational databases
+    captured: dict = {}
+
+    def fake_create_engine(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        from unittest.mock import MagicMock
+
+        return MagicMock()
+
+    monkeypatch.setattr(db_mod, "create_engine", fake_create_engine)
+    pg_settings = Settings(
+        _env_file=None,
+        database_url="postgres://dsh:secret@pg-host:5432/dsh",
+        db_pool_size=15,
+        db_max_overflow=30,
+        db_pool_timeout=45,
+        db_pool_recycle=1200,
+    )
+    db_mod.build_engine(pg_settings.database_url, pg_settings)
+    assert captured["url"] == "postgresql+psycopg://dsh:secret@pg-host:5432/dsh"
+    assert captured["kwargs"] == {
+        "pool_pre_ping": True,
+        "pool_size": 15,
+        "max_overflow": 30,
+        "pool_timeout": 45,
+        "pool_recycle": 1200,
+    }
+
+
+def test_migrate_schema_postgresql_dialect_sql_generation(monkeypatch):
+    from unittest.mock import MagicMock
+
+    executed_sql: list[str] = []
+    fake_conn = MagicMock()
+    fake_conn.exec_driver_sql.side_effect = lambda sql: executed_sql.append(sql)
+
+    class _FakeBeginCtx:
+        def __enter__(self):
+            return fake_conn
+
+        def __exit__(self, *args):
+            return False
+
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "postgresql"
+    fake_engine.begin.return_value = _FakeBeginCtx()
+
+    fake_inspector = MagicMock()
+    fake_inspector.get_table_names.return_value = ["sandboxes", "users", "llm_profiles"]
+    fake_inspector.get_columns.side_effect = lambda table: (
+        [{"name": "id"}, {"name": "port"}]
+        if table == "sandboxes"
+        else [{"name": "id"}]
+    )
+    monkeypatch.setattr(db_mod, "inspect", lambda _conn: fake_inspector)
+
+    db_mod.migrate_schema(fake_engine)
+    assert any("DEFAULT FALSE" in s and "auto_sleep_exempt" in s for s in executed_sql)
+    assert any("ADD COLUMN disk_updated_at TIMESTAMP" in s for s in executed_sql)
+    assert any("DROP INDEX IF EXISTS ix_sandboxes_port" in s for s in executed_sql)
+    assert any("ALTER TABLE sandboxes DROP COLUMN port" in s for s in executed_sql)
+    assert any("ADD COLUMN password_hash VARCHAR(255)" in s for s in executed_sql)
+    assert any("supports_image BOOLEAN NOT NULL DEFAULT FALSE" in s for s in executed_sql)

@@ -44,7 +44,13 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import Settings, get_settings
 from .db import SessionLocal, get_db, init_db
-from .docker_service import DockerService, SandboxRuntimeError
+from .docker_service import (
+    BaseSandboxRuntime,
+    DockerService,
+    SandboxRuntimeError,
+    build_traefik_dynamic_config,
+    create_runtime,
+)
 from .models import (
     AuditLog,
     LlmProfile,
@@ -233,8 +239,12 @@ if (WEB_DIST_DIR / "assets").is_dir():
 
 
 @lru_cache
-def get_docker() -> DockerService:
-    return DockerService(settings)
+def get_docker() -> BaseSandboxRuntime:
+    return create_runtime(settings)
+
+
+def get_runtime() -> BaseSandboxRuntime:
+    return get_docker()
 
 
 @lru_cache
@@ -412,7 +422,11 @@ def healthz(db: Session = Depends(get_db)):
 
     docker_ok = "ok"
     try:
-        get_docker().client.ping()
+        runtime = get_docker()
+        if hasattr(runtime, "ping"):
+            runtime.ping()
+        else:
+            runtime.client.ping()
     except Exception as exc:
         docker_ok = f"error: {exc}"
 
@@ -424,14 +438,69 @@ def healthz(db: Session = Depends(get_db)):
     return HealthOut(status="ok", database=db_ok, docker=docker_ok)
 
 
+@app.get("/api/internal/traefik/config", include_in_schema=False)
+def traefik_dynamic_config(
+    request: Request,
+    token: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Traefik HTTP Provider endpoint serving dynamic routers/middlewares/services for running sandboxes."""
+    expected_token = (settings.traefik_provider_token or "").strip()
+    if expected_token:
+        provided = (token or "").strip()
+        if not provided:
+            auth_header = request.headers.get("authorization") or ""
+            if auth_header.lower().startswith("bearer "):
+                provided = auth_header[7:].strip()
+        if not provided or not hmac.compare_digest(provided, expected_token):
+            raise HTTPException(status_code=401, detail="invalid traefik provider token")
+
+    sandboxes = list(
+        db.scalars(
+            select(Sandbox)
+            .where(Sandbox.deleted_at.is_(None), Sandbox.status == "running")
+            .order_by(Sandbox.slug.asc())
+        ).all()
+    )
+    runtime = get_docker()
+    pairs: list[tuple[Sandbox, str]] = []
+    for sbx in sandboxes:
+        try:
+            upstream = runtime.upstream_origin(sbx)
+            if upstream:
+                pairs.append((sbx, upstream))
+        except Exception:
+            continue
+    return JSONResponse(
+        content=build_traefik_dynamic_config(settings, pairs),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Self-hosted Plugin Discover Index & Built-in Read-Only NPM Registry
 # ---------------------------------------------------------------------------
 
 
+def _request_origin(request: Request, fallback_url: str) -> str:
+    raw_host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or ""
+    ).split(",")[0].strip()
+    if not raw_host or raw_host == "testserver":
+        return fallback_url
+    raw_proto = (
+        request.headers.get("x-forwarded-proto")
+        or request.url.scheme
+        or "http"
+    ).split(",")[0].strip()
+    return f"{raw_proto}://{raw_host}".rstrip("/")
+
+
 @app.get("/plugins/index.json")
-def plugin_discover_index():
-    base_url = settings.manager_base_url
+def plugin_discover_index(request: Request):
+    base_url = _request_origin(request, settings.manager_base_url)
     doc = get_plugin_registry().build_index(base_url)
     return JSONResponse(
         content=doc,
@@ -472,16 +541,15 @@ def plugin_tarball(tarball_name: str):
 
 
 @app.get("/plugins/npm/{package_name:path}")
-def plugin_npm_packument(package_name: str):
+def plugin_npm_packument(package_name: str, request: Request):
     pkg = get_plugin_registry().get_by_package_name(package_name)
     if not pkg:
         return RedirectResponse(
             url=f"https://registry.npmmirror.com/{package_name}",
             status_code=307,
         )
-    packument = get_plugin_registry().build_npm_packument(
-        pkg, settings.sandbox_reachable_manager_url
-    )
+    reach_url = _request_origin(request, settings.sandbox_reachable_manager_url)
+    packument = get_plugin_registry().build_npm_packument(pkg, reach_url)
     return JSONResponse(
         content=packument,
         headers={"Cache-Control": "no-cache"},
@@ -1408,6 +1476,7 @@ def api_overview(
         "default_cpus": settings.sandbox_cpus,
         "default_memory": settings.sandbox_memory,
         "manager_auth_mode": settings.manager_auth_mode,
+        "sandbox_runtime": settings.sandbox_runtime,
         "plugin_index_url": settings.plugin_index_url,
         "idle_sleep_enabled": idle_enabled,
         "idle_sleep_minutes": idle_minutes,

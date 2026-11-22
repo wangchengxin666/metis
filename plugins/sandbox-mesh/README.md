@@ -1,4 +1,4 @@
-# `@dsh-dock/sandbox-mesh`
+# `@metis/sandbox-mesh`
 
 Cross-sandbox 1-on-1 pairing (`Pair`), LLM-moderated multi-sandbox group rooms (`Group`), workspace file transfer, and isolated **Human + DSH Agent** collaboration over Traefik with HMAC-SHA256 authentication.
 
@@ -40,7 +40,7 @@ Bundled plugin defaults in [cordis.patch.yml](cordis.patch.yml):
 ```yaml
 - insert:
     - id: sandbox-mesh
-      name: '@dsh-dock/sandbox-mesh'
+      name: '@metis/sandbox-mesh'
       config:
         port: 4090
         maxAgentHops: 8

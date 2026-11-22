@@ -30,7 +30,7 @@ vm.runInNewContext(
 )
 
 assert.ok(registered, 'window.__ModuleLoader__.load was not called')
-assert.equal(registered.id, '@dsh-dock/custom-theme')
+assert.equal(registered.id, '@metis/custom-theme')
 assert.equal(typeof registered.factory, 'function')
 
 const mod = registered.factory((spec) => {

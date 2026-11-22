@@ -80,7 +80,7 @@ export function LoginView({
   const localForm = (
     <div className="space-y-4">
       {hasAdminToken && allowLocalUser && (
-        <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-950 p-1 border border-zinc-800">
+        <div className="grid grid-cols-2 gap-1 rounded-[var(--brand-radius-md)] bg-zinc-950 p-1 border border-zinc-800">
           <button
             type="button"
             onClick={() => {
@@ -88,9 +88,9 @@ export function LoginView({
               setEmail(defaultAdminEmail)
             }}
             className={cn(
-              'rounded-md py-1.5 text-xs font-medium transition-colors cursor-pointer',
+              'rounded-[var(--brand-radius-sm)] py-2 text-sm font-medium transition-colors cursor-pointer',
               mode === 'admin'
-                ? 'bg-zinc-800 text-zinc-100 shadow-xs'
+                ? 'brand-tab-active shadow-xs'
                 : 'text-zinc-400 hover:text-zinc-200',
             )}
           >
@@ -105,9 +105,9 @@ export function LoginView({
               }
             }}
             className={cn(
-              'rounded-md py-1.5 text-xs font-medium transition-colors cursor-pointer',
+              'rounded-[var(--brand-radius-sm)] py-2 text-sm font-medium transition-colors cursor-pointer',
               mode === 'user'
-                ? 'bg-zinc-800 text-zinc-100 shadow-xs'
+                ? 'brand-tab-active shadow-xs'
                 : 'text-zinc-400 hover:text-zinc-200',
             )}
           >
@@ -167,13 +167,13 @@ export function LoginView({
 
   return (
     <div className="flex min-h-[72vh] items-center justify-center">
-      <Card className="w-full max-w-md border-zinc-800/90 bg-zinc-900/80 shadow-2xl">
+      <Card className="w-full max-w-lg border-zinc-800/90 bg-zinc-900/80 shadow-2xl">
         <CardHeader>
-          <CardTitle className="text-lg">{t('login.title')}</CardTitle>
+          <CardTitle className="text-xl">{t('login.title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           {errorBannerText && (
-            <div className="rounded-lg border border-rose-500/40 bg-rose-950/60 p-3 text-xs text-rose-200 flex items-center gap-2">
+            <div className="rounded-[var(--brand-radius-md)] border border-rose-500/40 bg-rose-950/60 p-3.5 text-sm text-rose-200 flex items-center gap-2">
               <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
               <span>{errorBannerText}</span>
             </div>
@@ -181,7 +181,7 @@ export function LoginView({
 
           {oidcProviders.length > 0 && (
             <div className="space-y-2.5">
-              <div className="text-[11px] font-medium text-zinc-400">
+              <div className="text-xs font-medium text-zinc-400">
                 {t('login.oidcSectionTitle')}
               </div>
               <div className="space-y-2">
@@ -207,8 +207,8 @@ export function LoginView({
           )}
 
           {oidcProviders.length > 0 && !allowLocalUser && hasAdminToken ? (
-            <details className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-              <summary className="cursor-pointer text-xs text-zinc-400 hover:text-zinc-200 select-none">
+            <details className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/50 p-3.5">
+              <summary className="cursor-pointer text-sm text-zinc-400 hover:text-zinc-200 select-none">
                 {t('login.adminFallbackToggle')}
               </summary>
               <div className="mt-3">{localForm}</div>
@@ -218,7 +218,7 @@ export function LoginView({
               {oidcProviders.length > 0 && (
                 <div className="relative flex items-center py-0.5">
                   <div className="flex-grow border-t border-zinc-800" />
-                  <span className="mx-3 shrink-0 text-[11px] text-zinc-500">
+                  <span className="mx-3 shrink-0 text-xs text-zinc-500">
                     {t('login.orLocalDivider')}
                   </span>
                   <div className="flex-grow border-t border-zinc-800" />
@@ -227,7 +227,7 @@ export function LoginView({
               {localForm}
             </>
           ) : oidcProviders.length === 0 ? (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-950/30 p-3 text-xs text-amber-200">
+            <div className="rounded-[var(--brand-radius-md)] border border-amber-500/30 bg-amber-950/30 p-3.5 text-sm text-amber-200">
               {t('login.noMethodsAvailable')}
             </div>
           ) : null}

@@ -61,7 +61,7 @@
 - **14 套全公司标准岗位模板**：一键导入覆盖**研发产研**（架构师/Tech Lead、全栈、前端、后端、QA 测试、DevOps/SRE、产品经理、安全审计）与**职能业务**（行政高管助理、财务经营分析、法务合规审查、HR 招聘专员、市场内容运营、商业数据分析 BI），内置职责名片与私有作业规范（SOP）。
 - **一键组建跨岗位项目组 + 共享知识目录**：自动完成组内成员两两加密互信配对（`sandbox-mesh`）、指定统筹主持人（Moderator）建群，并在每位成员的 `/home/workspace/shared/` 下自动写入 `TEAM_README.md` 与项目背景文档 `PROJECT_BRIEF.md`。
 - **一键克隆数字员工**：完整复制镜像、岗位画像、SOP、模型配置以及 `/home/workspace` 代码文件与长期记忆。
-- **白标品牌定制**：支持在控制台实时修改品牌名称、**上传/粘贴左上角自定义 Logo SVG** 以及**自定义浏览器 Favicon**（服务端自动执行严格 SVG 安全清洗防 XSS，并动态提供 `/api/branding/favicon`）。
+- **白标品牌与主题设计 Token**：支持在控制台实时修改品牌名称、**上传/粘贴左上角自定义 Logo SVG**、**自定义浏览器 Favicon**（服务端严格 SVG 安全清洗防 XSS），以及配置全站 **主题与 Brand Design Tokens**（Dark / Light / Slate 三套基调、5 套企业预设、主色/强调色、圆角风格、字号缩放、可视宽度，支持实时预览与顶栏明暗快捷切换）。
 
 ### 2. 需求接入、人工审批与外部事件驱动
 - **可视化任务派发 & 人工审批中心**：可在 `/admin` 或 `/my` 的「数字员工运行态与交付中心」直接派发带优先级与审批开关的任务，并对关键节点一键 **批准 / 驳回**。
@@ -76,7 +76,7 @@
 - **多 OIDC 企业单点登录 & 混合认证**：后台可视化管理一个或多个 OIDC 提供方（Keycloak、Okta、Auth0、Authentik、飞书/企微 OIDC），支持 Discovery 连通性测试、邮箱域名白名单及本地密码开关。
 - **Token 用量 FinOps 与自动休眠唤醒**：实时统计估算 Token 消耗、会话与协同消息数，支持为员工设置每日预算上限（`daily_token_limit`），配合闲置自动休眠与访问即秒级唤醒大幅节省算力。
 - **服务端工作区快照中心**：秒级创建服务端工作区快照点并一键回滚（支持合并覆盖或清空重置），同时保留流式 `.tar` 导出与本地上传恢复。
-- **自托管能力插件仓库**：热挂载 `plugins/` 目录，自动提供 `/plugins/index.json`、`.tgz` 分发与只读 npm 仓库，默认预装 `file-manager`、`workspace-user`、`custom-theme`、`sandbox-mesh` 与 `sandbox-memory`。
+- **自托管能力插件仓库（`@metis/*`）**：热挂载 `plugins/` 目录，自动提供 `/plugins/index.json`、`.tgz` 分发与只读 npm 仓库，默认预装全套 `@metis/*` 内置插件（`@metis/file-manager`、`@metis/workspace-user`、`@metis/custom-theme`、`@metis/sandbox-mesh`、`@metis/sandbox-memory` 与 **`@metis/work-delivery`** —— 只读优先的工作与交付中心，支持搜索筛选、折叠详情与分页浏览，通过 AI 对话直接创建交付物）。
 
 ## 仓库目录结构
 

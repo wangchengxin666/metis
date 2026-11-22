@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-dock/custom-theme",
+  "name": "@metis/custom-theme",
   "version": "0.1.0",
   "description": "Theme presets, light/dark CSS token editor, custom CSS variables, brand customization, and zero-flash Host persistence for DeepSeek Harness.",
   "type": "module",

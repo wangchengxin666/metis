@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@dsh-dock/custom-theme',
+  id: '@metis/custom-theme',
   factory(require) {
     const React = require('react')
 

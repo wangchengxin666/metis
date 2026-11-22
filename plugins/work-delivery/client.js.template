@@ -1,0 +1,103 @@
+window.__ModuleLoader__.load({
+  id: '@metis/work-delivery',
+  factory(require) {
+    const React = require('react')
+
+    // __CLIENT_MODULES__
+
+    function readActiveLocale(localeSvc) {
+      if (!localeSvc) return undefined
+      if (typeof localeSvc.getSnapshot === 'function') return localeSvc.getSnapshot()?.active
+      if (typeof localeSvc.getLocale === 'function') return localeSvc.getLocale()?.active
+      return undefined
+    }
+
+    function apply(ctx) {
+      ctx.effect(() => installStyles(), 'work-delivery: styles')
+
+      const subscribeLocale = (listener) => {
+        if (ctx.locale && typeof ctx.locale.subscribe === 'function') {
+          return ctx.locale.subscribe((snapshot) => listener(snapshot?.active))
+        }
+        if (typeof ctx.on === 'function') {
+          return ctx.on('locale/change', (snapshot) => listener(snapshot?.active))
+        }
+        return () => {}
+      }
+
+      if (ctx.locale && typeof ctx.locale.register === 'function') {
+        const disposeLocale = ctx.locale.register('workDelivery', { en, zh })
+        ctx.effect(() => disposeLocale, 'work-delivery: locale')
+      }
+
+      const controller = createWorkDeliveryController()
+      ctx.effect(() => () => { controller.dispose() }, 'work-delivery: controller')
+
+      // Register native DSH chat tool cards for lightweight non-overlapping delivery_* tools
+      const WorkDeliveryToolCard = createWorkDeliveryToolView({
+        React,
+        getLocale: () => readActiveLocale(ctx.locale),
+        subscribeLocale,
+      })
+      const DELIVERY_TOOL_NAMES = [
+        'delivery_overview',
+        'delivery_task_create',
+      ]
+      ctx.slots.inject('tool.call.toolview', () => {
+        const disposers = DELIVERY_TOOL_NAMES.map((toolKey) =>
+          ctx.slots.register(
+            {
+              name: 'tool.call.toolview',
+              key: toolKey,
+              priority: 100,
+            },
+            WorkDeliveryToolCard,
+          ),
+        )
+        return () => {
+          for (const d of disposers) d?.()
+        }
+      })
+
+      const WorkDeliveryMainPage = createWorkDeliveryPage({
+        React,
+        controller,
+        getLocale: () => readActiveLocale(ctx.locale),
+        subscribeLocale,
+      })
+
+      function PanelIcon({ size = 18 }) {
+        return WorkDeliveryNavIcon({ React, size })
+      }
+
+      ctx.slots.inject('sidebar.panellist', () =>
+        ctx.slots.register(
+          {
+            name: 'sidebar.panellist',
+            id: 'work-delivery',
+            order: 22,
+            label: () => createTranslator(readActiveLocale(ctx.locale))('panel'),
+            locale: 'workDelivery',
+          },
+          PanelIcon,
+        ),
+      )
+
+      ctx.slots.inject('main', () =>
+        ctx.slots.register(
+          {
+            name: 'main',
+            key: 'work-delivery',
+            locale: 'workDelivery',
+          },
+          WorkDeliveryMainPage,
+        ),
+      )
+    }
+
+    return {
+      inject: ['slots', 'locale'],
+      apply,
+    }
+  },
+})

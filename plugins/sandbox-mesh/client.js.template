@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@dsh-dock/sandbox-mesh',
+  id: '@metis/sandbox-mesh',
   factory(require) {
     const React = require('react')
 

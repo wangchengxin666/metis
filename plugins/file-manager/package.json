@@ -1,5 +1,5 @@
 {
-  "name": "@local/dsh-plugin-file-manager",
+  "name": "@metis/file-manager",
   "version": "1.0.0",
   "private": true,
   "description": "Server file manager page in the left sidebar: browse any server directory with breadcrumbs and a path bar, then upload, download, preview, rename, create folders, and delete.",

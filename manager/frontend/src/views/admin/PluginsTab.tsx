@@ -62,8 +62,8 @@ export function PluginsTab({
 
   return (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/65 px-5 py-4">
-            <h3 className="text-sm font-semibold text-zinc-100">{t('admin.plugins.title')}</h3>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--brand-radius-md)] border border-zinc-800/90 bg-zinc-900/65 px-5 py-4">
+            <h3 className="text-base font-semibold text-zinc-100">{t('admin.plugins.title')}</h3>
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
@@ -71,22 +71,22 @@ export function PluginsTab({
                 disabled={syncingPlugins}
                 onClick={() => handleSyncPlugins('market_only')}
               >
-                <RefreshCw className={cn('h-3.5 w-3.5', syncingPlugins && 'animate-spin')} />
+                <RefreshCw className={cn('h-4 w-4', syncingPlugins && 'animate-spin')} />
                 {t('admin.plugins.syncBtn')}
               </Button>
               <Button
-                variant="emerald"
+                variant="default"
                 size="sm"
                 disabled={syncingPlugins}
                 onClick={() => handleSyncPlugins('reinstall_builtin')}
               >
-                <Package className="h-3.5 w-3.5" />
+                <Package className="h-4 w-4" />
                 {t('admin.plugins.reinstallAllBtn')}
               </Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {pluginsData.items.map((plg) => (
               <Card key={plg.slug}>
                 <CardHeader className="pb-3">

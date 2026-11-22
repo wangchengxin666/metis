@@ -1,4 +1,4 @@
 - insert:
     - id: custom-theme
-      name: '@dsh-dock/custom-theme'
+      name: '@metis/custom-theme'
       config: {}

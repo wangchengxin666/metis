@@ -156,6 +156,7 @@ def auth_me(
         "brand_name_en": brand_cfg["brand_name_en"],
         "brand_logo_svg": brand_cfg["brand_logo_svg"],
         "brand_favicon": brand_cfg["brand_favicon"],
+        "brand_theme": brand_cfg["brand_theme"],
         "sandbox_runtime": settings.sandbox_runtime,
         "sandbox": sandbox_info,
     }

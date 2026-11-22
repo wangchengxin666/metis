@@ -1,4 +1,4 @@
-export const STYLE_ATTR_PLUGIN = '@dsh-dock/custom-theme'
+export const STYLE_ATTR_PLUGIN = '@metis/custom-theme'
 
 export const SETTINGS_CSS = `
 .ct-page {

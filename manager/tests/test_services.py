@@ -95,7 +95,7 @@ def test_default_templates_migration_and_crud(db_session):
     db_session.commit()
     ensure_default_templates(db_session, Settings(_env_file=None, sandbox_auto_install_plugins=""))
     db_session.refresh(agent_os)
-    assert agent_os.auto_install_plugins == "file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory"
+    assert agent_os.auto_install_plugins == "file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory,work-delivery"
 
     # Custom plugin override is preserved on subsequent restarts
     agent_os.auto_install_plugins = "file-manager,custom-only"

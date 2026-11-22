@@ -291,6 +291,7 @@ def ensure_default_templates(db: Session, settings: Settings) -> None:
             "file-manager",
             "file-manager,workspace-user,custom-theme",
             "file-manager,workspace-user,custom-theme,sandbox-mesh",
+            "file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory",
         }:
             default_tpl.auto_install_plugins = default_plugins
 
@@ -299,6 +300,7 @@ def ensure_default_templates(db: Session, settings: Settings) -> None:
             "file-manager",
             "file-manager,workspace-user,custom-theme",
             "file-manager,workspace-user,custom-theme,sandbox-mesh",
+            "file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory",
         }:
             sbx.auto_install_plugins = default_plugins
     try:

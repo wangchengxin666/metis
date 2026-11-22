@@ -1,4 +1,4 @@
-export const STYLE_ATTR_PLUGIN = '@dsh-dock/workspace-user'
+export const STYLE_ATTR_PLUGIN = '@metis/workspace-user'
 
 export const LAUNCHER_CSS = `
 .wu-root {

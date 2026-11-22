@@ -9,7 +9,7 @@
  * `scripts/bundle-client.mjs`; edit `src/client/*.js`, then re-run that script.
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-plugin-file-manager',
+  id: '@metis/file-manager',
   factory(require) {
     /*__MODULES__*/
 

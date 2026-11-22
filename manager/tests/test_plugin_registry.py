@@ -167,9 +167,9 @@ def test_real_repo_plugins_package_cleanly():
     svc = PluginRegistryService(_settings_for(repo_plugins))
     packages = svc.list_packages()
     slugs = {pkg.slug for pkg in packages}
-    assert {"file-manager", "workspace-user", "custom-theme", "sandbox-mesh", "sandbox-memory"}.issubset(slugs)
+    assert {"file-manager", "workspace-user", "custom-theme", "sandbox-mesh", "sandbox-memory", "work-delivery"}.issubset(slugs)
 
-    for slug in ("file-manager", "workspace-user", "custom-theme", "sandbox-mesh", "sandbox-memory"):
+    for slug in ("file-manager", "workspace-user", "custom-theme", "sandbox-mesh", "sandbox-memory", "work-delivery"):
         pkg = svc.get_by_slug_or_filename(slug)
         assert pkg is not None
         assert svc.resolve_icon(f"{slug}.svg") is not None
@@ -183,9 +183,10 @@ def test_real_repo_plugins_package_cleanly():
     idx = svc.build_index("http://localhost:9000")
     names = {item["name"] for item in idx["plugins"]}
     assert {
-        "@local/dsh-plugin-file-manager",
-        "@dsh-dock/workspace-user",
-        "@dsh-dock/custom-theme",
-        "@dsh-dock/sandbox-mesh",
-        "@dsh-dock/sandbox-memory",
+        "@metis/file-manager",
+        "@metis/workspace-user",
+        "@metis/custom-theme",
+        "@metis/sandbox-mesh",
+        "@metis/sandbox-memory",
+        "@metis/work-delivery",
     }.issubset(names)

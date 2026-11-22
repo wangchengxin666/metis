@@ -8,6 +8,16 @@ from ..models import LlmProfile, Sandbox
 from ..plugin_registry import PluginRegistryService
 from ..security import decrypt_secret
 
+LEGACY_PLUGIN_PACKAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "@metis/file-manager": ("@local/dsh-plugin-file-manager", "@dsh-dock/file-manager"),
+    "@metis/workspace-user": ("@dsh-dock/workspace-user",),
+    "@metis/custom-theme": ("@dsh-dock/custom-theme",),
+    "@metis/sandbox-mesh": ("@dsh-dock/sandbox-mesh",),
+    "@metis/sandbox-memory": ("@dsh-dock/sandbox-memory",),
+    "@metis/work-delivery": ("@dsh-dock/work-delivery",),
+}
+
+
 def llm_provider_identifiers(profile: LlmProfile) -> tuple[str, str]:
     """Derive stable (provider_key, credential_ref) identifiers for a Manager LLM profile."""
     raw_id = re.sub(r"[^a-z0-9]", "", (profile.id or "").lower())
@@ -145,7 +155,14 @@ console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
                 user="workspace",
                 environment=env,
             )
-            to_remove = [p for p in targets_to_install if p in installed_deps]
+            to_remove_set: set[str] = set()
+            for p in targets_to_install:
+                if p in installed_deps:
+                    to_remove_set.add(p)
+                for legacy_pkg in LEGACY_PLUGIN_PACKAGE_ALIASES.get(p, ()):
+                    if legacy_pkg in installed_deps:
+                        to_remove_set.add(legacy_pkg)
+            to_remove = sorted(to_remove_set)
             if to_remove:
                 self.exec_command(
                     sandbox,

@@ -15,24 +15,24 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'default', size = 'default', ...props }, ref) => {
     const variants: Record<string, string> = {
-      default: 'bg-zinc-100 text-zinc-900 hover:bg-zinc-200 shadow-xs font-medium',
+      default: 'brand-btn-primary shadow-xs font-medium',
       secondary: 'bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700/80',
-      outline: 'border border-zinc-800 bg-zinc-950/60 hover:bg-zinc-900 text-zinc-200',
+      outline: 'border border-zinc-800 bg-zinc-900/70 hover:bg-zinc-800/80 text-zinc-200',
       ghost: 'hover:bg-zinc-800/70 text-zinc-300 hover:text-zinc-100',
-      destructive: 'bg-rose-600/90 text-white hover:bg-rose-500 shadow-xs',
+      destructive: 'bg-rose-600/90 text-white hover:bg-rose-500 shadow-xs font-medium',
       emerald: 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-xs font-medium',
     }
     const sizes: Record<string, string> = {
-      default: 'h-9 px-4 py-2 text-sm',
-      sm: 'h-8 rounded-md px-3 text-xs',
-      lg: 'h-10 rounded-md px-6 text-sm',
-      icon: 'h-8 w-8',
+      default: 'h-10 px-4 py-2 text-sm',
+      sm: 'h-9 px-3.5 text-sm',
+      lg: 'h-11 px-6 text-base',
+      icon: 'h-9 w-9',
     }
     return (
       <button
         ref={ref}
         className={cn(
-          'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 disabled:pointer-events-none disabled:opacity-50 cursor-pointer',
+          'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--brand-radius-md)] transition-all brand-ring disabled:pointer-events-none disabled:opacity-50 cursor-pointer',
           variants[variant],
           sizes[size],
           className,
@@ -48,7 +48,7 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
   return (
     <div
       className={cn(
-        'rounded-xl border border-zinc-800/90 bg-zinc-900/65 text-zinc-100 shadow-sm backdrop-blur-xs',
+        'rounded-[var(--brand-radius-lg)] border border-zinc-800/90 bg-zinc-900/75 text-zinc-100 shadow-sm backdrop-blur-xs',
         className,
       )}
       {...props}
@@ -57,19 +57,19 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
 }
 
 export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('flex flex-col space-y-1.5 p-5', className)} {...props} />
+  return <div className={cn('flex flex-col space-y-1.5 p-5 sm:p-6', className)} {...props} />
 }
 
 export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 className={cn('font-semibold leading-none tracking-tight text-base', className)} {...props} />
+  return <h3 className={cn('font-semibold leading-snug tracking-tight text-base', className)} {...props} />
 }
 
 export function CardDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn('text-xs text-zinc-400 leading-relaxed', className)} {...props} />
+  return <p className={cn('text-sm text-zinc-400 leading-relaxed', className)} {...props} />
 }
 
 export function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('p-5 pt-0', className)} {...props} />
+  return <div className={cn('p-5 sm:p-6 pt-0', className)} {...props} />
 }
 
 export function Badge({
@@ -80,8 +80,8 @@ export function Badge({
   variant?: 'default' | 'secondary' | 'outline' | 'success' | 'warning' | 'destructive'
 }) {
   const variants: Record<string, string> = {
-    default: 'bg-zinc-100 text-zinc-900',
-    secondary: 'bg-zinc-800 text-zinc-200 border border-zinc-700',
+    default: 'brand-btn-primary',
+    secondary: 'bg-zinc-800 text-zinc-200 border border-zinc-700/80',
     outline: 'text-zinc-300 border border-zinc-700/80 bg-zinc-900/50',
     success: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30',
     warning: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
@@ -90,7 +90,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors',
+        'inline-flex items-center gap-1 rounded-[var(--brand-radius-sm)] px-2.5 py-0.5 text-xs font-medium transition-colors',
         variants[variant],
         className,
       )}
@@ -104,7 +104,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        'flex h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950/90 px-3 py-1.5 text-sm text-zinc-100 shadow-xs transition-colors placeholder:text-zinc-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50',
+        'flex h-10 w-full rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 px-3.5 py-2 text-sm text-zinc-100 shadow-xs transition-colors placeholder:text-zinc-500 brand-ring disabled:cursor-not-allowed disabled:opacity-50',
         className,
       )}
       {...props}
@@ -120,7 +120,7 @@ export const Textarea = React.forwardRef<
   <textarea
     ref={ref}
     className={cn(
-      'flex min-h-[84px] w-full rounded-lg border border-zinc-800 bg-zinc-950/90 px-3 py-2 text-sm text-zinc-100 shadow-xs placeholder:text-zinc-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 font-mono',
+      'flex min-h-[88px] w-full rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 px-3.5 py-2.5 text-sm text-zinc-100 shadow-xs placeholder:text-zinc-500 brand-ring disabled:cursor-not-allowed disabled:opacity-50',
       className,
     )}
     {...props}
@@ -135,7 +135,7 @@ export const Select = React.forwardRef<
   <select
     ref={ref}
     className={cn(
-      'flex h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950/90 px-3 py-1.5 text-sm text-zinc-100 shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400',
+      'flex h-10 w-full rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 px-3.5 py-2 text-sm text-zinc-100 shadow-xs brand-ring',
       className,
     )}
     {...props}
@@ -148,7 +148,7 @@ Select.displayName = 'Select'
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
   return (
     <label
-      className={cn('text-xs font-medium leading-none text-zinc-300 select-none', className)}
+      className={cn('text-sm font-medium leading-none text-zinc-300 select-none', className)}
       {...props}
     />
   )
@@ -159,7 +159,7 @@ export function Progress({ value = 0, className }: { value?: number; className?:
   const barColor =
     clamped > 85 ? 'bg-rose-500' : clamped > 65 ? 'bg-amber-500' : 'bg-emerald-500'
   return (
-    <div className={cn('relative h-1.5 w-full overflow-hidden rounded-full bg-zinc-800', className)}>
+    <div className={cn('relative h-2 w-full overflow-hidden rounded-full bg-zinc-800', className)}>
       <div
         className={cn('h-full transition-all duration-300', barColor)}
         style={{ width: `${clamped}%` }}
@@ -174,7 +174,7 @@ export function Dialog({
   title,
   description,
   children,
-  maxWidth = 'max-w-xl',
+  maxWidth = 'max-w-2xl',
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -185,26 +185,26 @@ export function Dialog({
 }) {
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/65 backdrop-blur-xs animate-in fade-in duration-150">
       <div
         className={cn(
-          'relative w-full rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl max-h-[90vh] overflow-y-auto',
+          'relative w-full rounded-[var(--brand-radius-lg)] border border-zinc-800 bg-zinc-900 p-6 sm:p-7 shadow-2xl max-h-[92vh] overflow-y-auto',
           maxWidth,
         )}
       >
         <div className="flex items-start justify-between gap-4 pb-4 border-b border-zinc-800/80">
           <div>
-            <h2 className="text-base font-semibold text-zinc-100">{title}</h2>
-            {description && <p className="text-xs text-zinc-400 mt-1">{description}</p>}
+            <h2 className="text-lg font-semibold text-zinc-100">{title}</h2>
+            {description && <p className="text-sm text-zinc-400 mt-1 leading-relaxed">{description}</p>}
           </div>
           <button
             onClick={() => onOpenChange(false)}
-            className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 cursor-pointer"
+            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 cursor-pointer"
           >
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="mt-4">{children}</div>
+        <div className="mt-5">{children}</div>
       </div>
     </div>
   )

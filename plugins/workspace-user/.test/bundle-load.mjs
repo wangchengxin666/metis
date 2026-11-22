@@ -30,7 +30,7 @@ const sandbox = {
 vm.runInNewContext(builtAfter, sandbox, { filename: 'client.js' })
 
 assert.ok(registered, 'window.__ModuleLoader__.load was not called')
-assert.equal(registered.id, '@dsh-dock/workspace-user')
+assert.equal(registered.id, '@metis/workspace-user')
 assert.equal(typeof registered.factory, 'function')
 
 const mod = registered.factory((spec) => {

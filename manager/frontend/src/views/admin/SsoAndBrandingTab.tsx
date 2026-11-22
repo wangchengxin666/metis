@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Check, Copy, Edit3, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2, Upload } from 'lucide-react'
+import { Check, Copy, Edit3, Palette, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2, Upload } from 'lucide-react'
 import { BrandMark, resolveFaviconHref } from '../../components/BrandMark'
 import {
   Badge,
@@ -10,12 +10,19 @@ import {
   CardTitle,
   Input,
   Label,
+  Select,
   Textarea,
   cn,
 } from '../../components/ui'
 import { apiFetch, slugifyOidcName } from '../../lib/client.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type { OidcProviderItem, OidcTestResult, OverviewData } from '../../types'
+import {
+  DEFAULT_BRAND_THEME,
+  THEME_PRESETS,
+  applyBrandTheme,
+  mergeBrandTheme,
+} from '../../lib/theme'
+import type { BrandThemeTokens, OidcProviderItem, OidcTestResult, OverviewData } from '../../types'
 
 const EMPTY_OIDC_FORM = {
   slug: '',
@@ -55,12 +62,19 @@ export function SsoAndBrandingTab({
   onBrandingUpdated,
   notify,
 }: SsoAndBrandingTabProps) {
-  const { t } = useI18n()
-  const [brandingForm, setBrandingForm] = useState({
+  const { locale, t } = useI18n()
+  const [brandingForm, setBrandingForm] = useState<{
+    brand_name_zh: string
+    brand_name_en: string
+    brand_logo_svg: string
+    brand_favicon: string
+    brand_theme: BrandThemeTokens
+  }>({
     brand_name_zh: overview?.brand_name_zh || 'Metis',
     brand_name_en: overview?.brand_name_en || 'Metis',
     brand_logo_svg: overview?.brand_logo_svg || '',
     brand_favicon: overview?.brand_favicon || '',
+    brand_theme: mergeBrandTheme(overview?.brand_theme),
   })
   const [savingBranding, setSavingBranding] = useState(false)
   const [allowLocalUserLogin, setAllowLocalUserLogin] = useState(
@@ -74,6 +88,8 @@ export function SsoAndBrandingTab({
   const [testingOidc, setTestingOidc] = useState(false)
   const [oidcTestResult, setOidcTestResult] = useState<OidcTestResult | null>(null)
 
+  const overviewThemeKey = JSON.stringify(overview?.brand_theme || null)
+
   useEffect(() => {
     if (overview) {
       setBrandingForm({
@@ -81,6 +97,7 @@ export function SsoAndBrandingTab({
         brand_name_en: overview.brand_name_en || 'Metis',
         brand_logo_svg: overview.brand_logo_svg || '',
         brand_favicon: overview.brand_favicon || '',
+        brand_theme: mergeBrandTheme(overview.brand_theme),
       })
       setAllowLocalUserLogin(
         overview.allow_local_user_login ?? overview.manager_auth_mode !== 'oidc',
@@ -91,9 +108,18 @@ export function SsoAndBrandingTab({
     overview?.brand_name_en,
     overview?.brand_logo_svg,
     overview?.brand_favicon,
+    overviewThemeKey,
     overview?.allow_local_user_login,
     overview?.manager_auth_mode,
   ])
+
+  const updateThemeTokens = (patch: Partial<BrandThemeTokens>) => {
+    setBrandingForm((prev) => {
+      const nextTheme = mergeBrandTheme({ ...prev.brand_theme, ...patch })
+      applyBrandTheme(nextTheme, null)
+      return { ...prev, brand_theme: nextTheme }
+    })
+  }
 
   const enabledOidcCount = oidcProviders.filter((p) => p.enabled).length
   const cleanPublicBase = publicUrl.replace(/\/+$/, '')
@@ -112,6 +138,7 @@ export function SsoAndBrandingTab({
           brand_name_en: brandingForm.brand_name_en.trim(),
           brand_logo_svg: brandingForm.brand_logo_svg.trim(),
           brand_favicon: brandingForm.brand_favicon.trim(),
+          brand_theme: brandingForm.brand_theme,
         }),
       })
       notify(t('admin.branding.saved'))
@@ -308,15 +335,17 @@ export function SsoAndBrandingTab({
   return (
         <div className="space-y-6">
           <Card>
-            <CardContent className="p-4">
-              <form onSubmit={handleSaveBranding} className="space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardContent className="p-5 sm:p-6">
+              <form onSubmit={handleSaveBranding} className="space-y-5 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-indigo-400 shrink-0" />
-                    <span className="font-medium text-zinc-100">{t('admin.branding.title')}</span>
+                    <span className="font-semibold text-base text-zinc-100">
+                      {t('admin.branding.title')}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/70 px-2.5 py-1">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-2 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 px-3 py-1.5">
                       <BrandMark
                         svg={brandingForm.brand_logo_svg}
                         name={brandingForm.brand_name_en || 'Metis'}
@@ -341,8 +370,8 @@ export function SsoAndBrandingTab({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
                     <Label>{t('admin.branding.zhLabel')}</Label>
                     <Input
                       required
@@ -352,7 +381,7 @@ export function SsoAndBrandingTab({
                       }
                     />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-1.5">
                     <Label>{t('admin.branding.enLabel')}</Label>
                     <Input
                       required
@@ -364,13 +393,13 @@ export function SsoAndBrandingTab({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
                       <Label>{t('admin.branding.logoLabel')}</Label>
-                      <div className="flex items-center gap-1.5">
-                        <label className="inline-flex items-center gap-1 rounded-md border border-zinc-700/80 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-200 hover:border-indigo-500/60 cursor-pointer">
-                          <Upload className="h-3 w-3" />
+                      <div className="flex items-center gap-2">
+                        <label className="inline-flex items-center gap-1 rounded-[var(--brand-radius-sm)] border border-zinc-700/80 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 hover:border-indigo-500/60 cursor-pointer">
+                          <Upload className="h-3.5 w-3.5" />
                           <span>{t('admin.branding.uploadSvgBtn')}</span>
                           <input
                             type="file"
@@ -388,7 +417,7 @@ export function SsoAndBrandingTab({
                             onClick={() =>
                               setBrandingForm({ ...brandingForm, brand_logo_svg: '' })
                             }
-                            className="text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                            className="text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
                           >
                             {t('admin.branding.resetDefaultBtn')}
                           </button>
@@ -397,7 +426,7 @@ export function SsoAndBrandingTab({
                     </div>
                     <Textarea
                       rows={3}
-                      className="font-mono text-[11px]"
+                      className="font-mono text-xs"
                       placeholder={t('admin.branding.logoPlaceholder')}
                       value={brandingForm.brand_logo_svg}
                       onChange={(e) =>
@@ -409,9 +438,9 @@ export function SsoAndBrandingTab({
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
                       <Label>{t('admin.branding.faviconLabel')}</Label>
-                      <div className="flex items-center gap-1.5">
-                        <label className="inline-flex items-center gap-1 rounded-md border border-zinc-700/80 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-200 hover:border-indigo-500/60 cursor-pointer">
-                          <Upload className="h-3 w-3" />
+                      <div className="flex items-center gap-2">
+                        <label className="inline-flex items-center gap-1 rounded-[var(--brand-radius-sm)] border border-zinc-700/80 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 hover:border-indigo-500/60 cursor-pointer">
+                          <Upload className="h-3.5 w-3.5" />
                           <span>{t('admin.branding.uploadIconBtn')}</span>
                           <input
                             type="file"
@@ -432,7 +461,7 @@ export function SsoAndBrandingTab({
                                 brand_favicon: brandingForm.brand_logo_svg,
                               })
                             }
-                            className="text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer"
+                            className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer"
                           >
                             {t('admin.branding.sameAsLogoBtn')}
                           </button>
@@ -443,7 +472,7 @@ export function SsoAndBrandingTab({
                             onClick={() =>
                               setBrandingForm({ ...brandingForm, brand_favicon: '' })
                             }
-                            className="text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                            className="text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
                           >
                             {t('admin.branding.resetDefaultBtn')}
                           </button>
@@ -452,13 +481,187 @@ export function SsoAndBrandingTab({
                     </div>
                     <Textarea
                       rows={3}
-                      className="font-mono text-[11px]"
+                      className="font-mono text-xs"
                       placeholder={t('admin.branding.faviconPlaceholder')}
                       value={brandingForm.brand_favicon}
                       onChange={(e) =>
                         setBrandingForm({ ...brandingForm, brand_favicon: e.target.value })
                       }
                     />
+                  </div>
+                </div>
+
+                {/* Theme & Brand Design Tokens */}
+                <div className="border-t border-zinc-800/80 pt-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-semibold text-base text-zinc-100">
+                      <Palette className="h-4 w-4 text-indigo-400 shrink-0" />
+                      <span>{t('admin.branding.themeSection')}</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => updateThemeTokens(DEFAULT_BRAND_THEME)}
+                    >
+                      {t('admin.branding.resetDefaultBtn')}
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>{t('admin.branding.themePresetLabel')}</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {THEME_PRESETS.map((preset) => {
+                        const isMatch =
+                          brandingForm.brand_theme.mode === preset.theme.mode &&
+                          brandingForm.brand_theme.primary.toLowerCase() ===
+                            preset.theme.primary.toLowerCase()
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => updateThemeTokens(preset.theme)}
+                            className={cn(
+                              'inline-flex items-center gap-2 rounded-[var(--brand-radius-md)] border px-3.5 py-2 text-sm font-medium transition-all cursor-pointer',
+                              isMatch
+                                ? 'brand-tab-active border-transparent shadow-xs'
+                                : 'border-zinc-800 bg-zinc-950/70 text-zinc-200 hover:border-zinc-700',
+                            )}
+                          >
+                            <span
+                              className="h-3.5 w-3.5 rounded-full border border-white/30 shrink-0"
+                              style={{ backgroundColor: preset.theme.primary }}
+                            />
+                            <span
+                              className="h-3.5 w-3.5 rounded-full border border-white/30 shrink-0 -ml-1.5"
+                              style={{ backgroundColor: preset.theme.accent }}
+                            />
+                            <span>{locale === 'en' ? preset.label_en : preset.label_zh}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-1.5">
+                      <Label>{t('admin.branding.themeModeLabel')}</Label>
+                      <Select
+                        value={brandingForm.brand_theme.mode}
+                        onChange={(e) =>
+                          updateThemeTokens({
+                            mode: e.target.value as BrandThemeTokens['mode'],
+                          })
+                        }
+                      >
+                        <option value="dark">{t('admin.branding.themeModeDark')}</option>
+                        <option value="light">{t('admin.branding.themeModeLight')}</option>
+                        <option value="slate">{t('admin.branding.themeModeSlate')}</option>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label>{t('admin.branding.themePrimaryLabel')}</Label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={brandingForm.brand_theme.primary}
+                          onChange={(e) => updateThemeTokens({ primary: e.target.value })}
+                          className="h-10 w-12 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950 p-1 cursor-pointer shrink-0"
+                        />
+                        <Input
+                          className="font-mono"
+                          value={brandingForm.brand_theme.primary}
+                          onChange={(e) => {
+                            const val = e.target.value.trim()
+                            setBrandingForm((prev) => ({
+                              ...prev,
+                              brand_theme: { ...prev.brand_theme, primary: val },
+                            }))
+                            if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                              applyBrandTheme({ ...brandingForm.brand_theme, primary: val }, null)
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label>{t('admin.branding.themeAccentLabel')}</Label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={brandingForm.brand_theme.accent}
+                          onChange={(e) => updateThemeTokens({ accent: e.target.value })}
+                          className="h-10 w-12 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950 p-1 cursor-pointer shrink-0"
+                        />
+                        <Input
+                          className="font-mono"
+                          value={brandingForm.brand_theme.accent}
+                          onChange={(e) => {
+                            const val = e.target.value.trim()
+                            setBrandingForm((prev) => ({
+                              ...prev,
+                              brand_theme: { ...prev.brand_theme, accent: val },
+                            }))
+                            if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                              applyBrandTheme({ ...brandingForm.brand_theme, accent: val }, null)
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label>{t('admin.branding.themeRadiusLabel')}</Label>
+                      <Select
+                        value={brandingForm.brand_theme.radius}
+                        onChange={(e) =>
+                          updateThemeTokens({
+                            radius: e.target.value as BrandThemeTokens['radius'],
+                          })
+                        }
+                      >
+                        <option value="sharp">{t('admin.branding.themeRadiusSharp')}</option>
+                        <option value="md">{t('admin.branding.themeRadiusMd')}</option>
+                        <option value="rounded">{t('admin.branding.themeRadiusRounded')}</option>
+                        <option value="pill">{t('admin.branding.themeRadiusPill')}</option>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label>{t('admin.branding.themeFontLabel')}</Label>
+                      <Select
+                        value={brandingForm.brand_theme.font_scale}
+                        onChange={(e) =>
+                          updateThemeTokens({
+                            font_scale: e.target.value as BrandThemeTokens['font_scale'],
+                          })
+                        }
+                      >
+                        <option value="normal">{t('admin.branding.themeFontNormal')}</option>
+                        <option value="comfortable">
+                          {t('admin.branding.themeFontComfortable')}
+                        </option>
+                        <option value="large">{t('admin.branding.themeFontLarge')}</option>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label>{t('admin.branding.themeWidthLabel')}</Label>
+                      <Select
+                        value={brandingForm.brand_theme.layout_width}
+                        onChange={(e) =>
+                          updateThemeTokens({
+                            layout_width: e.target.value as BrandThemeTokens['layout_width'],
+                          })
+                        }
+                      >
+                        <option value="standard">{t('admin.branding.themeWidthStandard')}</option>
+                        <option value="wide">{t('admin.branding.themeWidthWide')}</option>
+                        <option value="full">{t('admin.branding.themeWidthFull')}</option>
+                      </Select>
+                    </div>
                   </div>
                 </div>
               </form>

@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-dock/workspace-user",
+  "name": "@metis/workspace-user",
   "version": "0.1.0",
   "description": "Display the signed-in workspace user, admin inspection indicator, and portal quick-action menu in the DeepSeek Harness sidebar.",
   "type": "module",

@@ -582,11 +582,21 @@ class AuthPolicyUpdate(BaseModel):
     allow_local_user_login: bool
 
 
+class BrandThemeTokens(BaseModel):
+    mode: Literal["dark", "light", "slate"] = "dark"
+    primary: str = "#6366f1"
+    accent: str = "#06b6d4"
+    radius: Literal["sharp", "md", "rounded", "pill"] = "rounded"
+    font_scale: Literal["normal", "comfortable", "large"] = "comfortable"
+    layout_width: Literal["standard", "wide", "full"] = "wide"
+
+
 class BrandingOut(BaseModel):
     brand_name_zh: str = "Metis"
     brand_name_en: str = "Metis"
     brand_logo_svg: str = ""
     brand_favicon: str = ""
+    brand_theme: BrandThemeTokens = Field(default_factory=BrandThemeTokens)
 
 
 class BrandingUpdate(BaseModel):
@@ -594,6 +604,7 @@ class BrandingUpdate(BaseModel):
     brand_name_en: str = Field(min_length=1, max_length=64)
     brand_logo_svg: str | None = Field(default=None, max_length=32768)
     brand_favicon: str | None = Field(default=None, max_length=65536)
+    brand_theme: dict[str, str] | None = None
 
     @field_validator("brand_name_zh", "brand_name_en")
     @classmethod

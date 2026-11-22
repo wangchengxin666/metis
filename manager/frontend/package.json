@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/client.test.mjs src/lib/i18n.test.mjs",
+    "test": "node --test src/lib/client.test.mjs src/lib/i18n.test.mjs src/lib/theme.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

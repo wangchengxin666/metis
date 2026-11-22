@@ -1,6 +1,6 @@
 - insert:
     - id: file-manager
-      name: '@local/dsh-plugin-file-manager'
+      name: '@metis/file-manager'
       config:
         roots: []
         allowOutsideRoots: false

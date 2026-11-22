@@ -1,4 +1,4 @@
-# `@dsh-dock/sandbox-memory`
+# `@metis/sandbox-memory`
 
 Token-frugal **live sandbox environment awareness** and **cross-session long-term memory** for DeepSeek Harness (DSH) sandboxes — with KV-cache-safe layered injection, zero-token automatic capture, native Harness recall/write tools, and a visual **Memory Center** UI for full inspection and manual control.
 
@@ -26,7 +26,7 @@ Bundled plugin defaults in [cordis.patch.yml](cordis.patch.yml):
 ```yaml
 - insert:
     - id: sandbox-memory
-      name: '@dsh-dock/sandbox-memory'
+      name: '@metis/sandbox-memory'
       config:
         maxIndexItems: 30
         maxIndexChars: 2800

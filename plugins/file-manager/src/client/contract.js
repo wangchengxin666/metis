@@ -20,7 +20,7 @@
  */
 
 /** Package name that owns the endpoints. */
-export const PACKAGE_NAME = '@local/dsh-plugin-file-manager'
+export const PACKAGE_NAME = '@metis/file-manager'
 /** Namespace both halves bind to. */
 export const NAMESPACE = 'fileManager'
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import xml.etree.ElementTree as ET
 
@@ -16,6 +17,45 @@ from .common import Conflict, audit, utcnow
 
 DEFAULT_BRAND_NAME_ZH = "Metis"
 DEFAULT_BRAND_NAME_EN = "Metis"
+DEFAULT_BRAND_THEME: dict[str, str] = {
+    "mode": "dark",
+    "primary": "#6366f1",
+    "accent": "#06b6d4",
+    "radius": "rounded",
+    "font_scale": "comfortable",
+    "layout_width": "wide",
+}
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_VALID_THEME_MODES = {"dark", "light", "slate"}
+_VALID_RADII = {"sharp", "md", "rounded", "pill"}
+_VALID_FONT_SCALES = {"normal", "comfortable", "large"}
+_VALID_LAYOUT_WIDTHS = {"standard", "wide", "full"}
+
+
+def sanitize_brand_theme(raw: dict[str, str] | None) -> dict[str, str]:
+    """Validate and normalize admin-configured brand design tokens."""
+    merged = dict(DEFAULT_BRAND_THEME)
+    if not raw or not isinstance(raw, dict):
+        return merged
+    mode = str(raw.get("mode") or "").strip().lower()
+    if mode in _VALID_THEME_MODES:
+        merged["mode"] = mode
+    for key in ("primary", "accent"):
+        val = str(raw.get(key) or "").strip()
+        if val:
+            if not _HEX_COLOR_RE.fullmatch(val):
+                raise ValueError(f"无效的颜色值 {key}: {val}（需为 #RRGGBB 格式）")
+            merged[key] = val.lower()
+    radius = str(raw.get("radius") or "").strip().lower()
+    if radius in _VALID_RADII:
+        merged["radius"] = radius
+    font_scale = str(raw.get("font_scale") or "").strip().lower()
+    if font_scale in _VALID_FONT_SCALES:
+        merged["font_scale"] = font_scale
+    layout_width = str(raw.get("layout_width") or "").strip().lower()
+    if layout_width in _VALID_LAYOUT_WIDTHS:
+        merged["layout_width"] = layout_width
+    return merged
 DEFAULT_BRAND_LOGO_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">'
     "<defs>"
@@ -498,12 +538,13 @@ def delete_oidc_provider(
     db.commit()
 
 
-def get_branding_config(db: Session) -> dict[str, str]:
-    """Return full white-label branding configuration (names, logo SVG, favicon)."""
+def get_branding_config(db: Session) -> dict[str, object]:
+    """Return full white-label branding configuration (names, logo SVG, favicon, theme tokens)."""
     zh_row = db.get(PlatformSetting, "brand_name_zh")
     en_row = db.get(PlatformSetting, "brand_name_en")
     logo_row = db.get(PlatformSetting, "brand_logo_svg")
     fav_row = db.get(PlatformSetting, "brand_favicon")
+    theme_row = db.get(PlatformSetting, "brand_theme_json")
     zh = (
         zh_row.value.strip()
         if zh_row and zh_row.value and zh_row.value.strip()
@@ -516,18 +557,27 @@ def get_branding_config(db: Session) -> dict[str, str]:
     )
     logo_svg = logo_row.value.strip() if logo_row and logo_row.value else ""
     favicon = fav_row.value.strip() if fav_row and fav_row.value else ""
+    theme = dict(DEFAULT_BRAND_THEME)
+    if theme_row and theme_row.value:
+        try:
+            parsed = json.loads(theme_row.value)
+            if isinstance(parsed, dict):
+                theme = sanitize_brand_theme(parsed)
+        except Exception:
+            pass
     return {
         "brand_name_zh": zh,
         "brand_name_en": en,
         "brand_logo_svg": logo_svg,
         "brand_favicon": favicon,
+        "brand_theme": theme,
     }
 
 
 def get_branding_settings(db: Session) -> tuple[str, str]:
     """Return (brand_name_zh, brand_name_en) with DB override over Metis defaults."""
     cfg = get_branding_config(db)
-    return cfg["brand_name_zh"], cfg["brand_name_en"]
+    return str(cfg["brand_name_zh"]), str(cfg["brand_name_en"])
 
 
 def set_branding_config(
@@ -537,8 +587,9 @@ def set_branding_config(
     *,
     brand_logo_svg: str | None = None,
     brand_favicon: str | None = None,
+    brand_theme: dict[str, str] | None = None,
     actor: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, object]:
     clean_zh = brand_name_zh.strip() or DEFAULT_BRAND_NAME_ZH
     clean_en = brand_name_en.strip() or DEFAULT_BRAND_NAME_EN
     now = utcnow()
@@ -550,6 +601,9 @@ def set_branding_config(
         updates.append(("brand_logo_svg", sanitize_brand_svg(brand_logo_svg)))
     if brand_favicon is not None:
         updates.append(("brand_favicon", sanitize_brand_favicon(brand_favicon)))
+    if brand_theme is not None:
+        clean_theme = sanitize_brand_theme(brand_theme)
+        updates.append(("brand_theme_json", json.dumps(clean_theme, ensure_ascii=False)))
     for key, val in updates:
         row = db.get(PlatformSetting, key)
         if row is None:
@@ -564,7 +618,8 @@ def set_branding_config(
         detail=(
             f"zh={clean_zh},en={clean_en},"
             f"custom_logo={brand_logo_svg is not None and bool(brand_logo_svg.strip())},"
-            f"custom_favicon={brand_favicon is not None and bool(brand_favicon.strip())}"
+            f"custom_favicon={brand_favicon is not None and bool(brand_favicon.strip())},"
+            f"theme={brand_theme.get('mode') if isinstance(brand_theme, dict) else 'unchanged'}"
         ),
         actor=actor,
     )

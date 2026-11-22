@@ -11,6 +11,7 @@ inserts the plugin rows into a profile.
 | [custom-theme](custom-theme/README.md) | Out-of-the-box Aurora Blue default theme plus interactive Settings editor for presets, light/dark `--dsw-*` tokens, custom CSS variables, sidebar branding, JSON import/export, and Host persistence with zero-flash first paint. |
 | [sandbox-mesh](sandbox-mesh/README.md) | Cross-sandbox 1-on-1 pairing (`Pair`) and LLM-moderated multi-sandbox group chat (`Group`) over Traefik with HMAC-SHA256 auth, per-thread Session context isolation (`New Topic`), live preparing/answering status animations, native Harness tools (`mesh_ask_peer`, `mesh_discuss_group`, `mesh_share_file`), and main-session `@` triggering. |
 | [sandbox-memory](sandbox-memory/README.md) | Token-frugal live sandbox environment awareness + cross-session long-term memory with KV-cache-safe layered injection, zero-token turn-end auto-capture, native Harness tools (`memory_save`, `memory_search`, `memory_get`, `memory_update`, `memory_delete`, `env_snapshot`), and a visual Memory Center UI. |
+| [work-delivery](work-delivery/README.md) | Read-first Work & Delivery Hub (`@metis/work-delivery`) in the DSH sidebar with KPIs, live search, status filters, expandable rows, pagination, and 2 non-overlapping LLM tools (`delivery_overview`, `delivery_task_create`). |
 
 ## Self-Hosted Discover Index & Registry (via `dsh-manager`)
 
@@ -28,7 +29,7 @@ inserts the plugin rows into a profile.
 By default (and configurable via `SANDBOX_AUTO_INSTALL_PLUGINS` in `manager/.env`), new sandboxes automatically install:
 
 ```dotenv
-SANDBOX_AUTO_INSTALL_PLUGINS=file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory
+SANDBOX_AUTO_INSTALL_PLUGINS=file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory,work-delivery
 ```
 
 Every sandbox created by the manager will automatically install these plugins from the manager's `/plugins/packages/<slug>.tgz` endpoints during first startup.

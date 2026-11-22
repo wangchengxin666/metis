@@ -21,7 +21,7 @@ export function TemplatesTab({
   const { t } = useI18n()
   return (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {templates.map((tpl) => (
               <Card key={tpl.id} className="flex flex-col justify-between">
                 <CardHeader className="pb-3">
@@ -33,30 +33,30 @@ export function TemplatesTab({
                     {tpl.role_title && (
                       <Badge
                         variant="outline"
-                        className="text-[10px] border-indigo-500/40 text-indigo-300"
+                        className="border-indigo-500/40 text-indigo-300"
                       >
-                        <Briefcase className="h-2.5 w-2.5 mr-1" />
+                        <Briefcase className="h-3 w-3 mr-1" />
                         {tpl.role_title}
                       </Badge>
                     )}
                     {tpl.role_sop && (
                       <Badge
                         variant="outline"
-                        className="text-[10px] border-emerald-500/40 text-emerald-300"
+                        className="border-emerald-500/40 text-emerald-300"
                       >
                         {t('admin.templates.sopBadge')}
                       </Badge>
                     )}
                   </div>
                   {(tpl.role_description || tpl.description) && (
-                    <p className="text-xs text-zinc-400 mt-1">
+                    <p className="text-sm text-zinc-400 mt-1.5 leading-relaxed">
                       {tpl.role_description || tpl.description}
                     </p>
                   )}
                 </CardHeader>
 
-                <CardContent className="space-y-3 text-xs">
-                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-3">
+                <CardContent className="space-y-3 text-sm">
+                  <div className="grid grid-cols-2 gap-2.5 rounded-[var(--brand-radius-md)] border border-zinc-800/80 bg-zinc-950/60 p-3.5 text-xs">
                     <div>
                       <span className="text-zinc-500 block">{t('admin.templates.imageLabel')}</span>
                       <span className="font-mono text-zinc-200 mt-0.5 block">
@@ -69,7 +69,7 @@ export function TemplatesTab({
                         {tpl.default_cpu_limit} vCPU · {tpl.default_memory_limit}
                       </span>
                     </div>
-                    <div className="col-span-2 pt-1 border-t border-zinc-800/60">
+                    <div className="col-span-2 pt-1.5 border-t border-zinc-800/60">
                       <span className="text-zinc-500 block">
                         {t('admin.templates.pluginsLabel')}
                       </span>
@@ -81,11 +81,11 @@ export function TemplatesTab({
 
                   <div className="flex items-center justify-between pt-2 border-t border-zinc-800/60">
                     <Button
-                      variant="emerald"
+                      variant="default"
                       size="sm"
                       onClick={() => onProvisionWithTemplate(tpl.key)}
                     >
-                      <Sparkles className="h-3.5 w-3.5" />
+                      <Sparkles className="h-4 w-4" />
                       {t('admin.templates.provisionBtn')}
                     </Button>
                     <div className="flex items-center gap-1.5">

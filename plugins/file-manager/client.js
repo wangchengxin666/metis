@@ -9,7 +9,7 @@
  * `scripts/bundle-client.mjs`; edit `src/client/*.js`, then re-run that script.
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-plugin-file-manager',
+  id: '@metis/file-manager',
   factory(require) {
     const __mods = {}
     /**
@@ -925,7 +925,7 @@ window.__ModuleLoader__.load({
          */
 
         /** Package name that owns the endpoints. */
-        const PACKAGE_NAME = '@local/dsh-plugin-file-manager'
+        const PACKAGE_NAME = '@metis/file-manager'
         /** Namespace both halves bind to. */
         const NAMESPACE = 'fileManager'
 

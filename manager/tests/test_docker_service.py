@@ -102,7 +102,7 @@ def test_environment_generation_and_plugin_resolution(tmp_path):
     )
     builtin_sbx = _make_sandbox(auto_install_plugins="file-manager,workspace-user,custom-theme")
     assert builtin_svc.environment(builtin_sbx)["DSH_AUTO_INSTALL_PLUGINS"] == (
-        "@local/dsh-plugin-file-manager,@dsh-dock/workspace-user,@dsh-dock/custom-theme"
+        "@metis/file-manager,@metis/workspace-user,@metis/custom-theme"
     )
 
     blank_script_sbx = _make_sandbox(init_script="   \n  ")

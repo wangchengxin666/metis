@@ -38,6 +38,15 @@ export interface OidcTestResult {
   detail: string
 }
 
+export interface BrandThemeTokens {
+  mode: 'dark' | 'light' | 'slate'
+  primary: string
+  accent: string
+  radius: 'sharp' | 'md' | 'rounded' | 'pill'
+  font_scale: 'normal' | 'comfortable' | 'large'
+  layout_width: 'standard' | 'wide' | 'full'
+}
+
 export interface AuthMe {
   authenticated: boolean
   email: string
@@ -58,6 +67,7 @@ export interface AuthMe {
   brand_name_en?: string
   brand_logo_svg?: string
   brand_favicon?: string
+  brand_theme?: BrandThemeTokens
   sandbox_runtime?: string
 }
 
@@ -296,6 +306,7 @@ export interface OverviewData {
   brand_name_en?: string
   brand_logo_svg?: string
   brand_favicon?: string
+  brand_theme?: BrandThemeTokens
   sandbox_runtime?: string
   local_images: LocalImageItem[]
   audit_logs: Array<{

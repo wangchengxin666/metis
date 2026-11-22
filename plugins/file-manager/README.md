@@ -16,7 +16,7 @@ The bundle row's config in `cordis.patch.yml`:
 ```yaml
 - insert:
     - id: file-manager
-      name: '@local/dsh-plugin-file-manager'
+      name: '@metis/file-manager'
       config:
         roots: []                 # [] = the whole filesystem
         startPath: ''             # first directory; '' = the first root, else /

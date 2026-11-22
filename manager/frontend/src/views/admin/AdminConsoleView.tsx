@@ -642,37 +642,37 @@ export function AdminConsoleView({
   return (
     <div className="space-y-6">
       {/* KPI Metrics Row */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
-          <CardContent className="p-4 flex items-center justify-between">
+          <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-zinc-400">{t('admin.kpi.sandboxesTitle')}</p>
-              <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-2xl font-bold text-emerald-400">
+              <p className="text-sm text-zinc-400">{t('admin.kpi.sandboxesTitle')}</p>
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span className="text-3xl font-bold text-emerald-400">
                   {overview?.running_sandboxes ?? 0}
                 </span>
-                <span className="text-sm text-zinc-500">/ {overview?.total_sandboxes ?? 0}</span>
+                <span className="text-base text-zinc-500">/ {overview?.total_sandboxes ?? 0}</span>
               </div>
             </div>
-            <div className="rounded-xl bg-emerald-500/10 p-2.5 text-emerald-400 border border-emerald-500/20">
-              <Box className="h-5 w-5" />
+            <div className="rounded-[var(--brand-radius-md)] bg-emerald-500/10 p-3 text-emerald-400 border border-emerald-500/20">
+              <Box className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardContent className="p-4 flex items-center justify-between">
+          <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-zinc-400">{t('admin.kpi.quotaTitle')}</p>
-              <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-2xl font-bold text-zinc-100">
+              <p className="text-sm text-zinc-400">{t('admin.kpi.quotaTitle')}</p>
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span className="text-3xl font-bold text-zinc-100">
                   {overview?.allocated_cpus ?? 0}
                 </span>
-                <span className="text-xs text-zinc-400">{t('admin.kpi.quotaUnit')}</span>
+                <span className="text-sm text-zinc-400">{t('admin.kpi.quotaUnit')}</span>
               </div>
             </div>
-            <div className="rounded-xl bg-indigo-500/10 p-2.5 text-indigo-400 border border-indigo-500/20">
-              <Cpu className="h-5 w-5" />
+            <div className="rounded-[var(--brand-radius-md)] bg-indigo-500/10 p-3 text-indigo-400 border border-indigo-500/20">
+              <Cpu className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
@@ -681,18 +681,18 @@ export function AdminConsoleView({
           className="cursor-pointer hover:border-zinc-700 transition-colors"
           onClick={() => setActiveTab('templates')}
         >
-          <CardContent className="p-4 flex items-center justify-between">
+          <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-zinc-400">{t('admin.kpi.templatesTitle')}</p>
-              <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-2xl font-bold text-zinc-100">{templates.length}</span>
+              <p className="text-sm text-zinc-400">{t('admin.kpi.templatesTitle')}</p>
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span className="text-3xl font-bold text-zinc-100">{templates.length}</span>
                 {t('admin.kpi.templatesUnit') && (
-                  <span className="text-xs text-zinc-400">{t('admin.kpi.templatesUnit')}</span>
+                  <span className="text-sm text-zinc-400">{t('admin.kpi.templatesUnit')}</span>
                 )}
               </div>
             </div>
-            <div className="rounded-xl bg-amber-500/10 p-2.5 text-amber-400 border border-amber-500/20">
-              <Layers className="h-5 w-5" />
+            <div className="rounded-[var(--brand-radius-md)] bg-amber-500/10 p-3 text-amber-400 border border-amber-500/20">
+              <Layers className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
@@ -701,28 +701,28 @@ export function AdminConsoleView({
           className="cursor-pointer hover:border-zinc-700 transition-colors"
           onClick={() => setActiveTab('plugins')}
         >
-          <CardContent className="p-4 flex items-center justify-between">
+          <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-zinc-400">{t('admin.kpi.pluginsTitle')}</p>
-              <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-2xl font-bold text-zinc-100">
+              <p className="text-sm text-zinc-400">{t('admin.kpi.pluginsTitle')}</p>
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span className="text-3xl font-bold text-zinc-100">
                   {pluginsData?.items.length ?? 0}
                 </span>
                 {t('admin.kpi.pluginsUnit') && (
-                  <span className="text-xs text-zinc-400">{t('admin.kpi.pluginsUnit')}</span>
+                  <span className="text-sm text-zinc-400">{t('admin.kpi.pluginsUnit')}</span>
                 )}
               </div>
             </div>
-            <div className="rounded-xl bg-violet-500/10 p-2.5 text-violet-400 border border-violet-500/20">
-              <Package className="h-5 w-5" />
+            <div className="rounded-[var(--brand-radius-md)] bg-violet-500/10 p-3 text-violet-400 border border-violet-500/20">
+              <Package className="h-6 w-6" />
             </div>
           </CardContent>
         </Card>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-3">
-        <div className="flex flex-wrap items-center gap-1 rounded-xl bg-zinc-900/90 p-1 border border-zinc-800/90">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+        <div className="flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] bg-zinc-900/90 p-1 border border-zinc-800/90">
           {[
             { id: 'sandboxes', label: t('admin.tabs.sandboxes'), icon: Terminal, count: sandboxes.length },
             { id: 'templates', label: t('admin.tabs.templates'), icon: Layers, count: templates.length },
@@ -738,18 +738,18 @@ export function AdminConsoleView({
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-medium transition-all cursor-pointer',
+                  'flex items-center gap-2 rounded-[var(--brand-radius-sm)] px-4 py-2 text-sm font-medium transition-all cursor-pointer',
                   active
-                    ? 'bg-zinc-100 text-zinc-950 shadow-xs'
+                    ? 'brand-tab-active shadow-xs'
                     : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
                 )}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="h-4 w-4" />
                 <span>{tab.label}</span>
                 <span
                   className={cn(
-                    'rounded-full px-1.5 py-0.2 text-[10px]',
-                    active ? 'bg-zinc-900/15 text-zinc-900' : 'bg-zinc-800 text-zinc-400',
+                    'rounded-full px-2 py-0.5 text-xs',
+                    active ? 'bg-black/20' : 'bg-zinc-800 text-zinc-400',
                   )}
                 >
                   {tab.count}

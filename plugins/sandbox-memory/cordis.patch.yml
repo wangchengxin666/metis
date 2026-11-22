@@ -1,6 +1,6 @@
 - insert:
     - id: sandbox-memory
-      name: '@dsh-dock/sandbox-memory'
+      name: '@metis/sandbox-memory'
       config:
         maxIndexItems: 30
         maxIndexChars: 2800

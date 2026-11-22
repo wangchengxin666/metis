@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_AUTO_INSTALL_PLUGINS = "file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory"
+DEFAULT_AUTO_INSTALL_PLUGINS = "file-manager,workspace-user,custom-theme,sandbox-mesh,sandbox-memory,work-delivery"
 
 
 class Settings(BaseSettings):

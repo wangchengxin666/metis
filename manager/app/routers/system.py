@@ -164,6 +164,7 @@ def api_overview(
         "brand_name_en": brand_cfg["brand_name_en"],
         "brand_logo_svg": brand_cfg["brand_logo_svg"],
         "brand_favicon": brand_cfg["brand_favicon"],
+        "brand_theme": brand_cfg["brand_theme"],
         "local_images": resolve_docker().list_local_images(),
         "audit_logs": [
             {
@@ -226,6 +227,7 @@ def api_update_branding(
             brand_name_en=payload.brand_name_en,
             brand_logo_svg=payload.brand_logo_svg,
             brand_favicon=payload.brand_favicon,
+            brand_theme=payload.brand_theme,
             actor=session_email(request) or settings.manager_admin_email,
         )
     except ValueError as exc:

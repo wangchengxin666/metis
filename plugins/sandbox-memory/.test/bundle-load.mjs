@@ -29,7 +29,7 @@ vm.runInNewContext(
 )
 
 assert.ok(registered, 'window.__ModuleLoader__.load was not called')
-assert.equal(registered.id, '@dsh-dock/sandbox-memory')
+assert.equal(registered.id, '@metis/sandbox-memory')
 assert.equal(typeof registered.factory, 'function')
 
 const mod = registered.factory((spec) => {

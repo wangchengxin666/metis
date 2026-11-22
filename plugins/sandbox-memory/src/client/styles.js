@@ -1,4 +1,4 @@
-export const STYLE_ATTR_PLUGIN = '@dsh-dock/sandbox-memory'
+export const STYLE_ATTR_PLUGIN = '@metis/sandbox-memory'
 
 export const MEMORY_CSS = `
 .smem-page {

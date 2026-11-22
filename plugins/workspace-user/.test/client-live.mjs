@@ -85,8 +85,8 @@ const appendedStyles = []
 globalThis.document = {
   head: {
     querySelector(selector) {
-      if (selector.includes('@dsh-dock/workspace-user')) {
-        return appendedStyles.find((el) => el.attributes['data-plugin'] === '@dsh-dock/workspace-user') || null
+      if (selector.includes('@metis/workspace-user')) {
+        return appendedStyles.find((el) => el.attributes['data-plugin'] === '@metis/workspace-user') || null
       }
       return null
     },

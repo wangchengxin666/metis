@@ -108,7 +108,7 @@ class PluginRegistryService:
 
         built = BuiltPluginPackage(
             slug=slug,
-            name=str(pkg.get("name") or f"@local/dsh-plugin-{slug}"),
+            name=str(pkg.get("name") or f"@metis/{slug}"),
             version=str(pkg.get("version") or "1.0.0"),
             description=str(pkg.get("description") or ""),
             package_json=pkg,

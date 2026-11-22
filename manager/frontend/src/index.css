@@ -1,1 +1,103 @@
 @import "tailwindcss";
+
+:root {
+  --brand-primary: #6366f1;
+  --brand-primary-fg: #ffffff;
+  --brand-accent: #06b6d4;
+  --brand-radius-sm: 8px;
+  --brand-radius-md: 10px;
+  --brand-radius-lg: 16px;
+  --brand-max-width: 1680px;
+  font-size: 16px;
+}
+
+body {
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Midnight Slate corporate dark theme */
+:root[data-theme="slate"] {
+  --color-zinc-950: #08101d;
+  --color-zinc-900: #0f1b2e;
+  --color-zinc-800: #1e2e48;
+  --color-zinc-700: #304466;
+  --color-zinc-600: #4c648a;
+  --color-zinc-500: #778fb3;
+  --color-zinc-400: #9bb0cf;
+  --color-zinc-300: #c4d3e8;
+  --color-zinc-200: #e2eaf6;
+  --color-zinc-100: #f4f8ff;
+}
+
+/* Enterprise Crisp Light theme — remaps neutral & status accents cleanly across all views */
+:root[data-theme="light"] {
+  --color-zinc-950: #f4f6fa;
+  --color-zinc-900: #ffffff;
+  --color-zinc-800: #e2e8f0;
+  --color-zinc-700: #cbd5e1;
+  --color-zinc-600: #94a3b8;
+  --color-zinc-500: #64748b;
+  --color-zinc-400: #475569;
+  --color-zinc-300: #334155;
+  --color-zinc-200: #1e293b;
+  --color-zinc-100: #0f172a;
+  --color-indigo-300: color-mix(in srgb, var(--brand-primary) 88%, #0f172a);
+  --color-indigo-400: var(--brand-primary);
+  --color-emerald-400: #059669;
+  --color-emerald-300: #047857;
+  --color-emerald-200: #065f46;
+  --color-emerald-950: #ecfdf5;
+  --color-amber-400: #d97706;
+  --color-amber-300: #b45309;
+  --color-amber-200: #92400e;
+  --color-amber-100: #78350f;
+  --color-amber-950: #fffbeb;
+  --color-rose-400: #e11d48;
+  --color-rose-300: #be123c;
+  --color-rose-200: #9f1239;
+  --color-rose-950: #fff1f2;
+  --color-sky-400: #0284c7;
+  --color-sky-300: #0369a1;
+  --color-violet-400: #7c3aed;
+  --color-violet-300: #6d28d9;
+}
+
+/* Brand Token utilities */
+.brand-container {
+  max-width: var(--brand-max-width, 1680px);
+}
+
+.brand-btn-primary {
+  background-color: var(--brand-primary);
+  color: var(--brand-primary-fg);
+}
+
+.brand-btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+.brand-tab-active {
+  background-color: var(--brand-primary);
+  color: var(--brand-primary-fg);
+}
+
+.brand-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-primary) 45%, transparent);
+  border-color: var(--brand-primary);
+}
+
+.brand-accent-border {
+  border-color: color-mix(in srgb, var(--brand-primary) 38%, transparent);
+}

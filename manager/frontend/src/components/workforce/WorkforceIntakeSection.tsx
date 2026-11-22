@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react'
-import { Check, Copy, Globe, RefreshCw, Send } from 'lucide-react'
-import { Badge, Button, Input, Select, cn } from '../ui'
+import { useEffect, useState } from 'react'
+import { Check, ChevronDown, ChevronRight, Copy, Globe, ListChecks, RefreshCw } from 'lucide-react'
+import { Badge, Button, cn } from '../ui'
 import { apiFetch } from '../../lib/client.ts'
 import { copyTextToClipboard } from '../../lib/format'
 import { useI18n } from '../../lib/i18nContext'
 import type { SandboxItem, WorkforceRuntimeData } from '../../types'
+
+const TASK_PAGE_SIZE = 8
 
 export function WorkforceWebhookCard({
   sandbox,
@@ -45,102 +47,80 @@ export function WorkforceWebhookCard({
 
   const effectiveWebhookUrl = localWebhookUrl || sandbox.webhook_url || null
   return (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3.5 space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="font-medium text-zinc-200 flex items-center gap-2">
-              <Globe className="h-3.5 w-3.5 text-sky-400" />
-              <span>{t('dialog.workforce.webhookTitle')}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {effectiveWebhookUrl && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    void copyTextToClipboard(effectiveWebhookUrl).then((ok) =>
-                      notify(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error'),
-                    )
-                  }}
-                >
-                  <Copy className="h-3 w-3" />
-                  {t('dialog.workforce.copyWebhookBtn')}
-                </Button>
-              )}
-              {isAdmin && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={rotatingWebhook}
-                  onClick={handleRotateWebhook}
-                >
-                  <RefreshCw className={cn('h-3 w-3', rotatingWebhook && 'animate-spin')} />
-                  {t('dialog.workforce.rotateWebhookBtn')}
-                </Button>
-              )}
-            </div>
-          </div>
-          {effectiveWebhookUrl ? (
-            <code className="block truncate rounded-md border border-zinc-800 bg-zinc-900/80 px-2.5 py-1.5 font-mono text-[11px] text-sky-300">
-              POST {effectiveWebhookUrl}
-            </code>
-          ) : (
-            <p className="text-zinc-500">{t('dialog.workforce.webhookNone')}</p>
+    <div className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/60 p-4 space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-medium text-base text-zinc-100 flex items-center gap-2">
+          <Globe className="h-4 w-4 text-sky-400" />
+          <span>{t('dialog.workforce.webhookTitle')}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {effectiveWebhookUrl && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void copyTextToClipboard(effectiveWebhookUrl).then((ok) =>
+                  notify(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error'),
+                )
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {t('dialog.workforce.copyWebhookBtn')}
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={rotatingWebhook}
+              onClick={handleRotateWebhook}
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', rotatingWebhook && 'animate-spin')} />
+              {t('dialog.workforce.rotateWebhookBtn')}
+            </Button>
           )}
         </div>
-
+      </div>
+      {effectiveWebhookUrl ? (
+        <code className="block truncate rounded-[var(--brand-radius-sm)] border border-zinc-800 bg-zinc-900/80 px-3 py-2 font-mono text-xs text-sky-300">
+          POST {effectiveWebhookUrl}
+        </code>
+      ) : (
+        <p className="text-sm text-zinc-400">{t('dialog.workforce.webhookNone')}</p>
+      )}
+    </div>
   )
 }
 
-export function WorkforceTaskDispatchCard({
+export function WorkforceTaskObserverCard({
   sandbox,
   apiBase,
   meshSummary,
+  searchQuery,
+  taskFilter,
+  onTaskFilterChange,
   notify,
   onReload,
 }: {
   sandbox: SandboxItem
   apiBase: string
   meshSummary: WorkforceRuntimeData['mesh_summary']
+  searchQuery: string
+  taskFilter: 'all' | 'active' | 'done' | 'approval'
+  onTaskFilterChange: (next: 'all' | 'active' | 'done' | 'approval') => void
   notify: (msg: string, type?: 'success' | 'error') => void
   onReload: () => Promise<void>
 }) {
   const { t } = useI18n()
-  const [taskTitle, setTaskTitle] = useState('')
-  const [taskDesc, setTaskDesc] = useState('')
-  const [taskPriority, setTaskPriority] = useState<'low' | 'normal' | 'high' | 'urgent'>('normal')
-  const [taskRoomId, setTaskRoomId] = useState('')
-  const [taskApprovalRequired, setTaskApprovalRequired] = useState(false)
-  const [dispatchingTask, setDispatchingTask] = useState(false)
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null)
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
+  const [limit, setLimit] = useState(TASK_PAGE_SIZE)
 
-  const handleDispatchTask = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!taskTitle.trim()) return
-    setDispatchingTask(true)
-    try {
-      await apiFetch(`${apiBase}/${sandbox.id}/tasks`, {
-        method: 'POST',
-        body: JSON.stringify({
-          title: taskTitle.trim(),
-          description: taskDesc.trim(),
-          priority: taskPriority,
-          room_id: taskRoomId || null,
-          approval_required: taskApprovalRequired,
-        }),
-      })
-      notify(t('dialog.workforce.taskDispatched'))
-      setTaskTitle('')
-      setTaskDesc('')
-      setTaskApprovalRequired(false)
-      await onReload()
-    } catch (err: any) {
-      notify(err.message || 'Dispatch failed', 'error')
-    } finally {
-      setDispatchingTask(false)
-    }
-  }
+  useEffect(() => {
+    setLimit(TASK_PAGE_SIZE)
+  }, [searchQuery, taskFilter, sandbox.id])
 
   const handleApprovalDecision = async (
     taskId: string,
@@ -162,118 +142,197 @@ export function WorkforceTaskDispatchCard({
     }
   }
 
+  const allTasks = meshSummary?.tasks || []
+  const pendingApprovals = meshSummary?.pending_approvals || []
+  const q = searchQuery.trim().toLowerCase()
+
+  const filteredTasks = allTasks.filter((tk) => {
+    if (
+      q &&
+      !`${tk.title} ${tk.description || ''} ${tk.assignee_slug || ''} ${tk.id}`
+        .toLowerCase()
+        .includes(q)
+    ) {
+      return false
+    }
+    if (taskFilter === 'active') return tk.status !== 'done' && tk.status !== 'cancelled'
+    if (taskFilter === 'done') return tk.status === 'done'
+    if (taskFilter === 'approval') return Boolean(tk.approval_required && tk.approval_status === 'pending')
+    return true
+  })
+
+  const remaining = filteredTasks.length - limit
+
   return (
-            <div className="rounded-xl border border-indigo-500/30 bg-zinc-950/70 p-3.5 space-y-3">
-              <div className="font-medium text-zinc-100 flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2">
-                  <Send className="h-3.5 w-3.5 text-indigo-400" />
-                  {t('dialog.workforce.dispatchTitle')}
-                </span>
-                {meshSummary && meshSummary.pending_approvals.length > 0 && (
-                  <Badge variant="warning">
-                    {t('dialog.workforce.pendingApprovals', {
-                      count: meshSummary.pending_approvals.length,
-                    })}
-                  </Badge>
+    <div className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-4 space-y-3.5">
+      <div className="font-medium text-zinc-100 flex flex-wrap items-center justify-between gap-2">
+        <span className="flex items-center gap-2 text-base">
+          <ListChecks className="h-4 w-4 text-indigo-400" />
+          {t('dialog.workforce.dispatchTitle')}
+          <Badge variant="outline">{filteredTasks.length}</Badge>
+        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(
+            [
+              { id: 'all', label: `${t('dialog.workforce.filterAll')} (${allTasks.length})` },
+              {
+                id: 'active',
+                label: `${t('dialog.workforce.filterActive')} (${meshSummary?.active_tasks_count ?? 0})`,
+              },
+              {
+                id: 'done',
+                label: `${t('dialog.workforce.filterDone')} (${meshSummary?.done_tasks_count ?? 0})`,
+              },
+              {
+                id: 'approval',
+                label: `${t('dialog.workforce.filterApproval')} (${pendingApprovals.length})`,
+              },
+            ] as const
+          ).map((pf) => (
+            <button
+              key={pf.id}
+              type="button"
+              onClick={() => onTaskFilterChange(pf.id)}
+              className={cn(
+                'rounded-full px-3 py-1 text-xs font-medium transition-colors cursor-pointer border',
+                taskFilter === pf.id
+                  ? 'brand-tab-active border-transparent'
+                  : 'border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700',
+              )}
+            >
+              {pf.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Pending Human Approvals */}
+      {pendingApprovals.length > 0 && (
+        <div className="space-y-2">
+          {pendingApprovals.map((item) => (
+            <div
+              key={item.id}
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-[var(--brand-radius-md)] border border-amber-500/35 bg-amber-950/25 px-3.5 py-2.5"
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-sm text-amber-100 truncate">{item.title}</div>
+                <div className="text-xs text-amber-300/80 font-mono">
+                  #{item.id}
+                  {item.assignee_slug ? ` · @${item.assignee_slug}` : ''}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  variant="emerald"
+                  size="sm"
+                  disabled={decidingApprovalId === item.id}
+                  onClick={() => handleApprovalDecision(item.id, 'approved', item.room_id)}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  {t('dialog.workforce.approveBtn')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="border-rose-500/40 text-rose-300 hover:bg-rose-950/40"
+                  disabled={decidingApprovalId === item.id}
+                  onClick={() => handleApprovalDecision(item.id, 'rejected', item.room_id)}
+                >
+                  {t('dialog.workforce.rejectBtn')}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Compact Expandable Task List + Pagination */}
+      {filteredTasks.length === 0 ? (
+        <p className="text-sm text-zinc-400">
+          {q ? t('dialog.workforce.noMatch', { query: searchQuery }) : '—'}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {filteredTasks.slice(0, limit).map((tk) => {
+            const expanded = expandedTaskId === tk.id
+            return (
+              <div
+                key={tk.id}
+                className="rounded-[var(--brand-radius-md)] border border-zinc-800/90 bg-zinc-900/50 overflow-hidden"
+              >
+                <button
+                  type="button"
+                  onClick={() => setExpandedTaskId(expanded ? null : tk.id)}
+                  className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 text-left hover:bg-zinc-800/35 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {expanded ? (
+                      <ChevronDown className="h-4 w-4 text-zinc-400 shrink-0" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-zinc-400 shrink-0" />
+                    )}
+                    <span
+                      className={cn(
+                        'font-medium text-sm text-zinc-100 truncate',
+                        tk.status === 'done' && 'line-through opacity-70',
+                      )}
+                    >
+                      {tk.title}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {tk.assignee_slug && (
+                      <span className="font-mono text-xs text-zinc-400 hidden sm:inline">
+                        @{tk.assignee_slug}
+                      </span>
+                    )}
+                    {tk.priority && tk.priority !== 'normal' && (
+                      <Badge variant="outline" className="font-mono">
+                        {tk.priority}
+                      </Badge>
+                    )}
+                    <Badge variant={tk.status === 'done' ? 'success' : 'secondary'}>
+                      {tk.status}
+                    </Badge>
+                  </div>
+                </button>
+                {expanded && (
+                  <div className="border-t border-zinc-800/70 px-4 py-3 text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto bg-zinc-950/50">
+                    {tk.description || `#${tk.id}`}
+                  </div>
                 )}
               </div>
+            )
+          })}
 
-              {meshSummary && meshSummary.pending_approvals.length > 0 && (
-                <div className="space-y-2">
-                  {meshSummary.pending_approvals.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium text-amber-100 truncate">{item.title}</div>
-                        <div className="text-[11px] text-amber-300/80 font-mono">
-                          #{item.id}
-                          {item.assignee_slug ? ` · @${item.assignee_slug}` : ''}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Button
-                          type="button"
-                          variant="emerald"
-                          size="sm"
-                          disabled={decidingApprovalId === item.id}
-                          onClick={() => handleApprovalDecision(item.id, 'approved', item.room_id)}
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                          {t('dialog.workforce.approveBtn')}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="border-rose-500/40 text-rose-300 hover:bg-rose-950/40"
-                          disabled={decidingApprovalId === item.id}
-                          onClick={() => handleApprovalDecision(item.id, 'rejected', item.room_id)}
-                        >
-                          {t('dialog.workforce.rejectBtn')}
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+          {filteredTasks.length > TASK_PAGE_SIZE && (
+            <div className="flex items-center justify-center gap-2 pt-1">
+              {remaining > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLimit((n) => n + TASK_PAGE_SIZE)}
+                >
+                  {t('dialog.workforce.loadMoreBtn', { remaining })}
+                </Button>
               )}
-
-              <form onSubmit={handleDispatchTask} className="space-y-2">
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                  <div className="sm:col-span-6">
-                    <Input
-                      required
-                      placeholder={t('dialog.workforce.taskTitlePlaceholder')}
-                      value={taskTitle}
-                      onChange={(e) => setTaskTitle(e.target.value)}
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <Select
-                      value={taskPriority}
-                      onChange={(e) => setTaskPriority(e.target.value as any)}
-                    >
-                      <option value="low">low</option>
-                      <option value="normal">normal</option>
-                      <option value="high">high</option>
-                      <option value="urgent">urgent</option>
-                    </Select>
-                  </div>
-                  <div className="sm:col-span-3">
-                    <Select value={taskRoomId} onChange={(e) => setTaskRoomId(e.target.value)}>
-                      <option value="">Direct Inbox</option>
-                      {(meshSummary?.groups || []).map((g) => (
-                        <option key={g.id} value={g.id}>
-                          #{g.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                  <Input
-                    className="flex-1"
-                    placeholder={t('dialog.workforce.taskDescPlaceholder')}
-                    value={taskDesc}
-                    onChange={(e) => setTaskDesc(e.target.value)}
-                  />
-                  <label className="flex items-center gap-1.5 text-zinc-300 shrink-0 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={taskApprovalRequired}
-                      onChange={(e) => setTaskApprovalRequired(e.target.checked)}
-                      className="rounded border-zinc-700 bg-zinc-900 accent-indigo-500"
-                    />
-                    <span>{t('dialog.workforce.approvalRequiredLabel')}</span>
-                  </label>
-                  <Button type="submit" size="sm" disabled={dispatchingTask || !taskTitle.trim()} className="shrink-0">
-                    <Send className="h-3.5 w-3.5" />
-                    {t('dialog.workforce.dispatchBtn')}
-                  </Button>
-                </div>
-              </form>
+              {limit > TASK_PAGE_SIZE && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setLimit(TASK_PAGE_SIZE)}
+                >
+                  {t('dialog.workforce.collapseBtn')}
+                </Button>
+              )}
             </div>
-
+          )}
+        </div>
+      )}
+    </div>
   )
 }

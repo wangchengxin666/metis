@@ -23,7 +23,7 @@ export function LocaleToggle() {
   const { locale, setLocale, t } = useI18n()
   return (
     <div
-      className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/80 p-0.5"
+      className="flex items-center rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-900/80 p-0.5"
       role="group"
       aria-label={t('app.localeToggleLabel')}
       title={t('app.localeToggleLabel')}
@@ -33,9 +33,9 @@ export function LocaleToggle() {
         type="button"
         onClick={() => setLocale('zh-CN')}
         className={cn(
-          'rounded-md px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer',
+          'rounded-[var(--brand-radius-sm)] px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer',
           locale === 'zh-CN'
-            ? 'bg-zinc-100 text-zinc-950 shadow-xs'
+            ? 'brand-tab-active shadow-xs'
             : 'text-zinc-400 hover:text-zinc-100',
         )}
       >
@@ -45,9 +45,9 @@ export function LocaleToggle() {
         type="button"
         onClick={() => setLocale('en')}
         className={cn(
-          'rounded-md px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer',
+          'rounded-[var(--brand-radius-sm)] px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer',
           locale === 'en'
-            ? 'bg-zinc-100 text-zinc-950 shadow-xs'
+            ? 'brand-tab-active shadow-xs'
             : 'text-zinc-400 hover:text-zinc-100',
         )}
       >

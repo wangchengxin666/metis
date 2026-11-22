@@ -61,7 +61,7 @@
 - **14 Built-In Company-Wide Role Templates**: One-click import covering both **Engineering** (*Tech Lead, Full-Stack, Frontend, Backend, QA, DevOps/SRE, Product Manager, Security Auditor*) and **Corporate & Business** (*Executive Assistant, Finance Analyst, Legal & Compliance, HR Specialist, Marketing & Growth, BI Data Analyst*), each with tailored `role_title`, `role_description`, private `role_sop`, and compute quotas.
 - **1-Click Project Team Assembly & Shared Knowledge Space**: Automatically establishes pairwise cryptographic trust (`sandbox-mesh`), creates a Moderator-led project room, initializes `/home/workspace/shared/TEAM_README.md`, and syncs shared project briefs (`PROJECT_BRIEF.md`) across team members.
 - **1-Click Employee Cloning**: Duplicate any digital employee's image, role persona, private SOP, LLM profile, and `/home/workspace` files/memory into a new colleague.
-- **White-Label Branding**: Customize bilingual brand names, **top-left Logo SVG**, and **browser Favicon** directly in the Admin Console (with server-side XML/SVG XSS sanitization and live `/api/branding/favicon`).
+- **White-Label Branding & Theme Tokens**: Customize bilingual brand names, **top-left Logo SVG**, **browser Favicon** (with server-side XML/SVG XSS sanitization), plus live **Theme & Brand Design Tokens** (Dark / Light / Slate modes, 5 enterprise presets, primary/accent colors, corner radius, font scale, and layout width with real-time preview and quick header mode toggle).
 
 ### 2. Task Intake, Approvals & Event Automation
 - **Task Dispatch & Human Approval Center**: Dispatch prioritized tasks into any employee's board directly from `/admin` or `/my`, and **Approve / Reject** human-in-the-loop checkpoints with one click.
@@ -76,7 +76,7 @@
 - **Multi-OIDC Enterprise SSO & Hybrid Auth**: Manage multiple OIDC providers (Keycloak, Okta, Auth0, Authentik, Azure AD) in-app with live discovery probing, domain allowlists, and optional local password login.
 - **LLM Token FinOps & Idle Auto-Sleep**: Real-time estimated token usage, session/message telemetry, per-employee daily token budget caps (`daily_token_limit`), and idle auto-sleep with instant auto-wake on access.
 - **Server-Side Workspace Snapshots Center**: Create instant server-side workspace checkpoints, 1-click rollback (`merge` or `clean`), plus streaming `.tar` export/upload restore.
-- **Self-Hosted Plugin Registry**: Dynamically serves `/plugins/index.json`, SVG icons, `.tgz` bundles, and read-only `/plugins/npm/*` packuments for built-in plugins (`file-manager`, `workspace-user`, `custom-theme`, `sandbox-mesh`, `sandbox-memory`).
+- **Self-Hosted Plugin Registry (`@metis/*`)**: Dynamically serves `/plugins/index.json`, SVG icons, `.tgz` bundles, and read-only `/plugins/npm/*` packuments for all 6 built-in `@metis/*` plugins (`@metis/file-manager`, `@metis/workspace-user`, `@metis/custom-theme`, `@metis/sandbox-mesh`, `@metis/sandbox-memory`, and `@metis/work-delivery` — read-first Work & Delivery Hub with search, status filters, expandable rows, pagination, and LLM-first conversational creation).
 
 ## Repository Layout
 

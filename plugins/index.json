@@ -1,16 +1,16 @@
 {
   "format": 1,
   "title": {
-    "en": "DSH Sandbox Plugins",
-    "zh": "DSH 沙箱平台插件"
+    "en": "Metis Platform Plugins",
+    "zh": "Metis 平台能力插件"
   },
   "description": {
-    "en": "Plugins maintained in the DSH Dock platform.",
-    "zh": "由 DSH Dock 平台维护与托管的插件。"
+    "en": "Built-in plugins maintained and hosted by Metis.",
+    "zh": "由 Metis 平台维护与托管的内置能力插件。"
   },
   "plugins": [
     {
-      "name": "@local/dsh-plugin-file-manager",
+      "name": "@metis/file-manager",
       "title": {
         "en": "Server file manager",
         "zh": "服务器文件管理"
@@ -20,10 +20,10 @@
         "zh": "左侧栏里的服务器文件管理页面：面包屑与路径直达，上传、下载（含目录或选区的 ZIP 打包）、文本与图片预览、新建文件夹、重命名、删除。"
       },
       "icon": "icons/file-manager.svg",
-      "author": "DSH Dock",
-      "homepage": "https://github.com/wangchengxin666/dsh-dock/tree/main/plugins/file-manager",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/file-manager",
       "repository": {
-        "url": "https://github.com/wangchengxin666/dsh-dock"
+        "url": "https://github.com/wangchengxin666/metis"
       },
       "keywords": [
         "files",
@@ -48,7 +48,7 @@
       ]
     },
     {
-      "name": "@dsh-dock/workspace-user",
+      "name": "@metis/workspace-user",
       "title": {
         "en": "Workspace User Identity",
         "zh": "当前用户身份栏"
@@ -58,10 +58,10 @@
         "zh": "在侧边栏左下角显示当前登录用户的名称与邮箱，标记管理员代管访问状态，并提供返回 /my、管理后台与退出登录快捷菜单。"
       },
       "icon": "icons/workspace-user.svg",
-      "author": "DSH Dock",
-      "homepage": "https://github.com/wangchengxin666/dsh-dock/tree/main/plugins/workspace-user",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/workspace-user",
       "repository": {
-        "url": "https://github.com/wangchengxin666/dsh-dock"
+        "url": "https://github.com/wangchengxin666/metis"
       },
       "keywords": [
         "user",
@@ -85,7 +85,7 @@
       ]
     },
     {
-      "name": "@dsh-dock/custom-theme",
+      "name": "@metis/custom-theme",
       "title": {
         "en": "Custom Theme & Tokens",
         "zh": "自定义主题与配色"
@@ -95,10 +95,10 @@
         "zh": "自带开箱即用的“极光蔚蓝”默认主题，并支持切换预设、编辑明暗双模式 CSS Token、添加自定义 CSS 变量及定制侧边栏品牌 Logo 与名称，持久化无闪烁生效。"
       },
       "icon": "icons/custom-theme.svg",
-      "author": "DSH Dock",
-      "homepage": "https://github.com/wangchengxin666/dsh-dock/tree/main/plugins/custom-theme",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/custom-theme",
       "repository": {
-        "url": "https://github.com/wangchengxin666/dsh-dock"
+        "url": "https://github.com/wangchengxin666/metis"
       },
       "keywords": [
         "theme",
@@ -122,7 +122,7 @@
       ]
     },
     {
-      "name": "@dsh-dock/sandbox-mesh",
+      "name": "@metis/sandbox-mesh",
       "title": {
         "en": "Collab Space",
         "zh": "协同空间"
@@ -132,10 +132,10 @@
         "zh": "多沙箱智能体协同空间：支持一次性配对与跨网互联、主持人统筹群聊、共享任务看板、人工审批门禁与工作区文件互传。"
       },
       "icon": "icons/sandbox-mesh.svg",
-      "author": "DSH Dock",
-      "homepage": "https://github.com/wangchengxin666/dsh-dock/tree/main/plugins/sandbox-mesh",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/sandbox-mesh",
       "repository": {
-        "url": "https://github.com/wangchengxin666/dsh-dock"
+        "url": "https://github.com/wangchengxin666/metis"
       },
       "keywords": [
         "mesh",
@@ -160,7 +160,7 @@
       ]
     },
     {
-      "name": "@dsh-dock/sandbox-memory",
+      "name": "@metis/sandbox-memory",
       "title": {
         "en": "Memory Center",
         "zh": "记忆中心"
@@ -170,10 +170,10 @@
         "zh": "面向沙箱环境的低 Token 长期记忆与实时环境感知插件：支持缓存友好型索引注入、自动捕获、原生 Agent 读写工具以及可视化查看、编辑与开关管理。"
       },
       "icon": "icons/sandbox-memory.svg",
-      "author": "DSH Dock",
-      "homepage": "https://github.com/wangchengxin666/dsh-dock/tree/main/plugins/sandbox-memory",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/sandbox-memory",
       "repository": {
-        "url": "https://github.com/wangchengxin666/dsh-dock"
+        "url": "https://github.com/wangchengxin666/metis"
       },
       "keywords": [
         "memory",
@@ -187,6 +187,45 @@
         {
           "version": "0.1.0",
           "publishTimestamp": 1795269600,
+          "source": {
+            "type": "npm",
+            "registry": "http://localhost:9000/plugins/npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@metis/work-delivery",
+      "title": {
+        "en": "Work & Delivery",
+        "zh": "工作与交付"
+      },
+      "description": {
+        "en": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, schedules, tasks, and services directly via AI chat.",
+        "zh": "DSH 内置工作与交付中心：支持搜索、筛选、分页浏览与人工审批；通过 AI 对话直接创建在线成果页面、定时事务、任务与后台服务。"
+      },
+      "icon": "icons/work-delivery.svg",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/work-delivery",
+      "repository": {
+        "url": "https://github.com/wangchengxin666/metis"
+      },
+      "keywords": [
+        "work",
+        "delivery",
+        "tasks",
+        "schedule",
+        "cron",
+        "pages",
+        "services"
+      ],
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1795356000,
           "source": {
             "type": "npm",
             "registry": "http://localhost:9000/plugins/npm"

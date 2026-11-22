@@ -893,6 +893,14 @@ def test_digital_workforce_branding_role_presets_team_assembly_clone_and_runtime
         "brand_name_en": "Metis",
         "brand_logo_svg": "",
         "brand_favicon": "",
+        "brand_theme": {
+            "mode": "dark",
+            "primary": "#6366f1",
+            "accent": "#06b6d4",
+            "radius": "rounded",
+            "font_scale": "comfortable",
+            "layout_width": "wide",
+        },
     }
     fav_default = client.get("/api/branding/favicon")
     assert fav_default.status_code == 200
@@ -912,11 +920,22 @@ def test_digital_workforce_branding_role_presets_team_assembly_clone_and_runtime
             "brand_name_en": "StarWork Cloud",
             "brand_logo_svg": dirty_svg,
             "brand_favicon": dirty_svg,
+            "brand_theme": {
+                "mode": "light",
+                "primary": "#2563eb",
+                "accent": "#0891b2",
+                "radius": "md",
+                "font_scale": "large",
+                "layout_width": "full",
+            },
         },
     )
     assert b_upd.status_code == 200
     b_data = b_upd.json()
     assert b_data["brand_name_zh"] == "星辰 · 数字员工云"
+    assert b_data["brand_theme"]["mode"] == "light"
+    assert b_data["brand_theme"]["primary"] == "#2563eb"
+    assert b_data["brand_theme"]["font_scale"] == "large"
     assert "<circle" in b_data["brand_logo_svg"]
     assert "<script" not in b_data["brand_logo_svg"]
     assert "onload" not in b_data["brand_logo_svg"]
@@ -927,7 +946,7 @@ def test_digital_workforce_branding_role_presets_team_assembly_clone_and_runtime
     fav_custom = client.get("/api/branding/favicon")
     assert fav_custom.status_code == 200 and "<circle" in fav_custom.text and "<script" not in fav_custom.text
 
-    # Invalid non-SVG logo rejected with 400
+    # Invalid non-SVG logo or invalid theme hex color rejected with 400
     bad_logo = client.put(
         "/api/branding",
         headers=admin_headers,
@@ -938,6 +957,17 @@ def test_digital_workforce_branding_role_presets_team_assembly_clone_and_runtime
         },
     )
     assert bad_logo.status_code == 400
+
+    bad_color = client.put(
+        "/api/branding",
+        headers=admin_headers,
+        json={
+            "brand_name_zh": "星辰",
+            "brand_name_en": "Star",
+            "brand_theme": {"primary": "not-a-hex"},
+        },
+    )
+    assert bad_color.status_code == 400
 
     # 2) All-company role template presets (8 R&D + 6 Corporate/Business = 14) & 1-click seeding
     presets = client.get("/api/templates/presets", headers=admin_headers)

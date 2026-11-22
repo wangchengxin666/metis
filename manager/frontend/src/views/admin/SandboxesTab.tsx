@@ -1,4 +1,3 @@
-import React, { useEffect, useState } from 'react'
 import {
   Activity,
   Briefcase,
@@ -14,9 +13,7 @@ import {
   Trash2,
   Users,
 } from 'lucide-react'
-import { Badge, Button, Card, Input, cn } from '../../components/ui'
-import { ResourceUsageBars } from '../../components/ResourceUsageBars'
-import { apiFetch } from '../../lib/client.ts'
+import { ActionMenu, Badge, Button, Card, cn } from '../../components/ui'
 import { formatDiskSize } from '../../lib/format'
 import { localizeStatus } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
@@ -40,9 +37,6 @@ export interface SandboxesTabProps {
 export function SandboxesTab({
   sandboxes,
   statsMap,
-  overview,
-  onRefresh,
-  notify,
   onWorkforce,
   onSandboxAction,
   onLogs,
@@ -53,315 +47,192 @@ export function SandboxesTab({
 }: SandboxesTabProps) {
   const { locale, t } = useI18n()
   const formatStatus = (status: string) => localizeStatus(locale, status)
-  const [sleepPolicy, setSleepPolicy] = useState({
-    enabled: Boolean(overview?.idle_sleep_enabled),
-    idle_minutes: String(overview?.idle_sleep_minutes ?? 240),
-  })
-  const [savingSleepPolicy, setSavingSleepPolicy] = useState(false)
-
-  useEffect(() => {
-    if (overview) {
-      setSleepPolicy({
-        enabled: Boolean(overview.idle_sleep_enabled),
-        idle_minutes: String(overview.idle_sleep_minutes ?? 240),
-      })
-    }
-  }, [overview?.idle_sleep_enabled, overview?.idle_sleep_minutes])
-
-  const handleSaveSleepPolicy = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSavingSleepPolicy(true)
-    try {
-      const minutes = Math.max(5, parseInt(sleepPolicy.idle_minutes, 10) || 240)
-      await apiFetch('/api/policies/idle-sleep', {
-        method: 'PUT',
-        body: JSON.stringify({
-          enabled: sleepPolicy.enabled,
-          idle_minutes: minutes,
-        }),
-      })
-      notify(t('admin.sandboxes.sleepPolicySaved'))
-      await onRefresh()
-    } catch (err: any) {
-      notify(err.message, 'error')
-    } finally {
-      setSavingSleepPolicy(false)
-    }
-  }
 
   return (
-        <div className="space-y-4">
-          <form
-            onSubmit={handleSaveSleepPolicy}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--brand-radius-md)] border border-zinc-800/80 bg-zinc-900/50 px-5 py-3 text-sm"
-          >
-            <div className="flex items-center gap-2 text-zinc-200">
-              <Moon className="h-4 w-4 text-indigo-400 shrink-0" />
-              <span className="font-medium">{t('admin.sandboxes.sleepPolicyTitle')}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-2 text-zinc-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={sleepPolicy.enabled}
-                  onChange={(e) =>
-                    setSleepPolicy({ ...sleepPolicy, enabled: e.target.checked })
-                  }
-                  className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 accent-indigo-500"
-                />
-                <span>{t('admin.sandboxes.sleepEnableLabel')}</span>
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min={5}
-                  max={43200}
-                  className="h-9 w-24 text-sm"
-                  value={sleepPolicy.idle_minutes}
-                  onChange={(e) =>
-                    setSleepPolicy({ ...sleepPolicy, idle_minutes: e.target.value })
-                  }
-                />
-                <span className="text-zinc-400">{t('admin.sandboxes.sleepMinutesUnit')}</span>
-              </div>
-              <Button type="submit" variant="outline" size="sm" disabled={savingSleepPolicy}>
-                {savingSleepPolicy ? t('common.saving') : t('admin.sandboxes.sleepSaveBtn')}
-              </Button>
-            </div>
-          </form>
+    <Card className="overflow-visible">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-zinc-800/80 bg-zinc-950/50 text-zinc-400">
+              <th className="py-3.5 px-5 font-medium">{t('admin.sandboxes.colWorkspace')}</th>
+              <th className="py-3.5 px-5 font-medium">{t('admin.sandboxes.colStatus')}</th>
+              <th className="py-3.5 px-5 font-medium">{t('admin.sandboxes.colResources')}</th>
+              <th className="py-3.5 px-5 font-medium text-right">{t('admin.sandboxes.colActions')}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-800/60">
+            {sandboxes.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="py-16 text-center text-zinc-500">
+                  {t('admin.sandboxes.empty')}
+                </td>
+              </tr>
+            ) : (
+              sandboxes.map((sbx) => {
+                const st = statsMap[sbx.id]
+                const isRunning = sbx.status === 'running'
+                return (
+                  <tr key={sbx.id} className="hover:bg-zinc-800/20 transition-colors">
+                    <td className="py-4 px-5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-base text-zinc-100">
+                          {sbx.display_name || sbx.slug}
+                        </span>
+                        {sbx.role_title && (
+                          <Badge variant="secondary">
+                            <Briefcase className="h-3 w-3 mr-0.5" />
+                            {sbx.role_title}
+                          </Badge>
+                        )}
+                        {sbx.project_team_name && (
+                          <Badge variant="outline" className="border-violet-500/40 text-violet-300">
+                            <Users className="h-3 w-3 mr-0.5" />
+                            {sbx.project_team_name}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 text-xs text-zinc-400">
+                        <span className="font-mono">@{sbx.slug}</span> · {sbx.email}
+                        {sbx.llm_profile_name ? ` · ${sbx.llm_profile_name}` : ''}
+                      </div>
+                    </td>
 
-          <Card className="overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-zinc-800/80 bg-zinc-950/60 text-zinc-400">
-                    <th className="py-4 px-5 font-medium">{t('admin.sandboxes.colWorkspace')}</th>
-                    <th className="py-4 px-5 font-medium">{t('admin.sandboxes.colTemplate')}</th>
-                    <th className="py-4 px-5 font-medium">{t('admin.sandboxes.colStatus')}</th>
-                    <th className="py-4 px-5 font-medium w-60">
-                      {t('admin.sandboxes.colResources')}
-                    </th>
-                    <th className="py-4 px-5 font-medium text-right">
-                      {t('admin.sandboxes.colActions')}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800/60">
-                  {sandboxes.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="py-14 text-center text-zinc-500">
-                        {t('admin.sandboxes.empty')}
-                      </td>
-                    </tr>
-                  ) : (
-                    sandboxes.map((sbx) => {
-                      const st = statsMap[sbx.id]
-                      return (
-                        <tr key={sbx.id} className="hover:bg-zinc-800/25 transition-colors">
-                          <td className="py-4 px-5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-semibold text-base text-zinc-100">
-                                {sbx.slug}
-                              </span>
-                              {sbx.role_title && (
-                                <Badge
-                                  variant="outline"
-                                  className="border-indigo-500/40 text-indigo-300"
-                                >
-                                  <Briefcase className="h-3 w-3 mr-1" />
-                                  {sbx.role_title}
-                                </Badge>
-                              )}
-                              {sbx.project_team_name && (
-                                <Badge
-                                  variant="outline"
-                                  className="border-violet-500/40 text-violet-300"
-                                >
-                                  <Users className="h-3 w-3 mr-1" />
-                                  {sbx.project_team_name}
-                                </Badge>
-                              )}
-                              {sbx.llm_profile_name && (
-                                <Badge variant="outline">
-                                  LLM: {sbx.llm_profile_name}
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="mt-1 text-zinc-400">
-                              {sbx.display_name ? `${sbx.display_name} (${sbx.email})` : sbx.email}
-                            </div>
-                            {sbx.role_description && (
-                              <div className="mt-1 text-xs text-zinc-500 max-w-lg truncate">
-                                {sbx.role_description}
-                              </div>
+                    <td className="py-4 px-5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant={
+                            isRunning
+                              ? 'success'
+                              : sbx.status === 'starting' || sbx.status === 'creating'
+                                ? 'warning'
+                                : 'destructive'
+                          }
+                        >
+                          <span
+                            className={cn(
+                              'h-2 w-2 rounded-full',
+                              isRunning ? 'bg-emerald-400' : 'bg-rose-400',
                             )}
-                          </td>
+                          />
+                          {formatStatus(sbx.status)}
+                        </Badge>
+                        {sbx.auto_sleep_exempt && (
+                          <Badge variant="outline">
+                            <Moon className="h-3 w-3 mr-0.5" />
+                            {t('admin.sandboxes.keepAliveBadge')}
+                          </Badge>
+                        )}
+                      </div>
+                    </td>
 
-                          <td className="py-4 px-5">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="secondary">{sbx.template}</Badge>
-                              <span className="font-mono text-xs text-zinc-400">
-                                {sbx.image_repo}:{sbx.image_tag}
-                              </span>
+                    <td className="py-4 px-5">
+                      {isRunning && st ? (
+                        <div className="font-mono text-xs text-zinc-300 space-y-0.5">
+                          <div>
+                            CPU {st.cpu_percent}% · MEM {st.memory_usage_mb}/{st.memory_limit_mb} MB
+                          </div>
+                          {(st.disk_usage_mb ?? sbx.disk_usage_mb) != null && (
+                            <div className="text-zinc-500">
+                              {t('admin.sandboxes.diskCachedLabel', {
+                                size: formatDiskSize(st.disk_usage_mb ?? sbx.disk_usage_mb),
+                              })}
                             </div>
-                            <div className="mt-1.5 text-xs text-zinc-500">
-                              {sbx.cpu_limit} vCPU · {sbx.memory_limit}
-                            </div>
-                          </td>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-zinc-500 font-mono">
+                          {sbx.cpu_limit} vCPU · {sbx.memory_limit}
+                          {sbx.disk_usage_mb != null
+                            ? ` · ${formatDiskSize(sbx.disk_usage_mb)}`
+                            : ''}
+                        </div>
+                      )}
+                    </td>
 
-                          <td className="py-4 px-5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge
-                                variant={
-                                  sbx.status === 'running'
-                                    ? 'success'
-                                    : sbx.status === 'starting' || sbx.status === 'creating'
-                                      ? 'warning'
-                                      : 'destructive'
+                    <td className="py-4 px-5 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={() => window.open(`/sandboxes/${sbx.id}/open`, '_blank')}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          {t('admin.sandboxes.openWorkspace')}
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          title={t('admin.sandboxes.workforceTooltip')}
+                          onClick={() => onWorkforce(sbx)}
+                        >
+                          <Activity className="h-3.5 w-3.5 text-indigo-400" />
+                          {t('portal.workforceBtn')}
+                        </Button>
+
+                        <ActionMenu
+                          label={t('common.moreActions')}
+                          header={
+                            <span className="font-mono">
+                              {sbx.template} · {sbx.image_repo}:{sbx.image_tag}
+                            </span>
+                          }
+                          items={[
+                            isRunning
+                              ? {
+                                  label: t('admin.sandboxes.stopTooltip'),
+                                  icon: <Square className="h-4 w-4 text-amber-400" />,
+                                  onClick: () => onSandboxAction(sbx, 'stop'),
                                 }
-                              >
-                                <span
-                                  className={cn(
-                                    'h-2 w-2 rounded-full',
-                                    sbx.status === 'running' ? 'bg-emerald-400' : 'bg-rose-400',
-                                  )}
-                                />
-                                {formatStatus(sbx.status)}
-                              </Badge>
-                              {sbx.auto_sleep_exempt && (
-                                <Badge variant="outline">
-                                  <Moon className="h-3 w-3 mr-1" />
-                                  {t('admin.sandboxes.keepAliveBadge')}
-                                </Badge>
-                              )}
-                            </div>
-                          </td>
-
-                          <td className="py-4 px-5">
-                            {sbx.status === 'running' && st ? (
-                              <ResourceUsageBars stats={st} fallbackDiskMb={sbx.disk_usage_mb} />
-                            ) : (
-                              <div className="space-y-1">
-                                <span className="text-zinc-500 text-xs block">
-                                  {t('admin.sandboxes.notRunning')}
-                                </span>
-                                {sbx.disk_usage_mb != null && (
-                                  <span className="text-zinc-400 text-xs font-mono block">
-                                    {t('admin.sandboxes.diskCachedLabel', {
-                                      size: formatDiskSize(sbx.disk_usage_mb),
-                                    })}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </td>
-
-                          <td className="py-4 px-5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => window.open(`/sandboxes/${sbx.id}/open`, '_blank')}
-                              >
-                                <ExternalLink className="h-4 w-4" />
-                                {t('admin.sandboxes.openWorkspace')}
-                              </Button>
-
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                title={t('admin.sandboxes.workforceTooltip')}
-                                onClick={() => onWorkforce(sbx)}
-                              >
-                                <Activity className="h-4 w-4 text-indigo-400" />
-                                {t('portal.workforceBtn')}
-                              </Button>
-
-                              {sbx.status === 'running' ? (
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  title={t('admin.sandboxes.stopTooltip')}
-                                  onClick={() => onSandboxAction(sbx, 'stop')}
-                                >
-                                  <Square className="h-3.5 w-3.5 text-amber-400" />
-                                </Button>
-                              ) : (
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  title={t('admin.sandboxes.startTooltip')}
-                                  onClick={() => onSandboxAction(sbx, 'start')}
-                                >
-                                  <Play className="h-3.5 w-3.5 text-emerald-400" />
-                                </Button>
-                              )}
-
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                title={t('admin.sandboxes.restartTooltip')}
-                                onClick={() => onSandboxAction(sbx, 'restart')}
-                              >
-                                <RotateCw className="h-3.5 w-3.5" />
-                              </Button>
-
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                title={t('admin.sandboxes.logsTooltip')}
-                                onClick={() => onLogs(sbx)}
-                              >
-                                <FileText className="h-3.5 w-3.5" />
-                              </Button>
-
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                title={t('admin.sandboxes.editTooltip')}
-                                onClick={() => onEdit(sbx)}
-                              >
-                                <Sliders className="h-3.5 w-3.5" />
-                              </Button>
-
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                title={t('admin.sandboxes.cloneTooltip')}
-                                onClick={() => onClone(sbx)}
-                              >
-                                <Copy className="h-3.5 w-3.5" />
-                              </Button>
-
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                title={t('admin.sandboxes.backupTooltip')}
-                                onClick={() => onBackup(sbx)}
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                              </Button>
-
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                title={t('admin.sandboxes.destroyTooltip')}
-                                className="hover:border-rose-500/50 hover:text-rose-400"
-                                onClick={() => onDestroy(sbx)}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-
+                              : {
+                                  label: t('admin.sandboxes.startTooltip'),
+                                  icon: <Play className="h-4 w-4 text-emerald-400" />,
+                                  onClick: () => onSandboxAction(sbx, 'start'),
+                                },
+                            {
+                              label: t('admin.sandboxes.restartTooltip'),
+                              icon: <RotateCw className="h-4 w-4" />,
+                              onClick: () => onSandboxAction(sbx, 'restart'),
+                            },
+                            {
+                              label: t('admin.sandboxes.editTooltip'),
+                              icon: <Sliders className="h-4 w-4" />,
+                              onClick: () => onEdit(sbx),
+                              dividerBefore: true,
+                            },
+                            {
+                              label: t('admin.sandboxes.cloneTooltip'),
+                              icon: <Copy className="h-4 w-4" />,
+                              onClick: () => onClone(sbx),
+                            },
+                            {
+                              label: t('admin.sandboxes.backupTooltip'),
+                              icon: <Download className="h-4 w-4" />,
+                              onClick: () => onBackup(sbx),
+                            },
+                            {
+                              label: t('admin.sandboxes.logsTooltip'),
+                              icon: <FileText className="h-4 w-4" />,
+                              onClick: () => onLogs(sbx),
+                            },
+                            {
+                              label: t('admin.sandboxes.destroyTooltip'),
+                              icon: <Trash2 className="h-4 w-4" />,
+                              onClick: () => onDestroy(sbx),
+                              danger: true,
+                              dividerBefore: true,
+                            },
+                          ]}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   )
 }

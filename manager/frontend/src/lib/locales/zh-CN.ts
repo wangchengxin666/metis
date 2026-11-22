@@ -10,6 +10,8 @@ export const zhCN = {
   'app.loggedOut': '已退出登录',
   'app.localeToggleLabel': '切换语言',
   'app.themeToggleLabel': '切换明暗主题',
+  'app.themeDark': '暗夜模式',
+  'app.themeLight': '明亮模式',
 
   // Login view
   'login.title': '登录 Metis',
@@ -49,6 +51,12 @@ export const zhCN = {
   'common.disabled': '已禁用',
   'common.inactive': '停用',
   'common.unknown': '未知',
+  'common.moreActions': '更多操作',
+  'admin.branding.advancedToggle': '高级定制：自定义 Logo SVG、Favicon 与 6 项设计 Token',
+  'admin.vault.addBtn': '新增凭据包',
+  'admin.users.addDialogTitle': '添加组织用户',
+  'admin.admins.addDialogTitle': '添加平台管理员',
+  'dialog.workforce.roleInfoToggle': '岗位名片与规范',
 
   // Sandbox statuses & actions
   'status.running': '运行中',

@@ -72,10 +72,10 @@ export function WorkforceInspectorDialog({
   const effectiveSop = data?.role_sop || sandbox?.role_sop
 
   const pagesCount = data?.exposed_apps?.length ?? 0
-  const activeTasksCount = meshSummary?.active_tasks_count ?? 0
-  const pendingApprovalsCount = meshSummary?.pending_approvals?.length ?? 0
+  const tasksCount = meshSummary?.tasks?.length ?? 0
   const cronCount = data?.cron_jobs?.length ?? 0
   const servicesCount = (data?.user_services || data?.services || []).length
+  const totalItems = pagesCount + tasksCount + cronCount + servicesCount
 
   const promptExamples = [
     t('dialog.workforce.promptPage'),
@@ -91,11 +91,11 @@ export function WorkforceInspectorDialog({
       maxWidth="max-w-5xl"
     >
       <div className="space-y-4 text-sm">
-        {/* Status, Role & Quick Desk Jump Header */}
+        {/* Compact Single Header Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             {effectiveRoleTitle && (
-              <Badge variant="default">
+              <Badge variant="secondary">
                 <Briefcase className="h-3.5 w-3.5 mr-1" />
                 {effectiveRoleTitle}
               </Badge>
@@ -121,92 +121,33 @@ export function WorkforceInspectorDialog({
                 {t('portal.openBtn')}
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={() => void loadWorkforce()} disabled={loading}>
+            <Button variant="ghost" size="sm" onClick={() => void loadWorkforce()} disabled={loading}>
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               {t('common.refresh')}
             </Button>
           </div>
         </div>
 
-        {/* Clickable KPI Overview Strip */}
-        {isOnline && data && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            {[
-              { label: t('dialog.workforce.kpiPages'), value: pagesCount, onClick: () => setActiveTab('work') },
-              {
-                label: t('dialog.workforce.kpiActiveTasks'),
-                value: activeTasksCount,
-                onClick: () => {
-                  setActiveTab('work')
-                  setTaskFilter('active')
-                },
-              },
-              {
-                label: t('dialog.workforce.kpiApprovals'),
-                value: pendingApprovalsCount,
-                onClick: () => {
-                  setActiveTab('work')
-                  setTaskFilter('approval')
-                },
-              },
-              {
-                label: t('dialog.workforce.kpiSchedules'),
-                value: cronCount,
-                onClick: () => setActiveTab('schedule'),
-              },
-            ].map((kpi) => (
-              <button
-                key={kpi.label}
-                type="button"
-                onClick={kpi.onClick}
-                className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/60 px-3.5 py-2.5 text-left hover:border-zinc-700 transition-colors cursor-pointer"
-              >
-                <div className="text-xs text-zinc-400">{kpi.label}</div>
-                <div className="text-xl font-bold text-zinc-100 mt-0.5">{kpi.value}</div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* LLM-First Prompt Examples Bar */}
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--brand-radius-md)] border border-dashed border-zinc-800 bg-zinc-950/40 px-3.5 py-2.5 text-xs text-zinc-400">
-          <Sparkles className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-          <span>{t('dialog.workforce.chatFirstHint')}</span>
-          {promptExamples.map((ex) => (
-            <button
-              key={ex}
-              type="button"
-              onClick={() =>
-                void copyTextToClipboard(ex).then((ok) =>
-                  notify(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error'),
-                )
-              }
-              className="rounded-full border border-zinc-800 bg-zinc-900/70 px-2.5 py-1 text-xs text-zinc-200 hover:border-zinc-600 transition-colors cursor-pointer"
-            >
-              “{ex}”
-            </button>
-          ))}
-        </div>
-
+        {/* Collapsible Role & SOP (hidden by default to keep focus on deliverables) */}
         {(effectiveRoleDesc || effectiveSop) && (
-          <div className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/60 p-3.5 space-y-2">
-            {effectiveRoleDesc && (
-              <p className="text-sm text-zinc-200 leading-relaxed">{effectiveRoleDesc}</p>
-            )}
-            {effectiveSop && (
-              <details className="rounded-[var(--brand-radius-sm)] border border-zinc-800/80 bg-zinc-900/50 p-2.5">
-                <summary className="cursor-pointer font-medium text-indigo-300 select-none text-sm">
-                  {t('dialog.workforce.sopToggle')}
-                </summary>
-                <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-zinc-300 leading-relaxed">
+          <details className="rounded-[var(--brand-radius-md)] border border-zinc-800/80 bg-zinc-950/40 px-3.5 py-2">
+            <summary className="cursor-pointer text-xs font-medium text-zinc-400 hover:text-zinc-200 select-none">
+              {t('dialog.workforce.roleInfoToggle')}
+            </summary>
+            <div className="mt-2.5 space-y-2 pb-1">
+              {effectiveRoleDesc && (
+                <p className="text-sm text-zinc-200 leading-relaxed">{effectiveRoleDesc}</p>
+              )}
+              {effectiveSop && (
+                <pre className="whitespace-pre-wrap font-mono text-xs text-zinc-300 leading-relaxed rounded-lg bg-zinc-900/70 p-3">
                   {effectiveSop}
                 </pre>
-              </details>
-            )}
-          </div>
+              )}
+            </div>
+          </details>
         )}
 
-        {/* 3-Tab Switcher + Live Search */}
+        {/* 3-Tab Switcher + Conditional Search (shown when items > 5 or searching) */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
             {[
@@ -214,7 +155,7 @@ export function WorkforceInspectorDialog({
                 id: 'work' as const,
                 label: t('dialog.workforce.tabWork'),
                 icon: Layers,
-                badge: (meshSummary?.tasks?.length ?? 0) + pagesCount || undefined,
+                badge: tasksCount + pagesCount || undefined,
               },
               {
                 id: 'schedule' as const,
@@ -260,16 +201,40 @@ export function WorkforceInspectorDialog({
             })}
           </div>
 
-          <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="h-4 w-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <Input
-              className="pl-9"
-              placeholder={t('dialog.workforce.searchPlaceholder')}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
+          {(totalItems > 5 || searchQuery) && (
+            <div className="relative flex-1 min-w-[220px] max-w-sm">
+              <Search className="h-4 w-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Input
+                className="pl-9"
+                placeholder={t('dialog.workforce.searchPlaceholder')}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+          )}
         </div>
+
+        {/* AI Chat Prompt Hints — shown ONLY when completely empty so active views stay spotless */}
+        {isOnline && data && totalItems === 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-[var(--brand-radius-md)] border border-dashed border-zinc-800 bg-zinc-950/40 px-3.5 py-2.5 text-xs text-zinc-400">
+            <Sparkles className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+            <span>{t('dialog.workforce.chatFirstHint')}</span>
+            {promptExamples.map((ex) => (
+              <button
+                key={ex}
+                type="button"
+                onClick={() =>
+                  void copyTextToClipboard(ex).then((ok) =>
+                    notify(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error'),
+                  )
+                }
+                className="rounded-full border border-zinc-800 bg-zinc-900/70 px-2.5 py-1 text-xs text-zinc-200 hover:border-zinc-600 transition-colors cursor-pointer"
+              >
+                “{ex}”
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Tab Panels */}
         {activeTab === 'work' && (

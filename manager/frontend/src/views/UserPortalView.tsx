@@ -13,9 +13,8 @@ import {
   RotateCw,
   Square,
 } from 'lucide-react'
-import { Badge, Button, Card, CardContent, Dialog, Input, Label, cn } from '../components/ui'
+import { ActionMenu, Badge, Button, Card, CardContent, Dialog, Input, Label, cn } from '../components/ui'
 import { BackupRestoreDialog } from '../components/BackupRestoreDialog'
-import { ResourceUsageBars } from '../components/ResourceUsageBars'
 import { WorkforceInspectorDialog } from '../components/WorkforceInspectorDialog'
 import { apiFetch } from '../lib/client.ts'
 import { copyTextToClipboard, fetchRunningStats, formatDiskSize } from '../lib/format'
@@ -179,62 +178,109 @@ export function UserPortalView({
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          {sandboxes.map((sbx) => (
-            <Card key={sbx.id} className="border-zinc-800 flex flex-col justify-between">
-              <CardContent className="p-6 space-y-5 flex-1 flex flex-col justify-between">
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <span className="text-lg font-semibold text-zinc-100 tracking-tight">
-                          {sbx.display_name || sbx.slug}
-                        </span>
-                        <Badge variant={sbx.status === 'running' ? 'success' : 'warning'}>
-                          {localizeStatus(locale, sbx.status)}
-                        </Badge>
-                        {sbx.role_title && (
-                          <Badge variant="default">
-                            <Briefcase className="h-3.5 w-3.5 mr-1" />
-                            {sbx.role_title}
-                          </Badge>
-                        )}
-                        {sbx.project_team_name && (
-                          <Badge variant="outline" className="border-violet-500/40 text-violet-300">
-                            {sbx.project_team_name}
-                          </Badge>
-                        )}
+        <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-5">
+          {sandboxes.map((sbx) => {
+            const st = statsMap[sbx.id]
+            const isRunning = sbx.status === 'running'
+            return (
+              <Card key={sbx.id} className="border-zinc-800 flex flex-col justify-between">
+                <CardContent className="p-6 space-y-5 flex-1 flex flex-col justify-between">
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className={cn(
+                              'h-2.5 w-2.5 rounded-full shrink-0',
+                              isRunning ? 'bg-emerald-400' : 'bg-amber-400',
+                            )}
+                            title={localizeStatus(locale, sbx.status)}
+                          />
+                          <h2 className="text-lg font-semibold text-zinc-100 tracking-tight truncate">
+                            {sbx.display_name || sbx.slug}
+                          </h2>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {sbx.role_title && (
+                            <Badge variant="secondary">
+                              <Briefcase className="h-3 w-3 mr-0.5" />
+                              {sbx.role_title}
+                            </Badge>
+                          )}
+                          {sbx.project_team_name && (
+                            <Badge variant="outline" className="border-violet-500/40 text-violet-300">
+                              {sbx.project_team_name}
+                            </Badge>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-xs text-zinc-400 font-mono">
-                        @{sbx.slug} · {sbx.template} ·{' '}
-                        {t('portal.specLabel', {
-                          cpu: sbx.cpu_limit,
-                          memory: sbx.memory_limit,
-                        })}
-                        {sbx.disk_usage_mb != null
-                          ? t('portal.diskLabel', { disk: formatDiskSize(sbx.disk_usage_mb) })
-                          : ''}
-                      </div>
+                      <ActionMenu
+                        label={t('common.moreActions')}
+                        header={
+                          <div className="space-y-0.5 font-mono">
+                            <div>
+                              @{sbx.slug} · {localizeStatus(locale, sbx.status)}
+                            </div>
+                            {isRunning && st ? (
+                              <div>
+                                CPU {st.cpu_percent}% · MEM {st.memory_usage_mb}MB
+                                {sbx.disk_usage_mb != null
+                                  ? ` · ${formatDiskSize(sbx.disk_usage_mb)}`
+                                  : ''}
+                              </div>
+                            ) : (
+                              <div>
+                                {t('portal.specLabel', {
+                                  cpu: sbx.cpu_limit,
+                                  memory: sbx.memory_limit,
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        }
+                        items={[
+                          isRunning
+                            ? {
+                                label: t('portal.stopBtn'),
+                                icon: <Square className="h-4 w-4 text-amber-400" />,
+                                onClick: () => handleAction(sbx, 'stop'),
+                              }
+                            : {
+                                label: t('portal.startBtn'),
+                                icon: <Play className="h-4 w-4 text-emerald-400" />,
+                                onClick: () => handleAction(sbx, 'start'),
+                              },
+                          {
+                            label: t('portal.restartBtn'),
+                            icon: <RotateCw className="h-4 w-4" />,
+                            onClick: () => handleAction(sbx, 'restart'),
+                          },
+                          {
+                            label: t('portal.backupBtn'),
+                            icon: <Download className="h-4 w-4" />,
+                            onClick: () => setBackupTarget(sbx),
+                            dividerBefore: true,
+                          },
+                          {
+                            label: t('portal.logsBtn'),
+                            icon: <FileText className="h-4 w-4" />,
+                            onClick: () => openLogsModal(sbx),
+                          },
+                        ]}
+                      />
                     </div>
+
+                    {sbx.role_description && (
+                      <p className="text-sm text-zinc-400 leading-relaxed line-clamp-2">
+                        {sbx.role_description}
+                      </p>
+                    )}
                   </div>
 
-                  {sbx.role_description && (
-                    <p className="text-sm text-zinc-300 leading-relaxed">
-                      {sbx.role_description}
-                    </p>
-                  )}
-
-                  {sbx.status === 'running' && statsMap[sbx.id] && (
-                    <div className="pt-1 max-w-sm">
-                      <ResourceUsageBars stats={statsMap[sbx.id]} fallbackDiskMb={sbx.disk_usage_mb} />
-                    </div>
-                  )}
-                </div>
-
-                <div className="pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="pt-4 border-t border-zinc-800/70 flex items-center gap-2.5">
                     <Button
                       variant="default"
+                      className="flex-1"
                       onClick={() => window.open(`/sandboxes/${sbx.id}/open`, '_blank')}
                     >
                       <ExternalLink className="h-4 w-4" />
@@ -242,50 +288,17 @@ export function UserPortalView({
                     </Button>
                     <Button
                       variant="outline"
+                      className="flex-1"
                       onClick={() => setWorkforceTarget(sbx)}
                     >
                       <Activity className="h-4 w-4 text-indigo-400" />
                       {t('portal.workforceBtn')}
                     </Button>
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {sbx.status === 'running' ? (
-                      <Button variant="ghost" size="sm" onClick={() => handleAction(sbx, 'stop')}>
-                        <Square className="h-3.5 w-3.5 text-amber-400" />
-                        {t('portal.stopBtn')}
-                      </Button>
-                    ) : (
-                      <Button variant="ghost" size="sm" onClick={() => handleAction(sbx, 'start')}>
-                        <Play className="h-3.5 w-3.5 text-emerald-400" />
-                        {t('portal.startBtn')}
-                      </Button>
-                    )}
-                    <Button variant="ghost" size="sm" onClick={() => handleAction(sbx, 'restart')}>
-                      <RotateCw className="h-3.5 w-3.5" />
-                      {t('portal.restartBtn')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openLogsModal(sbx)}
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      {t('portal.logsBtn')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setBackupTarget(sbx)}
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      {t('portal.backupBtn')}
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       )}
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Check, LogOut, Moon, RefreshCw, Sun } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, Globe, LogOut, Moon, RefreshCw, Sun } from 'lucide-react'
 import { BrandMark, applyDocumentFavicon } from './components/BrandMark'
-import { Badge, Button, cn } from './components/ui'
+import { ActionMenu, Button, cn } from './components/ui'
 import { apiFetch, resolveInitialView, resolveSafeNextPath } from './lib/client.ts'
 import {
   Locale,
@@ -165,8 +165,8 @@ export default function App() {
               <span className="font-semibold text-base tracking-tight">{brandName}</span>
             </div>
 
-            <div className="flex items-center gap-2.5">
-              {auth?.authenticated && (
+            <div className="flex items-center gap-3">
+              {auth?.authenticated ? (
                 <>
                   {auth.admin && (
                     <div className="flex items-center rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-900/80 p-0.5">
@@ -194,32 +194,81 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  <Badge variant="secondary" className="hidden md:inline-flex">
-                    {auth.email}
-                  </Badge>
-                  {auth.auth_mode !== 'none' && (
-                    <Button variant="ghost" size="sm" onClick={handleLogout}>
-                      <LogOut className="h-4 w-4" />
-                      {t('app.logout')}
-                    </Button>
-                  )}
+                  <ActionMenu
+                    label={auth.email || 'Account'}
+                    trigger={
+                      <span className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/80 pl-1.5 pr-2.5 py-1 hover:border-zinc-700 transition-colors">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full brand-btn-primary text-xs font-semibold uppercase">
+                          {(auth.display_name || auth.email || 'U').slice(0, 1)}
+                        </span>
+                        <span className="hidden sm:inline max-w-36 truncate text-sm text-zinc-200">
+                          {auth.display_name || auth.email.split('@')[0]}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
+                      </span>
+                    }
+                    header={
+                      <div className="space-y-0.5">
+                        <div className="font-medium text-zinc-200 truncate">
+                          {auth.display_name || auth.email}
+                        </div>
+                        <div className="font-mono text-[11px] text-zinc-500 truncate">
+                          {auth.email}
+                        </div>
+                      </div>
+                    }
+                    items={[
+                      {
+                        label:
+                          effectiveThemeMode === 'light'
+                            ? t('app.themeDark')
+                            : t('app.themeLight'),
+                        icon:
+                          effectiveThemeMode === 'light' ? (
+                            <Moon className="h-4 w-4 text-zinc-300" />
+                          ) : (
+                            <Sun className="h-4 w-4 text-amber-400" />
+                          ),
+                        onClick: handleToggleThemeMode,
+                      },
+                      {
+                        label: locale === 'zh-CN' ? 'Switch to English' : '切换为中文',
+                        icon: <Globe className="h-4 w-4 text-zinc-400" />,
+                        onClick: () => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN'),
+                      },
+                      ...(auth.auth_mode !== 'none'
+                        ? [
+                            {
+                              label: t('app.logout'),
+                              icon: <LogOut className="h-4 w-4" />,
+                              onClick: handleLogout,
+                              danger: true,
+                              dividerBefore: true,
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                </>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={handleToggleThemeMode}
+                    title={t('app.themeToggleLabel')}
+                    aria-label={t('app.themeToggleLabel')}
+                  >
+                    {effectiveThemeMode === 'light' ? (
+                      <Moon className="h-4 w-4 text-zinc-300" />
+                    ) : (
+                      <Sun className="h-4 w-4 text-amber-400" />
+                    )}
+                  </Button>
+                  <LocaleToggle />
                 </>
               )}
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={handleToggleThemeMode}
-                title={t('app.themeToggleLabel')}
-                aria-label={t('app.themeToggleLabel')}
-              >
-                {effectiveThemeMode === 'light' ? (
-                  <Moon className="h-4 w-4 text-zinc-300" />
-                ) : (
-                  <Sun className="h-4 w-4 text-amber-400" />
-                )}
-              </Button>
-              <LocaleToggle />
             </div>
           </div>
         </header>

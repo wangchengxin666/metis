@@ -12,7 +12,7 @@ import {
   Terminal,
   Users,
 } from 'lucide-react'
-import { Card, CardContent, Button, cn } from '../../components/ui'
+import { Button, cn } from '../../components/ui'
 import { BackupRestoreDialog } from '../../components/BackupRestoreDialog'
 import { WorkforceInspectorDialog } from '../../components/WorkforceInspectorDialog'
 import { apiFetch } from '../../lib/client.ts'
@@ -640,154 +640,117 @@ export function AdminConsoleView({
     overview?.allow_local_user_login ?? overview?.manager_auth_mode !== 'oidc'
 
   return (
-    <div className="space-y-6">
-      {/* KPI Metrics Row */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Card>
-          <CardContent className="p-5 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-zinc-400">{t('admin.kpi.sandboxesTitle')}</p>
-              <div className="mt-1.5 flex items-baseline gap-1.5">
-                <span className="text-3xl font-bold text-emerald-400">
-                  {overview?.running_sandboxes ?? 0}
-                </span>
-                <span className="text-base text-zinc-500">/ {overview?.total_sandboxes ?? 0}</span>
-              </div>
-            </div>
-            <div className="rounded-[var(--brand-radius-md)] bg-emerald-500/10 p-3 text-emerald-400 border border-emerald-500/20">
-              <Box className="h-6 w-6" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-5 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-zinc-400">{t('admin.kpi.quotaTitle')}</p>
-              <div className="mt-1.5 flex items-baseline gap-1.5">
-                <span className="text-3xl font-bold text-zinc-100">
-                  {overview?.allocated_cpus ?? 0}
-                </span>
-                <span className="text-sm text-zinc-400">{t('admin.kpi.quotaUnit')}</span>
-              </div>
-            </div>
-            <div className="rounded-[var(--brand-radius-md)] bg-indigo-500/10 p-3 text-indigo-400 border border-indigo-500/20">
-              <Cpu className="h-6 w-6" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card
-          className="cursor-pointer hover:border-zinc-700 transition-colors"
-          onClick={() => setActiveTab('templates')}
-        >
-          <CardContent className="p-5 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-zinc-400">{t('admin.kpi.templatesTitle')}</p>
-              <div className="mt-1.5 flex items-baseline gap-1.5">
-                <span className="text-3xl font-bold text-zinc-100">{templates.length}</span>
-                {t('admin.kpi.templatesUnit') && (
-                  <span className="text-sm text-zinc-400">{t('admin.kpi.templatesUnit')}</span>
-                )}
-              </div>
-            </div>
-            <div className="rounded-[var(--brand-radius-md)] bg-amber-500/10 p-3 text-amber-400 border border-amber-500/20">
-              <Layers className="h-6 w-6" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card
-          className="cursor-pointer hover:border-zinc-700 transition-colors"
-          onClick={() => setActiveTab('plugins')}
-        >
-          <CardContent className="p-5 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-zinc-400">{t('admin.kpi.pluginsTitle')}</p>
-              <div className="mt-1.5 flex items-baseline gap-1.5">
-                <span className="text-3xl font-bold text-zinc-100">
-                  {pluginsData?.items.length ?? 0}
-                </span>
-                {t('admin.kpi.pluginsUnit') && (
-                  <span className="text-sm text-zinc-400">{t('admin.kpi.pluginsUnit')}</span>
-                )}
-              </div>
-            </div>
-            <div className="rounded-[var(--brand-radius-md)] bg-violet-500/10 p-3 text-violet-400 border border-violet-500/20">
-              <Package className="h-6 w-6" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-4">
-        <div className="flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] bg-zinc-900/90 p-1 border border-zinc-800/90">
-          {[
-            { id: 'sandboxes', label: t('admin.tabs.sandboxes'), icon: Terminal, count: sandboxes.length },
-            { id: 'templates', label: t('admin.tabs.templates'), icon: Layers, count: templates.length },
-            { id: 'plugins', label: t('admin.tabs.plugins'), icon: Package, count: pluginsData?.items.length ?? 0 },
-            { id: 'llm', label: t('admin.tabs.llm'), icon: KeyRound, count: llmProfiles.length },
-            { id: 'users', label: t('admin.tabs.users'), icon: Users, count: users.length },
-            { id: 'sso', label: t('admin.tabs.sso'), icon: ShieldCheck, count: enabledOidcCount },
-          ].map((tab) => {
-            const Icon = tab.icon
-            const active = activeTab === tab.id
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={cn(
-                  'flex items-center gap-2 rounded-[var(--brand-radius-sm)] px-4 py-2 text-sm font-medium transition-all cursor-pointer',
-                  active
-                    ? 'brand-tab-active shadow-xs'
-                    : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{tab.label}</span>
-                <span
-                  className={cn(
-                    'rounded-full px-2 py-0.5 text-xs',
-                    active ? 'bg-black/20' : 'bg-zinc-800 text-zinc-400',
-                  )}
-                >
-                  {tab.count}
-                </span>
-              </button>
-            )
-          })}
+    <div className="space-y-5">
+      {/* Compact Single-Line Status Summary Strip */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-4 text-sm text-zinc-400">
+          <span className="inline-flex items-center gap-1.5">
+            <Box className="h-4 w-4 text-emerald-400" />
+            <span>{t('admin.kpi.sandboxesTitle')}</span>
+            <strong className="font-semibold text-emerald-400">
+              {overview?.running_sandboxes ?? 0}
+            </strong>
+            <span className="text-zinc-500">/ {overview?.total_sandboxes ?? 0}</span>
+          </span>
+          <span className="text-zinc-700">·</span>
+          <span className="inline-flex items-center gap-1.5">
+            <Cpu className="h-4 w-4 text-indigo-400" />
+            <span>{t('admin.kpi.quotaTitle')}</span>
+            <strong className="font-semibold text-zinc-100">
+              {overview?.allocated_cpus ?? 0} {t('admin.kpi.quotaUnit')}
+            </strong>
+          </span>
+          <span className="text-zinc-700 hidden sm:inline">·</span>
+          <button
+            type="button"
+            onClick={() => setActiveTab('templates')}
+            className="hidden sm:inline-flex items-center gap-1.5 hover:text-zinc-200 transition-colors cursor-pointer"
+          >
+            <Layers className="h-4 w-4 text-amber-400" />
+            <span>{t('admin.kpi.templatesTitle')}</span>
+            <strong className="font-semibold text-zinc-100">{templates.length}</strong>
+          </button>
+          <span className="text-zinc-700 hidden md:inline">·</span>
+          <button
+            type="button"
+            onClick={() => setActiveTab('plugins')}
+            className="hidden md:inline-flex items-center gap-1.5 hover:text-zinc-200 transition-colors cursor-pointer"
+          >
+            <Package className="h-4 w-4 text-violet-400" />
+            <span>{t('admin.kpi.pluginsTitle')}</span>
+            <strong className="font-semibold text-zinc-100">
+              {pluginsData?.items.length ?? 0}
+            </strong>
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={refreshAll}>
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+          <Button variant="ghost" size="sm" onClick={refreshAll}>
+            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
             {t('common.refresh')}
           </Button>
           {activeTab === 'templates' ? (
             <>
               <Button variant="outline" size="sm" disabled={seedingPresets} onClick={handleSeedRolePresets}>
-                <Sparkles className={cn('h-3.5 w-3.5 text-indigo-400', seedingPresets && 'animate-spin')} />
+                <Sparkles className={cn('h-4 w-4 text-indigo-400', seedingPresets && 'animate-spin')} />
                 {t('admin.seedPresetsBtn')}
               </Button>
               <Button size="sm" onClick={openCreateTemplateModal}>
-                <Plus className="h-3.5 w-3.5" />
+                <Plus className="h-4 w-4" />
                 {t('admin.newTemplateBtn')}
               </Button>
             </>
           ) : (
             <>
               <Button variant="outline" size="sm" disabled={sandboxes.length < 2} onClick={openAssembleTeamModal}>
-                <Users className="h-3.5 w-3.5 text-indigo-400" />
+                <Users className="h-4 w-4 text-indigo-400" />
                 {t('admin.assembleTeamBtn')}
               </Button>
               <Button size="sm" onClick={() => openProvisionModalWithTemplate('agent-os')}>
-                <Plus className="h-3.5 w-3.5" />
+                <Plus className="h-4 w-4" />
                 {t('admin.provisionSandboxBtn')}
               </Button>
             </>
           )}
         </div>
+      </div>
+
+      {/* Navigation Tabs */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-zinc-800 pb-3">
+        {[
+          { id: 'sandboxes', label: t('admin.tabs.sandboxes'), icon: Terminal, count: sandboxes.length },
+          { id: 'templates', label: t('admin.tabs.templates'), icon: Layers, count: templates.length },
+          { id: 'plugins', label: t('admin.tabs.plugins'), icon: Package, count: pluginsData?.items.length ?? 0 },
+          { id: 'llm', label: t('admin.tabs.llm'), icon: KeyRound, count: llmProfiles.length },
+          { id: 'users', label: t('admin.tabs.users'), icon: Users, count: users.length },
+          { id: 'sso', label: t('admin.tabs.sso'), icon: ShieldCheck, count: enabledOidcCount },
+        ].map((tab) => {
+          const Icon = tab.icon
+          const active = activeTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={cn(
+                'flex items-center gap-2 rounded-[var(--brand-radius-sm)] px-4 py-2 text-sm font-medium transition-all cursor-pointer',
+                active
+                  ? 'brand-tab-active shadow-xs'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              <span>{tab.label}</span>
+              <span
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-xs',
+                  active ? 'bg-black/20' : 'bg-zinc-800 text-zinc-400',
+                )}
+              >
+                {tab.count}
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Active Tab Panel */}

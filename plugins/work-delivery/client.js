@@ -1436,51 +1436,17 @@ window.__ModuleLoader__.load({
                 ),
               ),
 
-              // Top KPI Summary Strip
-              h(
-                'div',
-                { className: 'wd-kpi-grid' },
-                [
-                  { label: t('kpiPages'), value: allApps.length, onClick: () => setActiveTab('work') },
-                  { label: t('kpiActiveTasks'), value: state.active_tasks_count || 0, onClick: () => { setActiveTab('work'); setTaskFilter('active') } },
-                  { label: t('kpiApprovals'), value: allApprovals.length, onClick: () => { setActiveTab('work'); setTaskFilter('approval') } },
-                  { label: t('kpiSchedules'), value: allCrons.length, onClick: () => setActiveTab('schedule') },
-                ].map((kpi) =>
-                  h(
-                    'button',
-                    { key: kpi.label, type: 'button', className: 'wd-kpi', onClick: kpi.onClick },
-                    h('div', { className: 'wd-kpi-label' }, kpi.label),
-                    h('div', { className: 'wd-kpi-value' }, String(kpi.value)),
-                  ),
-                ),
-              ),
-
-              // LLM-First Prompt Chips (No manual forms — tell the AI!)
-              h(
-                'div',
-                { className: 'wd-prompt-bar' },
-                h('span', null, t('chatHintPrefix')),
-                [t('promptExamplePage'), t('promptExampleCron'), t('promptExampleTask')].map((ex) =>
-                  h(
-                    'button',
-                    { key: ex, type: 'button', className: 'wd-prompt-chip', onClick: () => handleCopyPrompt(ex) },
-                    `“${ex}”`,
-                  ),
-                ),
-                copiedNote ? h('span', { className: 'wd-badge wd-badge-ok' }, copiedNote) : null,
-              ),
-
-              // Collapsible SOP
+              // Collapsible SOP (compact, hidden by default)
               state.sop
                 ? h(
                     'details',
-                    { className: 'wd-card', style: { padding: '12px 16px' } },
-                    h('summary', { style: { cursor: 'pointer', fontWeight: 500, userSelect: 'none' } }, t('sopToggle')),
+                    { className: 'wd-card', style: { padding: '10px 14px' } },
+                    h('summary', { style: { cursor: 'pointer', fontSize: '13px', fontWeight: 500, userSelect: 'none' } }, t('sopToggle')),
                     h('pre', { className: 'wd-log-box', style: { marginTop: '10px' } }, state.sop),
                   )
                 : null,
 
-              // Toolbar: 3-Tab Switcher + Live Search
+              // Toolbar: 3-Tab Switcher + Conditional Live Search
               h(
                 'div',
                 { className: 'wd-toolbar' },
@@ -1507,19 +1473,38 @@ window.__ModuleLoader__.load({
                     ),
                   ),
                 ),
-                h('input', {
-                  className: 'wd-input',
-                  style: { minWidth: '260px', flex: '1 1 260px', maxWidth: '400px' },
-                  placeholder: t('searchPlaceholder'),
-                  value: search,
-                  onChange: (e) => {
-                    setSearch(e.target.value)
-                    setTaskLimit(PAGE_SIZE)
-                    setAppLimit(PAGE_SIZE)
-                    setCronLimit(PAGE_SIZE)
-                  },
-                }),
+                (allTasks.length + allApps.length + allCrons.length + allServices.length > 5 || search)
+                  ? h('input', {
+                      className: 'wd-input',
+                      style: { minWidth: '240px', flex: '1 1 240px', maxWidth: '380px' },
+                      placeholder: t('searchPlaceholder'),
+                      value: search,
+                      onChange: (e) => {
+                        setSearch(e.target.value)
+                        setTaskLimit(PAGE_SIZE)
+                        setAppLimit(PAGE_SIZE)
+                        setCronLimit(PAGE_SIZE)
+                      },
+                    })
+                  : null,
               ),
+
+              // LLM-First Prompt Chips — shown ONLY when empty so populated views stay ultra-clean
+              (allApps.length === 0 && allTasks.length === 0 && allCrons.length === 0)
+                ? h(
+                    'div',
+                    { className: 'wd-prompt-bar' },
+                    h('span', null, t('chatHintPrefix')),
+                    [t('promptExamplePage'), t('promptExampleCron'), t('promptExampleTask')].map((ex) =>
+                      h(
+                        'button',
+                        { key: ex, type: 'button', className: 'wd-prompt-chip', onClick: () => handleCopyPrompt(ex) },
+                        `“${ex}”`,
+                      ),
+                    ),
+                    copiedNote ? h('span', { className: 'wd-badge wd-badge-ok' }, copiedNote) : null,
+                  )
+                : null,
 
               // TAB 1: Work & Deliverables (Read-Only + Approvals + Open + Pagination)
               activeTab === 'work'

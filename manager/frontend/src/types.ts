@@ -50,6 +50,7 @@ export interface BrandThemeTokens {
 export interface AuthMe {
   authenticated: boolean
   email: string
+  display_name?: string | null
   admin: boolean
   user_status?: string
   has_password?: boolean

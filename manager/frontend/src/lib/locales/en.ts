@@ -12,6 +12,8 @@ export const en: Record<MessageKey, string> = {
   'app.loggedOut': 'Signed out',
   'app.localeToggleLabel': 'Switch language',
   'app.themeToggleLabel': 'Toggle light/dark theme',
+  'app.themeDark': 'Dark mode',
+  'app.themeLight': 'Light mode',
 
   // Login view
   'login.title': 'Sign in to Metis',
@@ -51,6 +53,12 @@ export const en: Record<MessageKey, string> = {
   'common.disabled': 'Disabled',
   'common.inactive': 'Inactive',
   'common.unknown': 'Unknown',
+  'common.moreActions': 'More actions',
+  'admin.branding.advancedToggle': 'Advanced: Custom Logo SVG, Favicon & 6 Design Tokens',
+  'admin.vault.addBtn': 'Add Credentials',
+  'admin.users.addDialogTitle': 'Add Organization User',
+  'admin.admins.addDialogTitle': 'Add Platform Admin',
+  'dialog.workforce.roleInfoToggle': 'Role & SOP',
 
   // Sandbox statuses & actions
   'status.running': 'running',

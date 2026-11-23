@@ -24,6 +24,8 @@ function resolveOpenUrl(app) {
 function statusLabel(status, t) {
   if (status === 'done') return t('statusDone')
   if (status === 'in_progress') return t('statusInProgress')
+  if (status === 'in_review') return t('statusInReview')
+  if (status === 'blocked') return t('statusBlocked')
   if (status === 'cancelled') return t('statusCancelled')
   return t('statusOpen')
 }
@@ -398,7 +400,7 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
                                         e.stopPropagation()
                                         void controller.updateTaskStatus({
                                           taskId: tk.id,
-                                          status: tk.status === 'done' ? 'open' : 'done',
+                                          status: tk.status === 'done' ? 'todo' : 'done',
                                           roomId: tk.room_id,
                                         })
                                       },

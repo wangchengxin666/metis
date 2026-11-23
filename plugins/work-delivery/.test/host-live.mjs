@@ -66,6 +66,17 @@ try {
   assert.equal(done.ok, true)
   assert.equal(done.state.done_tasks_count, 1)
 
+  const reopened = service.updateTaskStatus({ taskId: created.task_id, status: 'todo' })
+  assert.equal(reopened.ok, true)
+  assert.equal(reopened.status, 'todo')
+  assert.equal(reopened.state.done_tasks_count, 0)
+  assert.equal(reopened.state.active_tasks_count, 1)
+
+  // Legacy 'open' alias also normalizes to 'todo'
+  const viaAlias = service.updateTaskStatus({ taskId: created.task_id, status: 'open' })
+  assert.equal(viaAlias.ok, true)
+  assert.equal(viaAlias.status, 'todo')
+
   // 3. Service logs & validation
   const logsRes = service.readServiceLogs({ name: 'api', tail: 50 })
   assert.equal(logsRes.ok, true)

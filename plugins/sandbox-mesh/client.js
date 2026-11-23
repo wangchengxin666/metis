@@ -19,6 +19,7 @@ window.__ModuleLoader__.load({
     function normalizeTaskStatus(raw, fallback = 'todo') {
       const s = String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
       if (TASK_STATUSES.includes(s)) return s
+      if (s === 'open' || s === 'pending' || s === 'reopen' || s === 'reopened') return 'todo'
       if (s === 'doing' || s === 'working' || s === 'running' || s === 'active') return 'in_progress'
       if (s === 'review' || s === 'reviewing' || s === 'qa') return 'in_review'
       if (s === 'completed' || s === 'finished' || s === 'resolved') return 'done'

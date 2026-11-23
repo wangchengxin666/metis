@@ -229,7 +229,7 @@ export function createWorkDeliveryService({
             if (!Array.isArray(taskList)) continue
             for (const tk of taskList) {
               if (!tk || typeof tk !== 'object') continue
-              const status = tk.status || 'open'
+              const status = tk.status || 'todo'
               if (status === 'done') summary.done_tasks_count += 1
               else if (status !== 'cancelled') summary.active_tasks_count += 1
               const item = {
@@ -419,7 +419,7 @@ export function createWorkDeliveryService({
       roomId: targetRoomId,
       title: cleanTitle,
       description: String(description || '').trim(),
-      status: 'open',
+      status: 'todo',
       priority: cleanPriority,
       assigneeSlug: selfSlug,
       creatorSlug: 'human',
@@ -447,7 +447,11 @@ export function createWorkDeliveryService({
 
   function updateTaskStatus({ taskId, status, roomId = '' }) {
     const cleanId = String(taskId || '').trim()
-    const cleanStatus = ['open', 'in_progress', 'done', 'cancelled'].includes(status) ? status : ''
+    const rawStatus = String(status || '').trim().toLowerCase()
+    const normalized = rawStatus === 'open' ? 'todo' : rawStatus
+    const cleanStatus = ['todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled'].includes(normalized)
+      ? normalized
+      : ''
     if (!cleanId || !cleanStatus) {
       return { ok: false, error: 'taskId and valid status are required', status: 400 }
     }
@@ -487,7 +491,7 @@ export function createWorkDeliveryService({
       for (const tk of list) {
         if (tk && tk.id === cleanId) {
           tk.approvalStatus = cleanDecision
-          if (cleanDecision === 'rejected' && tk.status === 'open') {
+          if (cleanDecision === 'rejected' && (tk.status === 'todo' || tk.status === 'open')) {
             tk.status = 'cancelled'
           }
           tk.updatedAt = Date.now()

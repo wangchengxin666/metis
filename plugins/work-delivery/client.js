@@ -51,10 +51,12 @@ window.__ModuleLoader__.load({
       approveBtn: 'Approve',
       rejectBtn: 'Reject',
       tasksEmpty: 'No tasks yet. Tell the AI in chat whenever you want to track a task or approval.',
-      markDone: 'Done',
-      markOpen: 'Reopen',
-      statusOpen: 'Open',
+      markDone: 'Mark Done',
+      markOpen: 'Undo Done',
+      statusOpen: 'To Do',
       statusInProgress: 'In Progress',
+      statusInReview: 'In Review',
+      statusBlocked: 'Blocked',
       statusDone: 'Done',
       statusCancelled: 'Cancelled',
 
@@ -130,9 +132,11 @@ window.__ModuleLoader__.load({
       rejectBtn: '驳回',
       tasksEmpty: '暂无任务。直接在 AI 对话中交代工作或开启协同任务后将自动显示在这里。',
       markDone: '标记完成',
-      markOpen: '重新打开',
+      markOpen: '撤回完成',
       statusOpen: '待处理',
       statusInProgress: '进行中',
+      statusInReview: '待验收',
+      statusBlocked: '已阻塞',
       statusDone: '已完成',
       statusCancelled: '已取消',
 
@@ -1192,6 +1196,8 @@ window.__ModuleLoader__.load({
     function statusLabel(status, t) {
       if (status === 'done') return t('statusDone')
       if (status === 'in_progress') return t('statusInProgress')
+      if (status === 'in_review') return t('statusInReview')
+      if (status === 'blocked') return t('statusBlocked')
       if (status === 'cancelled') return t('statusCancelled')
       return t('statusOpen')
     }
@@ -1566,7 +1572,7 @@ window.__ModuleLoader__.load({
                                             e.stopPropagation()
                                             void controller.updateTaskStatus({
                                               taskId: tk.id,
-                                              status: tk.status === 'done' ? 'open' : 'done',
+                                              status: tk.status === 'done' ? 'todo' : 'done',
                                               roomId: tk.room_id,
                                             })
                                           },

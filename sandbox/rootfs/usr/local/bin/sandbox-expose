@@ -109,8 +109,8 @@ case "${port}" in
   ''|*[!0-9]*) die "port must be numeric" ;;
 esac
 [ "${port}" -ge 1 ] && [ "${port}" -le 65535 ] || die "port must be 1..65535"
-for reserved in "${CADDY_ADMIN_PORT:-2019}" "${DSH_PORT:-3080}" "${DSH_TOKEN_PORT:-3090}" "${CADDY_PORT:-8080}"; do
-  [ "${port}" != "${reserved}" ] || die "port ${port} is reserved (Caddy admin / DSH / dsh-token)"
+for reserved in "${CADDY_ADMIN_PORT:-2019}" "${DSH_PORT:-3080}" "${CADDY_PORT:-8080}"; do
+  [ "${port}" != "${reserved}" ] || die "port ${port} is reserved (Caddy admin / DSH / Caddy)"
 done
 case "${raw_prefix}" in
   /*) ;;

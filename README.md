@@ -38,7 +38,7 @@
                  ┌──────────────────────────────────┐   ┌─────────────────────────────────┐
                  │ Metis Control Plane (:9000)      │   │ Digital Employee Pod/Container  │
                  │ FastAPI (Modular Routers/Services│   │ Local Docker / Remote TLS / K8s │
-                 │ SQLite / PostgreSQL / MySQL      │   │ Caddy + Agent OS + dsh-token    │
+                 │ SQLite / PostgreSQL / MySQL      │   │ Caddy + Agent OS (Gateway Auth) │
                  │ React 19 Console & User Portal   │   │ User supervisord + cron + mesh  │
                  │ Plugin Registry + Snapshot Vault │   │ /home/workspace (persistent)    │
                  └──────────────────────────────────┘   └─────────────────────────────────┘
@@ -51,8 +51,8 @@
   - **Remote Docker over TLS/SSH (`DOCKER_HOST`)**: Manages remote Docker hosts cleanly with automatic ephemeral host port allocation and dynamic Traefik HTTP routing.
   - **Kubernetes (`SANDBOX_RUNTIME=kubernetes`)**: Provisions per-employee `StatefulSet` + `PersistentVolumeClaim` + `Service`, routing via Traefik HTTP Provider or Traefik CRDs.
 - **Pluggable RDBMS (`DATABASE_URL`)**: Zero-config SQLite for single-node setups, or production PostgreSQL / MySQL with automatic schema migration and connection pooling.
-- **Granular Access Control (Traefik ForwardAuth)**:
-  - Employee desks (`/s/<slug>/`, `/s/<slug>/dsh/*`, `/s/<slug>/_dsh-token`) strictly allow only the owner or platform admins.
+- **Granular Access Control (Traefik ForwardAuth + `@metis/gateway-auth`)**:
+  - Employee desks (`/s/<slug>/`, `/s/<slug>/dsh/*`) strictly allow only the owner or platform admins via HMAC-signed gateway headers (zero launch-token redirects).
   - Published preview apps (`/s/<slug>/apps/<name>/`) support per-employee **Public** (shareable demo link) or **Authenticated** (platform session required) access modes while preserving HMAC-authenticated `sandbox-mesh` peer traffic (`/s/<slug>/p/4090`).
 
 ## Enterprise Full-Lifecycle Capabilities
@@ -205,15 +205,15 @@ corepack yarn build
 ### Sandbox Scripts & Plugins
 
 ```bash
-# Node token helper unit tests
-node --test sandbox/tests/test_dsh_token.mjs
+# Node gateway-auth & metis-dsh-config unit tests
+node --test sandbox/tests/test_gateway_auth.mjs sandbox/tests/test_metis_dsh_config.mjs
 
 # Toolchain installer, Caddyfile renderer (+ caddy validate), expose/cron/service CLIs
 docker run --rm --entrypoint /bin/bash -v "$PWD:/repo:ro" dsh-sandbox:latest \
   /repo/sandbox/tests/test_sandbox_scripts.sh /repo
 
 # Built-in plugin suites
-for p in file-manager workspace-user custom-theme sandbox-mesh sandbox-memory; do
+for p in file-manager workspace-user custom-theme sandbox-mesh sandbox-memory work-delivery; do
   docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
     -w "/work/plugins/$p" dsh-sandbox:latest -c "node .test/run.mjs"
 done

@@ -93,6 +93,30 @@ window.__ModuleLoader__.load({
           WorkDeliveryMainPage,
         ),
       )
+
+      // Empty-composer inline hint via DSH 0.2.3+ conversation.input.placeholder chain slot
+      function ComposerInlineHint() {
+        const [loc, setLoc] = React.useState(() => readActiveLocale(ctx.locale))
+        const [role, setRole] = React.useState(() => controller.getSnapshot()?.data?.role || '')
+        React.useEffect(() => subscribeLocale((next) => setLoc(next)), [])
+        React.useEffect(
+          () => controller.subscribe(() => setRole(controller.getSnapshot()?.data?.role || '')),
+          [],
+        )
+        const t = createTranslator(loc)
+        return role ? t('composerHintRole', { role }) : t('composerHintDefault')
+      }
+
+      ctx.slots.inject('conversation.input.placeholder', () =>
+        ctx.slots.register(
+          {
+            name: 'conversation.input.placeholder',
+            priority: 50,
+            select: ({ sessionId }) => (sessionId ? { sessionId } : null),
+          },
+          ComposerInlineHint,
+        ),
+      )
     }
 
     return {

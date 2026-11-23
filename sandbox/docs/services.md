@@ -77,7 +77,7 @@ npm run dev -- --host 127.0.0.1 --port 5173 --base=${SANDBOX_BASE_PATH}/apps/web
 
 ### 保留端口
 
-`2019`（Caddy admin）、`3080`（DSH）、`3090`（token helper）、`8080`（Caddy）永远不可 expose。
+`2019`（Caddy admin）、`3080`（DSH）、`8080`（Caddy）永远不可 expose。
 
 ## sandbox-service
 

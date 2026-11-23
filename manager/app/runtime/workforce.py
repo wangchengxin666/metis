@@ -378,10 +378,30 @@ console.log('TEAM_ASSEMBLE_OK:' + cfg.roomId);
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
+const zlib = require('zlib');
 
 const home = '/home/workspace';
 const publicOrigin = (process.env.PUBLIC_ORIGIN || 'http://localhost:9000').replace(/\\/+$/, '');
 const slug = process.env.SANDBOX_SLUG || '';
+
+function formatDshScheduleRule(t) {
+  if (!t || typeof t !== 'object') return '';
+  if (t.kind === 'cron' && t.expression) return String(t.expression);
+  if (t.kind === 'daily' && t.time) return 'daily ' + String(t.time).slice(0, 5);
+  if (t.kind === 'weekly' && t.time) {
+    const days = Array.isArray(t.weekdays) ? t.weekdays.join(',') : '';
+    return 'weekly(' + days + ') ' + String(t.time).slice(0, 5);
+  }
+  if (t.kind === 'every' && t.everySeconds) {
+    const s = Number(t.everySeconds);
+    if (s % 3600 === 0) return 'every ' + (s / 3600) + 'h';
+    if (s % 60 === 0) return 'every ' + (s / 60) + 'm';
+    return 'every ' + s + 's';
+  }
+  if (t.kind === 'rrule' && t.rrule) return String(t.rrule);
+  if (t.scheduledAt) return t.kind + ' ' + String(t.scheduledAt).slice(0, 16).replace('T', ' ');
+  return String(t.kind || '');
+}
 
 // 1. Exposed apps from /home/workspace/.dsh-sandbox/caddy/apps.d/*.caddy
 const appsDir = path.join(home, '.dsh-sandbox', 'caddy', 'apps.d');
@@ -453,9 +473,28 @@ if (fs.existsSync(confDir)) {
   }
 }
 
-// 3. Persistent user crontab
-const cronFile = path.join(home, '.dsh-sandbox', 'crontab');
+// 3. Scheduled tasks: native DSH @deepseek-ai/dsh-schedule + persistent sandbox-cron
 const cronJobs = [];
+const dshScheduleFile = path.join(home, '.dsh', 'storages', 'schedule.json');
+if (fs.existsSync(dshScheduleFile)) {
+  try {
+    const schedDoc = JSON.parse(fs.readFileSync(dshScheduleFile, 'utf8'));
+    const taskMap = (schedDoc && schedDoc.tables && schedDoc.tables.tasks) || {};
+    for (const [taskId, task] of Object.entries(taskMap)) {
+      if (!task || typeof task !== 'object' || task.status === 'ended') continue;
+      cronJobs.push({
+        id: task.id || taskId,
+        name: task.title || taskId,
+        schedule: formatDshScheduleRule(task),
+        command: task.prompt || '',
+        status: task.status || 'active',
+        source: 'dsh-schedule',
+        raw: (task.title || taskId) + ' (' + formatDshScheduleRule(task) + ')',
+      });
+    }
+  } catch {}
+}
+const cronFile = path.join(home, '.dsh-sandbox', 'crontab');
 if (fs.existsSync(cronFile)) {
   try {
     const rawCron = fs.readFileSync(cronFile, 'utf8');
@@ -467,10 +506,11 @@ if (fs.existsSync(cronFile)) {
         cronJobs.push({
           schedule: tokens.slice(0, 5).join(' '),
           command: tokens.slice(5).join(' '),
+          source: 'cron',
           raw: trimmed,
         });
       } else {
-        cronJobs.push({ schedule: '', command: trimmed, raw: trimmed });
+        cronJobs.push({ schedule: '', command: trimmed, source: 'cron', raw: trimmed });
       }
     }
   } catch {}
@@ -577,17 +617,59 @@ if (fs.existsSync(sharedDir)) {
   } catch {}
 }
 
-// 6. Token usage estimate from DSH sessions / memory / mesh
-const dshDir = path.join(home, '.dsh');
-if (fs.existsSync(dshDir)) {
+// 6. Accurate token usage from DSH session logs ($DSH_HOME/sessions, JSONL & Zstd-JSONL)
+let realTokens = 0;
+let inputTokens = 0;
+let outputTokens = 0;
+let cacheReadTokens = 0;
+let dshSessions = 0;
+let dshMessages = 0;
+const sessionsRoot = path.join(home, '.dsh', 'sessions');
+if (fs.existsSync(sessionsRoot)) {
   try {
-    for (const fname of fs.readdirSync(dshDir)) {
-      if (fname.endsWith('.json') || fname.endsWith('.jsonl') || fname.endsWith('.md')) {
-        const st = fs.statSync(path.join(dshDir, fname));
-        if (st.isFile()) {
-          totalChars += st.size;
-          totalSessions += 1;
-        }
+    for (const projEntry of fs.readdirSync(sessionsRoot, { withFileTypes: true })) {
+      if (!projEntry.isDirectory()) continue;
+      const projDir = path.join(sessionsRoot, projEntry.name);
+      for (const sEntry of fs.readdirSync(projDir, { withFileTypes: true })) {
+        if (!sEntry.isDirectory()) continue;
+        const sDir = path.join(projDir, sEntry.name);
+        const logFiles = fs.readdirSync(sDir).filter((f) => /^session(\\.v\\d+)?\\.jsonl(\\.zstd)?$/.test(f)).sort();
+        if (logFiles.length === 0) continue;
+        dshSessions += 1;
+        const latestFile = path.join(sDir, logFiles[logFiles.length - 1]);
+        try {
+          const st = fs.statSync(latestFile);
+          if (!st.isFile() || st.size > 32 * 1024 * 1024) continue;
+          let rawBuf = fs.readFileSync(latestFile);
+          if (latestFile.endsWith('.zstd') && typeof zlib.zstdDecompressSync === 'function') {
+            rawBuf = zlib.zstdDecompressSync(rawBuf);
+          }
+          const lines = rawBuf.toString('utf8').split(/\\r?\\n/);
+          for (const line of lines) {
+            if (!line || line[0] !== '{') continue;
+            if (!line.includes('assistant/message') && !line.includes('user/message')) continue;
+            try {
+              const ev = JSON.parse(line);
+              if (ev.type === 'user/message') {
+                dshMessages += 1;
+              } else if (ev.type === 'assistant/message') {
+                dshMessages += 1;
+                const u = ev.data && ev.data.usage;
+                if (u && typeof u === 'object') {
+                  const inp = Number(u.inputTokens) || 0;
+                  const out = Number(u.outputTokens) || 0;
+                  const cr = Number(u.cacheReadTokens) || 0;
+                  const cw = Number(u.cacheWriteTokens) || 0;
+                  const tot = Number.isFinite(Number(u.totalTokens)) ? Number(u.totalTokens) : (inp + out + cr + cw);
+                  inputTokens += inp;
+                  outputTokens += out;
+                  cacheReadTokens += cr;
+                  realTokens += tot;
+                }
+              }
+            } catch {}
+          }
+        } catch {}
       }
     }
   } catch {}
@@ -599,9 +681,13 @@ console.log(JSON.stringify({
   cron_jobs: cronJobs,
   shared_files: sharedFiles,
   token_usage: {
-    estimated_tokens: Math.round(totalChars / 4),
-    sessions_count: totalSessions,
-    messages_count: totalMessages,
+    estimated_tokens: realTokens > 0 ? realTokens : Math.round(totalChars / 4),
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_read_tokens: cacheReadTokens,
+    sessions_count: dshSessions > 0 ? dshSessions : totalSessions,
+    messages_count: dshMessages + totalMessages,
+    exact: realTokens > 0,
   },
   mesh_summary: meshSummary,
 }));

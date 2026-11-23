@@ -20,7 +20,7 @@ from .common import (
     unique_slug,
     utcnow,
 )
-from .policies import get_extra_plugin_indexes
+from .policies import get_branding_config, get_extra_plugin_indexes
 from .templates import get_template_by_key
 
 
@@ -32,6 +32,18 @@ def _attach_extra_plugin_indexes(db: Session, sandbox: Sandbox) -> None:
         ]
     except Exception:
         sandbox._extra_plugin_indexes = []
+    try:
+        cfg = get_branding_config(db)
+        theme = cfg.get("brand_theme") if isinstance(cfg.get("brand_theme"), dict) else {}
+        sandbox._brand_theme_payload = {
+            "primary": str(theme.get("primary") or "#6366f1"),
+            "accent": str(theme.get("accent") or "#06b6d4"),
+            "mode": str(theme.get("mode") or "dark"),
+            "brandTitle": str(cfg.get("brand_name_zh") or cfg.get("brand_name_en") or "Metis"),
+            "brandLogoSvg": str(cfg.get("brand_logo_svg") or ""),
+        }
+    except Exception:
+        sandbox._brand_theme_payload = None
 
 
 def create_sandbox(

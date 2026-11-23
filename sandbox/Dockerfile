@@ -182,9 +182,9 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 COPY rootfs/ /
 RUN sed -i 's/\r$//' \
-      /usr/local/bin/dsh-token \
       /usr/local/bin/dsh-web \
       /usr/local/bin/entrypoint.sh \
+      /usr/local/bin/metis-dsh-config \
       /usr/local/bin/render-caddyfile.sh \
       /usr/local/bin/sandbox-cron \
       /usr/local/bin/sandbox-expose \
@@ -207,7 +207,7 @@ USER workspace
 RUN HOME=/home/workspace DSH_HOME=/home/workspace/.dsh dsh --profile web --help >/dev/null
 USER root
 
-# Build-time guard: root-mounted, subpath token-mode, and subpath gateway-auth variants must parse.
+# Build-time guard: root-mounted and subpath-mounted (/s/alice) variants must parse.
 RUN CADDY_PORT=8080 DSH_PORT=3080 DSH_MOUNT=/dsh \
       APPS_DIR=/home/workspace/.dsh-sandbox/caddy/apps.d PUBLIC_SCHEME=http \
       /usr/local/bin/render-caddyfile.sh /tmp/Caddyfile.root \
@@ -216,11 +216,7 @@ RUN CADDY_PORT=8080 DSH_PORT=3080 DSH_MOUNT=/dsh \
       APPS_DIR=/home/workspace/.dsh-sandbox/caddy/apps.d PUBLIC_SCHEME=https \
       /usr/local/bin/render-caddyfile.sh /tmp/Caddyfile.subpath \
  && caddy validate --config /tmp/Caddyfile.subpath --adapter caddyfile \
- && CADDY_PORT=8080 DSH_PORT=3080 SANDBOX_BASE_PATH=/s/alice DSH_MOUNT=/s/alice/dsh \
-      APPS_DIR=/home/workspace/.dsh-sandbox/caddy/apps.d PUBLIC_SCHEME=https DSH_GATEWAY_AUTH_ACTIVE=true \
-      /usr/local/bin/render-caddyfile.sh /tmp/Caddyfile.gwauth \
- && caddy validate --config /tmp/Caddyfile.gwauth --adapter caddyfile \
- && rm -f /tmp/Caddyfile.root /tmp/Caddyfile.subpath /tmp/Caddyfile.gwauth
+ && rm -f /tmp/Caddyfile.root /tmp/Caddyfile.subpath
 
 ENV DSH_HOME=/home/workspace/.dsh \
     DSH_PERMISSION_MODE=danger-full-access \

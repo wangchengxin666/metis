@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Root entrypoint: prepare the home volume, render runtime configs, then hand
-# the container to supervisord (caddy + dsh-token + dsh + user-services).
+# the container to supervisord (caddy + cron + dsh + user-services).
 set -euo pipefail
 
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
@@ -21,7 +21,6 @@ if [ -z "${DSH_MOUNT:-}" ] || { [ -n "${SANDBOX_BASE_PATH}" ] && [ "${DSH_MOUNT}
 fi
 DSH_MOUNT=${DSH_MOUNT%/}
 APPS_DIR=${APPS_DIR:-/home/workspace/.dsh-sandbox/caddy/apps.d}
-DSH_TOKEN_PORT=${DSH_TOKEN_PORT:-3090}
 
 # ---------------------------------------------------------------------------
 # Public URL
@@ -55,7 +54,7 @@ SANDBOX_PUBLIC_URL="${SANDBOX_PUBLIC_URL}/"
 
 DSH_TRUSTED_HOSTS=${DSH_TRUSTED_HOSTS:-${PUBLIC_HOST}}
 DSH_PUBLIC_URL=${PUBLIC_URL}
-export CADDY_PORT DSH_PORT SANDBOX_BASE_PATH DSH_MOUNT APPS_DIR DSH_TOKEN_PORT
+export CADDY_PORT DSH_PORT SANDBOX_BASE_PATH DSH_MOUNT APPS_DIR
 export PUBLIC_URL PUBLIC_SCHEME PUBLIC_HOST PUBLIC_HOSTNAME PUBLIC_ORIGIN
 export SANDBOX_PUBLIC_ORIGIN SANDBOX_PUBLIC_URL
 export DSH_TRUSTED_HOSTS DSH_PUBLIC_URL
@@ -403,29 +402,6 @@ killasgroup=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 redirect_stderr=true
-EOF
-
-if [ "${DSH_GATEWAY_AUTH_ACTIVE}" != "true" ]; then
-  cat >>/etc/supervisor/conf.d/00-runtime.conf <<'EOF'
-
-[program:dsh-token]
-command=/usr/local/bin/dsh-token
-user=workspace
-directory=/home/workspace
-environment=HOME="/home/workspace",DSH_HOME="/home/workspace/.dsh"
-priority=18
-autostart=true
-autorestart=true
-startsecs=1
-stopasgroup=true
-killasgroup=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-redirect_stderr=true
-EOF
-fi
-
-cat >>/etc/supervisor/conf.d/00-runtime.conf <<'EOF'
 
 [program:dsh]
 command=/usr/local/bin/dsh-web
@@ -448,7 +424,7 @@ log "DSH listener: 127.0.0.1:${DSH_PORT} (mount ${DSH_MOUNT}, base ${SANDBOX_BAS
 if [ "${DSH_GATEWAY_AUTH_ACTIVE}" = "true" ]; then
   log "auth mode: metis-gateway-auth (zero-redirect Traefik ForwardAuth via ctx.connection.authentication)"
 else
-  log "auth mode: dsh-token (launch-token cookie exchange)"
+  log "auth mode: dsh-native (standalone launch-token / remote-connection)"
 fi
 
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf -n

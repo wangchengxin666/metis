@@ -293,8 +293,16 @@ class FakeDockerService:
             "provider": f"mgr-{profile.id[:8]}",
             "model": profile.model,
             "set_as_default": set_as_default,
-            "detail": "dsh: stopped\ndsh: started",
+            "detail": "hmr-synced",
         }
+
+    def sync_brand_theme(
+        self,
+        sandbox: Sandbox,
+        brand_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.calls.append(("sync_brand_theme", (sandbox.slug, brand_config.get("brand_theme"))))
+        return {"slug": sandbox.slug, "ok": True, "skipped": False, "detail": "hmr-synced"}
 
     def remove(self, sandbox: Sandbox, purge_volume: bool = False) -> None:
         self.calls.append(("remove", (sandbox.slug, purge_volume)))

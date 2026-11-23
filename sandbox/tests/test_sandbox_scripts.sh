@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT=${1:-/repo}
-unset DSH_MOUNT SANDBOX_BASE_PATH SANDBOX_PUBLIC_ORIGIN SANDBOX_PUBLIC_URL DSH_PUBLIC_URL DSH_TOKEN_COOKIE_NAME PUBLIC_SCHEME || true
+unset DSH_MOUNT SANDBOX_BASE_PATH SANDBOX_PUBLIC_ORIGIN SANDBOX_PUBLIC_URL DSH_PUBLIC_URL PUBLIC_SCHEME || true
 TMP_WORK=$(mktemp -d /tmp/sandbox-script-tests.XXXXXX)
 trap 'rm -rf "${TMP_WORK}"' EXIT
 
@@ -58,9 +58,8 @@ APPS_DIR="${APPS_DIR}" CADDY_BIN=caddy "${RENDER}" "${TMP_WORK}/Caddyfile.root"
 grep -q 'handle_path /dsh/\*' "${TMP_WORK}/Caddyfile.root"
 grep -q 'Path=/dsh/;' "${TMP_WORK}/Caddyfile.root"
 
-SANDBOX_BASE_PATH="/s/alice" PUBLIC_SCHEME="https" DSH_TOKEN_COOKIE_NAME="dsh_token_seen_alice" \
+SANDBOX_BASE_PATH="/s/alice" PUBLIC_SCHEME="https" \
   APPS_DIR="${APPS_DIR}" CADDY_BIN=caddy "${RENDER}" "${TMP_WORK}/Caddyfile.sub"
-grep -q 'path /s/alice/_dsh-token /_dsh-token' "${TMP_WORK}/Caddyfile.sub"
 grep -q 'handle_path /s/alice/dsh/\*' "${TMP_WORK}/Caddyfile.sub"
 grep -q 'Path=/s/alice/dsh/; Secure;' "${TMP_WORK}/Caddyfile.sub"
 
@@ -105,7 +104,7 @@ PATH="${STUB_BIN}:${PATH}" SANDBOX_APPS_DIR="${APPS_DIR}" SANDBOX_CADDY_CONFIG="
   SANDBOX_BASE_PATH="/s/alice" SANDBOX_PUBLIC_ORIGIN="https://hub.example.com" "${EXPOSE}" --list | grep -q '/s/alice/apps/web/'
 
 # Validation failure cases
-for bad_args in "--auth web 5173" "BadName 5173" "web abc" "web 8080" "web 3080" "web 2019" "web 3090" "web 70000" "web 5173 /"; do
+for bad_args in "--auth web 5173" "BadName 5173" "web abc" "web 8080" "web 3080" "web 2019" "web 70000" "web 5173 /"; do
   if PATH="${STUB_BIN}:${PATH}" SANDBOX_APPS_DIR="${APPS_DIR}" SANDBOX_CADDY_CONFIG="${TMP_WORK}/Caddyfile.sub" \
     "${EXPOSE}" ${bad_args} >/dev/null 2>&1; then
     echo "ERROR: sandbox-expose should reject: ${bad_args}" >&2; exit 1

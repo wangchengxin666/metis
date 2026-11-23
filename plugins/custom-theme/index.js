@@ -1,7 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
+  applyManagedBrandToState,
   buildDefaultThemeState,
   buildFirstPaintCss,
   isValidCssVarName,
@@ -11,6 +14,41 @@ import {
 } from './src/shared/presets.js'
 
 export const name = 'custom-theme'
+
+// Expose `managedBrand` as a top-level Volatile field when Schemastery is present
+// (DSH >= 0.2.3 automatically pushes Volatile Config fields to the browser via dsh-client-config).
+async function loadSchemastery() {
+  try {
+    const mod = await import('@deepseek-ai/schemastery')
+    return mod?.default || mod
+  } catch {}
+  const anchors = [
+    process.argv[1],
+    '/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json',
+    '/usr/local/lib/node_modules/@deepseek-ai/schemastery/package.json',
+  ].filter(Boolean)
+  for (const anchor of anchors) {
+    try {
+      const realAnchor = existsSync(anchor) ? realpathSync(anchor) : anchor
+      const req = createRequire(realAnchor)
+      const resolved = req.resolve('@deepseek-ai/schemastery')
+      const mod = await import(pathToFileURL(resolved).href)
+      return mod?.default || mod
+    } catch {}
+  }
+  return null
+}
+
+const _schemastery = await loadSchemastery()
+
+export const Config = _schemastery && typeof _schemastery.object === 'function'
+  ? _schemastery.object({
+      storagePath: _schemastery.string().default(''),
+      managedBrand: typeof _schemastery.any().volatile === 'function'
+        ? _schemastery.any().volatile()
+        : _schemastery.any(),
+    })
+  : undefined
 
 export const STATE_ENDPOINT = '/api/custom-theme.state'
 export const SAVE_ENDPOINT = '/api/custom-theme.save'
@@ -65,13 +103,18 @@ export function validateThemeInput(candidate) {
   return ''
 }
 
-export function createThemeStore(filePath) {
+export function createThemeStore(filePath, getManagedBrand = () => null) {
   let cachedState = null
   let cachedSig = ''
 
+  function defaultState() {
+    const managed = typeof getManagedBrand === 'function' ? getManagedBrand() : null
+    return applyManagedBrandToState(buildDefaultThemeState(), managed)
+  }
+
   function readFromDisk() {
     if (!existsSync(filePath)) {
-      cachedState = buildDefaultThemeState()
+      cachedState = defaultState()
       cachedSig = 'missing'
       return { state: cachedState, source: 'default' }
     }
@@ -86,7 +129,7 @@ export function createThemeStore(filePath) {
       cachedSig = sig
       return { state: cachedState, source: 'file' }
     } catch {
-      cachedState = buildDefaultThemeState()
+      cachedState = defaultState()
       cachedSig = 'fallback'
       return { state: cachedState, source: 'default' }
     }
@@ -124,7 +167,7 @@ export function createThemeStore(filePath) {
     if (existsSync(filePath)) {
       rmSync(filePath, { force: true })
     }
-    cachedState = buildDefaultThemeState()
+    cachedState = defaultState()
     cachedSig = 'missing'
     return { ok: true, state: cachedState }
   }
@@ -159,7 +202,12 @@ async function parseJsonRequest(request) {
 
 export function apply(ctx, config = {}) {
   const storagePath = resolveStoragePath(config)
-  const store = createThemeStore(storagePath)
+  const readManagedBrand = () => {
+    const raw = config?.managedBrand
+    if (raw && typeof raw.get === 'function') return raw.get()
+    return raw && typeof raw === 'object' ? raw : null
+  }
+  const store = createThemeStore(storagePath, readManagedBrand)
 
   const offInject = ctx.on('webserver/index-inject', (table) => {
     const { state } = store.getState()

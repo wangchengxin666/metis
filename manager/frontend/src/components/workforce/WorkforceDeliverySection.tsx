@@ -254,11 +254,14 @@ export function WorkforceScheduleCard({
           <div className="divide-y divide-zinc-800/70">
             {filteredJobs.slice(0, limit).map((job, idx) => (
               <div
-                key={`${job.command}-${idx}`}
+                key={`${job.id || job.command}-${idx}`}
                 className="py-3 flex items-center justify-between gap-3"
               >
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
+                    {job.source === 'dsh-schedule' && (
+                      <Badge variant="success">AI</Badge>
+                    )}
                     <Badge variant="warning" title={job.schedule}>
                       <Clock className="h-3 w-3" />
                       {formatScheduleHuman(job.schedule, locale)}
@@ -268,16 +271,18 @@ export function WorkforceScheduleCard({
                   </div>
                   <div className="font-mono text-xs text-zinc-300 truncate">{job.command}</div>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="text-rose-400 hover:text-rose-300 shrink-0"
-                  title={t('dialog.workforce.removeBtn')}
-                  onClick={() => handleRemoveCron(job.raw || `${job.schedule} ${job.command}`)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                {job.source !== 'dsh-schedule' && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-rose-400 hover:text-rose-300 shrink-0"
+                    title={t('dialog.workforce.removeBtn')}
+                    onClick={() => handleRemoveCron(job.raw || `${job.schedule} ${job.command}`)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
             ))}
           </div>

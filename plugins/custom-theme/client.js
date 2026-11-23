@@ -224,6 +224,43 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function applyManagedBrandToState(baseState, managedBrand) {
+      const next = normalizeThemeState(baseState || buildDefaultThemeState())
+      if (!managedBrand || typeof managedBrand !== 'object') {
+        return next
+      }
+      const primary = sanitizeCssValue(managedBrand.primary)
+      const accent = sanitizeCssValue(managedBrand.accent)
+      if (primary) {
+        next.tokens['--dsw-alias-brand-primary'] = {
+          light: primary,
+          dark: accent || primary,
+        }
+        next.tokens['--dsw-alias-state-business-primary'] = {
+          light: primary,
+          dark: accent || primary,
+        }
+      }
+      if (accent || primary) {
+        next.tokens['--dsw-alias-link'] = {
+          light: primary || accent,
+          dark: accent || primary,
+        }
+      }
+      const brandTitle = typeof managedBrand.brandTitle === 'string'
+        ? managedBrand.brandTitle.trim().slice(0, 48)
+        : ''
+      const brandLogoSvg = sanitizeBrandSvg(managedBrand.brandLogoSvg)
+      if (brandTitle || brandLogoSvg) {
+        next.brand = {
+          enabled: true,
+          name: brandTitle,
+          iconSvg: brandLogoSvg,
+        }
+      }
+      return next
+    }
+
     function normalizeThemeState(input) {
       const defaults = buildDefaultThemeState()
       if (!input || typeof input !== 'object') {
@@ -1067,6 +1104,8 @@ window.__ModuleLoader__.load({
     }) {
       const H = React.createElement
       let state = resolveInitialThemeState(globalObj)
+      let stateSource = 'default'
+      let latestManagedBrand = null
       let colorPreference = themeSvc?.getTheme?.()?.preference || 'system'
       let activeScheme = themeSvc?.getTheme?.()?.active?.colorScheme || 'light'
       let statusKind = 'idle'
@@ -1174,12 +1213,25 @@ window.__ModuleLoader__.load({
           })
           if (!res.ok || disposed) return
           const data = await res.json()
+          if (data?.source === 'file' || data?.source === 'default') {
+            stateSource = data.source
+          }
           if (data?.state && !disposed) {
-            applyStateLocally(data.state)
+            const next = stateSource === 'default' && latestManagedBrand
+              ? applyManagedBrandToState(data.state, latestManagedBrand)
+              : data.state
+            applyStateLocally(next)
           }
         } catch {
           // Keep boot/cached theme cleanly if Host is temporarily unreachable.
         }
+      }
+
+      function applyManagedBrand(managedBrand) {
+        latestManagedBrand = managedBrand && typeof managedBrand === 'object' ? managedBrand : null
+        if (disposed || stateSource === 'file' || !latestManagedBrand) return
+        const next = applyManagedBrandToState(buildDefaultThemeState(), latestManagedBrand)
+        applyStateLocally(next, { persistCache: false })
       }
 
       async function saveState(candidateState = state, { statusOverrideKey = 'statusSaved' } = {}) {
@@ -1188,6 +1240,7 @@ window.__ModuleLoader__.load({
           saveTimer = null
         }
         const normalized = normalizeThemeState(candidateState)
+        stateSource = 'file'
         applyStateLocally(normalized)
         statusKind = 'saving'
         statusKey = 'statusSaving'
@@ -1219,6 +1272,7 @@ window.__ModuleLoader__.load({
             return { ok: false, error: errorText }
           }
           if (payload?.state) {
+            stateSource = 'file'
             applyStateLocally(payload.state)
           }
           statusKind = 'saved'
@@ -1287,6 +1341,8 @@ window.__ModuleLoader__.load({
             notify()
             return { ok: false, error: errorText }
           }
+          if (mode === 'default') stateSource = 'default'
+          else stateSource = 'file'
           applyStateLocally(payload.state)
           statusKind = 'saved'
           statusKey = 'statusReset'
@@ -1357,6 +1413,7 @@ window.__ModuleLoader__.load({
           return () => { listeners.delete(listener) }
         },
         syncFromHost,
+        applyManagedBrand,
         applyPreview: (next) => applyStateLocally(next),
         scheduleSave,
         saveState,
@@ -2155,7 +2212,7 @@ window.__ModuleLoader__.load({
       return undefined
     }
 
-    function apply(ctx) {
+    function apply(ctx, syncedConfig = {}) {
       ctx.effect(() => installStyles(), 'custom-theme: styles')
 
       const subscribeLocale = (listener) => {
@@ -2174,6 +2231,17 @@ window.__ModuleLoader__.load({
         slotsSvc: ctx.slots,
       })
       ctx.effect(() => () => { controller.dispose() }, 'custom-theme: controller lifecycle')
+
+      // Live Volatile brand theme sync via DSH 0.2.3+ dsh-client-config
+      const managedBrandRef = syncedConfig?.managedBrand
+      if (managedBrandRef && typeof managedBrandRef.get === 'function') {
+        const pushManaged = () => controller.applyManagedBrand(managedBrandRef.get())
+        pushManaged()
+        if (typeof managedBrandRef.subscribe === 'function') {
+          const offBrand = managedBrandRef.subscribe(() => pushManaged())
+          ctx.effect(() => offBrand, 'custom-theme: volatile managedBrand listener')
+        }
+      }
 
       if (typeof ctx.on === 'function') {
         const offTheme = ctx.on('theme/change', (snapshot) => controller.handleThemeChange(snapshot))

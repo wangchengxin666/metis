@@ -109,15 +109,21 @@ window.__ModuleLoader__.load({
       openAppBtn: 'Open',
       unexposeBtn: 'Remove',
 
+      // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
+      composerHintDefault: 'Describe a task, set up a scheduled routine, or ask to publish an online deliverable…',
+      composerHintRole: 'Ask {role} to run a task, schedule a routine, or publish a deliverable…',
+
       // AI Usage & Shared Files
       finopsTitle: 'AI Usage & Shared Team Files',
-      estimatedTokens: 'Estimated usage: {tokens} tokens ({sessions} files · {messages} team messages)',
+      estimatedTokens: 'Usage: {tokens} tokens ({sessions} sessions · {messages} messages)',
       sharedFilesTitle: 'Shared Team Files (/home/workspace/shared)',
       sharedFilesEmpty: 'No shared project files yet.',
 
       // Scheduled Routines
       cronTitle: 'Scheduled Routines',
       cronEmpty: 'No scheduled routines yet. Simply ask the AI in chat, e.g. "Run my daily report every weekday at 9 AM".',
+      scheduleSourceDsh: 'AI Schedule',
+      scheduleSourceCron: 'System Cron',
       removeBtn: 'Remove',
 
       // Team & Services
@@ -200,15 +206,21 @@ window.__ModuleLoader__.load({
       openAppBtn: '打开查看',
       unexposeBtn: '下线',
 
+      // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
+      composerHintDefault: '直接交代工作目标，或让我创建定时事务、发布在线成果页面与待审批任务…',
+      composerHintRole: '向「{role}」派发任务、创建定时事务或发布在线成果页面…',
+
       // AI Usage & Shared Files
       finopsTitle: 'AI 用量统计与团队共享文件',
-      estimatedTokens: '累计估算用量：{tokens} Tokens（{sessions} 个记录文件 · {messages} 条协同消息）',
+      estimatedTokens: '累计用量：{tokens} Tokens（{sessions} 个会话 · {messages} 条消息）',
       sharedFilesTitle: '团队共享文件（/home/workspace/shared）',
       sharedFilesEmpty: '暂无共享项目文件。',
 
       // Scheduled Routines
       cronTitle: '定时事务与值守计划',
       cronEmpty: '暂未设置定时事务。直接在 AI 对话中说「每个工作日 9 点帮我跑一份日报」即可自动配置。',
+      scheduleSourceDsh: 'AI 定时任务',
+      scheduleSourceCron: '系统 Cron',
       removeBtn: '移除',
 
       // Team & Services
@@ -1278,15 +1290,6 @@ window.__ModuleLoader__.load({
       return t('statusOpen')
     }
 
-    function copyPromptText(text) {
-      try {
-        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-          return navigator.clipboard.writeText(text).then(() => true).catch(() => false)
-        }
-      } catch {}
-      return Promise.resolve(false)
-    }
-
     function createWorkDeliveryPage({ React, controller, getLocale, subscribeLocale }) {
       const h = React.createElement
 
@@ -1300,7 +1303,6 @@ window.__ModuleLoader__.load({
         const [appLimit, setAppLimit] = React.useState(PAGE_SIZE)
         const [cronLimit, setCronLimit] = React.useState(PAGE_SIZE)
         const [fileLimit, setFileLimit] = React.useState(12)
-        const [copiedNote, setCopiedNote] = React.useState('')
 
         // Service logs inspection state
         const [logSvc, setLogSvc] = React.useState('')
@@ -1338,7 +1340,7 @@ window.__ModuleLoader__.load({
         const peers = state.peers || []
 
         const filteredApps = allApps.filter((a) => matchText(a.name, a.mount_path, a.target))
-        const filteredCrons = allCrons.filter((j) => matchText(j.schedule, formatScheduleHuman(j.schedule, lang), j.command))
+        const filteredCrons = allCrons.filter((j) => matchText(j.name, j.schedule, formatScheduleHuman(j.schedule, lang), j.command))
         const filteredServices = allServices.filter((sv) => matchText(sv.name, sv.command, sv.status))
         const filteredFiles = allFiles.filter((f) => matchText(f.name))
         const filteredTasks = allTasks.filter((tk) => {
@@ -1348,15 +1350,6 @@ window.__ModuleLoader__.load({
           if (taskFilter === 'approval') return Boolean(tk.approval_required && tk.approval_status === 'pending')
           return true
         })
-
-        const handleCopyPrompt = (text) => {
-          void copyPromptText(text).then((ok) => {
-            if (ok) {
-              setCopiedNote(t('copiedHint'))
-              setTimeout(() => setCopiedNote(''), 2600)
-            }
-          })
-        }
 
         const handleToggleLogs = async (name) => {
           if (logSvc === name) {
@@ -1488,23 +1481,6 @@ window.__ModuleLoader__.load({
                     })
                   : null,
               ),
-
-              // LLM-First Prompt Chips — shown ONLY when empty so populated views stay ultra-clean
-              (allApps.length === 0 && allTasks.length === 0 && allCrons.length === 0)
-                ? h(
-                    'div',
-                    { className: 'wd-prompt-bar' },
-                    h('span', null, t('chatHintPrefix')),
-                    [t('promptExamplePage'), t('promptExampleCron'), t('promptExampleTask')].map((ex) =>
-                      h(
-                        'button',
-                        { key: ex, type: 'button', className: 'wd-prompt-chip', onClick: () => handleCopyPrompt(ex) },
-                        `“${ex}”`,
-                      ),
-                    ),
-                    copiedNote ? h('span', { className: 'wd-badge wd-badge-ok' }, copiedNote) : null,
-                  )
-                : null,
 
               // TAB 1: Work & Deliverables (Read-Only + Approvals + Open + Pagination)
               activeTab === 'work'
@@ -1771,29 +1747,41 @@ window.__ModuleLoader__.load({
                             filteredCrons.slice(0, cronLimit).map((job, idx) =>
                               h(
                                 'div',
-                                { key: `${job.raw}-${idx}`, className: 'wd-item' },
+                                { key: `${job.id || job.raw}-${idx}`, className: 'wd-item' },
                                 h(
                                   'div',
                                   { className: 'wd-item-col' },
                                   h(
                                     'div',
                                     { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' } },
+                                    h(
+                                      'span',
+                                      {
+                                        className: job.source === 'dsh-schedule' ? 'wd-badge wd-badge-ok' : 'wd-badge',
+                                      },
+                                      job.source === 'dsh-schedule' ? t('scheduleSourceDsh') : t('scheduleSourceCron'),
+                                    ),
+                                    job.name
+                                      ? h('span', { className: 'wd-item-title' }, job.name)
+                                      : null,
                                     h('span', { className: 'wd-badge wd-badge-warn', title: job.schedule }, formatScheduleHuman(job.schedule, lang)),
                                     h('span', { className: 'wd-mono' }, job.schedule),
                                   ),
                                   h('span', { className: 'wd-mono', style: { fontSize: '13px' } }, job.command),
                                 ),
-                                h(
-                                  'button',
-                                  {
-                                    type: 'button',
-                                    className: 'wd-btn wd-btn-sm wd-btn-danger',
-                                    title: t('removeBtn'),
-                                    disabled: busy,
-                                    onClick: () => void controller.removeCronJob({ raw: job.raw || `${job.schedule} ${job.command}` }),
-                                  },
-                                  h(TrashIcon, { React, size: 13 }),
-                                ),
+                                job.source === 'dsh-schedule'
+                                  ? null
+                                  : h(
+                                      'button',
+                                      {
+                                        type: 'button',
+                                        className: 'wd-btn wd-btn-sm wd-btn-danger',
+                                        title: t('removeBtn'),
+                                        disabled: busy,
+                                        onClick: () => void controller.removeCronJob({ raw: job.raw || `${job.schedule} ${job.command}` }),
+                                      },
+                                      h(TrashIcon, { React, size: 13 }),
+                                    ),
                               ),
                             ),
                           ),
@@ -2003,6 +1991,30 @@ window.__ModuleLoader__.load({
             locale: 'workDelivery',
           },
           WorkDeliveryMainPage,
+        ),
+      )
+
+      // Empty-composer inline hint via DSH 0.2.3+ conversation.input.placeholder chain slot
+      function ComposerInlineHint() {
+        const [loc, setLoc] = React.useState(() => readActiveLocale(ctx.locale))
+        const [role, setRole] = React.useState(() => controller.getSnapshot()?.data?.role || '')
+        React.useEffect(() => subscribeLocale((next) => setLoc(next)), [])
+        React.useEffect(
+          () => controller.subscribe(() => setRole(controller.getSnapshot()?.data?.role || '')),
+          [],
+        )
+        const t = createTranslator(loc)
+        return role ? t('composerHintRole', { role }) : t('composerHintDefault')
+      }
+
+      ctx.slots.inject('conversation.input.placeholder', () =>
+        ctx.slots.register(
+          {
+            name: 'conversation.input.placeholder',
+            priority: 50,
+            select: ({ sessionId }) => (sessionId ? { sessionId } : null),
+          },
+          ComposerInlineHint,
         ),
       )
     }

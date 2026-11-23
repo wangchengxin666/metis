@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
       return undefined
     }
 
-    function apply(ctx) {
+    function apply(ctx, syncedConfig = {}) {
       ctx.effect(() => installStyles(), 'custom-theme: styles')
 
       const subscribeLocale = (listener) => {
@@ -31,6 +31,17 @@ window.__ModuleLoader__.load({
         slotsSvc: ctx.slots,
       })
       ctx.effect(() => () => { controller.dispose() }, 'custom-theme: controller lifecycle')
+
+      // Live Volatile brand theme sync via DSH 0.2.3+ dsh-client-config
+      const managedBrandRef = syncedConfig?.managedBrand
+      if (managedBrandRef && typeof managedBrandRef.get === 'function') {
+        const pushManaged = () => controller.applyManagedBrand(managedBrandRef.get())
+        pushManaged()
+        if (typeof managedBrandRef.subscribe === 'function') {
+          const offBrand = managedBrandRef.subscribe(() => pushManaged())
+          ctx.effect(() => offBrand, 'custom-theme: volatile managedBrand listener')
+        }
+      }
 
       if (typeof ctx.on === 'function') {
         const offTheme = ctx.on('theme/change', (snapshot) => controller.handleThemeChange(snapshot))

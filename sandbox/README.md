@@ -34,7 +34,6 @@ Traefik / (:8080) ─▶│ Caddy                                      │
                     │                                            │
                     │ supervisor                                 │
                     │ ├── caddy                                  │
-                    │ ├── dsh-token                              │
                     │ ├── dsh            (user: workspace)       │
                     │ └── user-services  (user: workspace)       │
                     └────────────────────────────────────────────┘
@@ -59,7 +58,7 @@ make up
 http://<host>:8080/
 ```
 
-首页会跳转到 `/dsh/`。首次打开时，token 由容器内 `dsh-token` helper 自动附加（或独立运行时由 `make up` / `make token` 输出）。
+首页会跳转到 `/dsh/`。托管模式下，Traefik ForwardAuth 签发 `X-Metis-Gateway-Auth` HMAC 请求头，DSH 内的 `@metis/gateway-auth` 校验通过后直接放行（无需 token 重定向）；独立调试模式下可使用 `make token` 查看 DSH launch token。
 
 手动运行：
 
@@ -75,8 +74,7 @@ docker run -d --name dsh-sandbox -p 18086:8080 \
 | 路径 | 行为 |
 | --- | --- |
 | `/` | 302 到 `/dsh/` |
-| `/dsh/*` | **Traefik ForwardAuth（Owner / Admin）+ DSH Launch Token** |
-| `/_dsh-token` | 同 DSH 门禁，通过后自动交换 token |
+| `/dsh/*` | **Traefik ForwardAuth（Owner / Admin）+ `@metis/gateway-auth` HMAC 校验** |
 | `/apps/<name>/` | 公开；服务自己实现鉴权 |
 | `/p/<port>/` | 公开；临时端口转发 |
 | `/healthz` | 公开健康检查 |
@@ -102,7 +100,7 @@ docker run -d --name dsh-sandbox -p 18086:8080 \
 - `ca-bundle.crt` 是公开 CA 证书集合（184 张），**不含私钥**；提交到内网仓库是安全的。
   如果安全策略不允许内部 CA 名称进入代码库，可在构建时从外部挂载或替换该文件。
 - 不要把 `.env` 提交到仓库；它已在 `.gitignore` 中。
-- 不要把 Caddy admin、DSH、token helper 的内部端口通过 `/p/` 暴露。
+- 不要把 Caddy admin 或 DSH 的内部端口通过 `/p/` 暴露。
 
 ## 目录
 
@@ -114,7 +112,7 @@ docker run -d --name dsh-sandbox -p 18086:8080 \
 ├── .env.example              # 构建参数与单容器调试环境变量模板
 ├── docs/                     # 架构、构建、服务、OIDC、安全与排查文档
 ├── toolchain/                # 模块化工具链安装框架 (install.sh + toolchain.d/*.sh)
-├── tests/                    # dsh-token (Node) 与容器脚本测试 (Bash + Caddy)
+├── tests/                    # gateway-auth (Node) 与容器脚本测试 (Bash + Caddy)
 ├── ca-bundle.crt
 └── rootfs/                   # entrypoint、Caddy、supervisor、skill、helper
 ```

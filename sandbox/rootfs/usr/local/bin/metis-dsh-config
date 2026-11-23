@@ -1,0 +1,363 @@
+#!/usr/bin/env node
+/**
+ * Unified Metis -> DSH runtime configuration helper.
+ *
+ * Keeps profiles/web/cordis.patch.yml, profiles/web/.npmrc,
+ * profiles/web/package.json, and $DSH_HOME/.credentials.yaml cleanly updated
+ * using YAML 1.2 + atomic rename so DSH 0.2.3+ dsh-hmr and dsh-credentials-local
+ * hot-reload changes without restarting the DSH process.
+ *
+ * Subcommands:
+ *   metis-dsh-config sync-market
+ *   metis-dsh-config sync-llm [--boot-only]
+ *   metis-dsh-config sync-theme
+ */
+'use strict'
+
+const fs = require('node:fs')
+const path = require('node:path')
+
+const HOME_DIR = process.env.HOME || '/home/workspace'
+const DSH_HOME = process.env.DSH_HOME || path.join(HOME_DIR, '.dsh')
+const SANDBOX_DIR = path.join(HOME_DIR, '.dsh-sandbox')
+const PROFILE_DIR = process.env.DSH_PROFILE_DIR || path.join(DSH_HOME, 'profiles', 'web')
+const PATCH_PATH = path.join(PROFILE_DIR, 'cordis.patch.yml')
+const PKG_PATH = path.join(PROFILE_DIR, 'package.json')
+const NPMRC_PATH = path.join(PROFILE_DIR, '.npmrc')
+const CRED_PATH = path.join(DSH_HOME, '.credentials.yaml')
+const VALID_EFFORTS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+function loadYaml() {
+  const candidates = [
+    process.env.METIS_YAML_MODULE,
+    '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml',
+    '/usr/local/lib/node_modules/yaml',
+    'yaml',
+  ].filter(Boolean)
+  for (const candidate of candidates) {
+    try {
+      return require(candidate)
+    } catch {}
+  }
+  throw new Error('yaml package not found')
+}
+
+function atomicWrite(filePath, content, mode) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`
+  fs.writeFileSync(tmp, content, mode ? { encoding: 'utf8', mode } : 'utf8')
+  if (mode) {
+    try { fs.chmodSync(tmp, mode) } catch {}
+  }
+  fs.renameSync(tmp, filePath)
+  if (mode) {
+    try { fs.chmodSync(filePath, mode) } catch {}
+  }
+}
+
+function readPatchEntries(yaml) {
+  if (!fs.existsSync(PATCH_PATH)) return []
+  const raw = fs.readFileSync(PATCH_PATH, 'utf8')
+  const parsed = yaml.parse(raw)
+  return Array.isArray(parsed) ? parsed : []
+}
+
+function writePatchEntries(yaml, entries) {
+  atomicWrite(PATCH_PATH, yaml.stringify(entries))
+}
+
+function readFirstLine(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return ''
+    return fs.readFileSync(filePath, 'utf8').split(/\r?\n/)[0].trim()
+  } catch {
+    return ''
+  }
+}
+
+function syncMarket() {
+  const yaml = loadYaml()
+  const indexUrl = (
+    process.env.INDEX_URL ||
+    process.env.DSH_PLUGIN_INDEX_URL ||
+    readFirstLine(path.join(SANDBOX_DIR, 'plugin-index-url.txt'))
+  ).trim()
+
+  let npmRegistry = (
+    process.env.NPM_REGISTRY ||
+    process.env.DSH_PLUGIN_NPM_REGISTRY ||
+    readFirstLine(path.join(SANDBOX_DIR, 'plugin-npm-registry.txt'))
+  ).trim()
+  if (!npmRegistry && indexUrl.endsWith('/index.json')) {
+    npmRegistry = `${indexUrl.slice(0, -'/index.json'.length)}/npm`
+  }
+
+  let extraRaw = process.env.EXTRA_INDEXES || process.env.DSH_EXTRA_PLUGIN_INDEX_URLS || ''
+  if (!extraRaw) {
+    try {
+      const f = path.join(SANDBOX_DIR, 'plugin-extra-indexes.json')
+      if (fs.existsSync(f)) extraRaw = fs.readFileSync(f, 'utf8')
+    } catch {}
+  }
+  let extraIndexes = []
+  if (extraRaw.trim()) {
+    try {
+      const parsed = JSON.parse(extraRaw)
+      if (Array.isArray(parsed)) {
+        extraIndexes = parsed.map((x) => String(x || '').trim()).filter(Boolean)
+      }
+    } catch {}
+  }
+
+  const desiredIndexes = []
+  for (const u of [indexUrl, ...extraIndexes]) {
+    if (u && !desiredIndexes.includes(u)) desiredIndexes.push(u)
+  }
+
+  try { fs.rmSync(path.join(HOME_DIR, '.cache', 'pnpm'), { recursive: true, force: true }) } catch {}
+  fs.mkdirSync(SANDBOX_DIR, { recursive: true })
+  if (indexUrl) atomicWrite(path.join(SANDBOX_DIR, 'plugin-index-url.txt'), `${indexUrl}\n`)
+  atomicWrite(path.join(SANDBOX_DIR, 'plugin-extra-indexes.json'), `${JSON.stringify(extraIndexes)}\n`)
+  if (npmRegistry) atomicWrite(path.join(SANDBOX_DIR, 'plugin-npm-registry.txt'), `${npmRegistry}\n`)
+
+  if (npmRegistry) {
+    fs.mkdirSync(PROFILE_DIR, { recursive: true })
+    const existing = fs.existsSync(NPMRC_PATH) ? fs.readFileSync(NPMRC_PATH, 'utf8') : ''
+    const lines = existing
+      .split(/\r?\n/)
+      .filter((l) => l.trim() !== '' && !/^registry\s*=/.test(l.trim()))
+    lines.unshift(`registry=${npmRegistry}`)
+    atomicWrite(NPMRC_PATH, `${lines.join('\n')}\n`)
+  }
+
+  let installedDeps = []
+  if (fs.existsSync(PKG_PATH)) {
+    const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'))
+    installedDeps = Object.keys(pkg.dependencies || {})
+    if (desiredIndexes.length > 0) {
+      pkg.dsh = pkg.dsh || {}
+      pkg.dsh.profile = pkg.dsh.profile || {}
+      pkg.dsh.profile.bundles = Array.isArray(pkg.dsh.profile.bundles) ? pkg.dsh.profile.bundles : []
+      const bundle = '@deepseek-ai/dsh-experimental-plugin-market-bundle'
+      if (!pkg.dsh.profile.bundles.includes(bundle)) {
+        pkg.dsh.profile.bundles.push(bundle)
+        atomicWrite(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
+      }
+    }
+  }
+
+  if (desiredIndexes.length > 0 && fs.existsSync(PROFILE_DIR)) {
+    const entries = readPatchEntries(yaml)
+    let entry = entries.find((x) => x && typeof x === 'object' && x.id === 'plugin-market')
+    if (!entry) {
+      entry = { id: 'plugin-market', name: '@deepseek-ai/dsh-plugin-market', config: { indexes: [] } }
+      entries.push(entry)
+    }
+    if (!entry.name) entry.name = '@deepseek-ai/dsh-plugin-market'
+    if (!entry.config || typeof entry.config !== 'object') entry.config = {}
+    entry.config.indexes = desiredIndexes
+    writePatchEntries(yaml, entries)
+  }
+
+  console.log(`INSTALLED_DEPS=${JSON.stringify(installedDeps)}`)
+}
+
+function buildModelEntry(cfg) {
+  const entry = {
+    id: cfg.model,
+    name: cfg.model,
+    input: cfg.supportsImage ? ['text', 'image'] : ['text'],
+  }
+  const ctxWin = Number(cfg.contextWindow)
+  if (Number.isFinite(ctxWin) && ctxWin >= 1024) entry.contextWindow = Math.floor(ctxWin)
+  const maxTok = Number(cfg.maxTokens)
+  if (Number.isFinite(maxTok) && maxTok >= 128) entry.maxTokens = Math.floor(maxTok)
+  if (cfg.reasoningEffort === 'off') {
+    entry.reasoningEfforts = false
+  } else if (VALID_EFFORTS.has(cfg.reasoningEffort)) {
+    entry.reasoningEfforts = {
+      off: null,
+      minimal: 'minimal',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: 'max',
+    }
+  }
+  return entry
+}
+
+function syncLlm(bootOnly) {
+  const yaml = loadYaml()
+  fs.mkdirSync(PROFILE_DIR, { recursive: true })
+  const entries = readPatchEntries(yaml)
+
+  if (bootOnly) {
+    const provider = (process.env.DSH_DEFAULT_LLM_PROVIDER || '').trim()
+    const model = (process.env.DSH_DEFAULT_LLM_MODEL || '').trim()
+    const baseUrl = (process.env.DSH_DEFAULT_LLM_BASE_URL || '').trim()
+    const api = (process.env.DSH_DEFAULT_LLM_API || 'openai-completions').trim()
+    const displayName = (process.env.DSH_DEFAULT_LLM_DISPLAY_NAME || '').trim()
+    const contextWindow = Number.parseInt(process.env.DSH_DEFAULT_LLM_CONTEXT_WINDOW || '', 10)
+    const maxTokens = Number.parseInt(process.env.DSH_DEFAULT_LLM_MAX_TOKENS || '', 10)
+    const supportsImage = (process.env.DSH_DEFAULT_LLM_SUPPORTS_IMAGE || '').trim().toLowerCase() === 'true'
+    const reasoningEffort = (process.env.DSH_DEFAULT_LLM_REASONING_EFFORT || '').trim().toLowerCase()
+    const thinkingFormat = (process.env.DSH_DEFAULT_LLM_THINKING_FORMAT || '').trim()
+
+    let changed = false
+    if (!entries.some((e) => e && typeof e === 'object' && e.id === 'agent-default-model')) {
+      const cfg = { provider, model }
+      if (VALID_EFFORTS.has(reasoningEffort) && reasoningEffort !== 'off') {
+        cfg.reasoningEffort = reasoningEffort
+      }
+      entries.unshift({ id: 'agent-default-model', config: cfg })
+      changed = true
+    }
+
+    if (provider && baseUrl && model && !entries.some((e) => e && typeof e === 'object' && e.id === 'llm-pi-ai')) {
+      const providerObj = {
+        api,
+        baseURL: baseUrl,
+        ...(displayName ? { displayName } : {}),
+        apiKeyEnv: 'DSH_DEFAULT_LLM_API_KEY',
+        ...(VALID_EFFORTS.has(reasoningEffort) ? { reasoning: reasoningEffort } : {}),
+        ...(thinkingFormat && api === 'openai-completions' ? { compat: { thinkingFormat } } : {}),
+        models: [buildModelEntry({ model, supportsImage, contextWindow, maxTokens, reasoningEffort })],
+      }
+      entries.push({
+        id: 'llm-pi-ai',
+        name: '@deepseek-ai/dsh-llm-pi-ai',
+        config: { providers: { [provider]: providerObj } },
+      })
+      changed = true
+    }
+
+    if (changed) writePatchEntries(yaml, entries)
+    return
+  }
+
+  const cfg = JSON.parse(process.env.LLM_PUSH_PAYLOAD || '{}')
+  let piAiEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'llm-pi-ai')
+  if (!piAiEntry) {
+    piAiEntry = { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: {} } }
+    entries.push(piAiEntry)
+  }
+  if (!piAiEntry.name) piAiEntry.name = '@deepseek-ai/dsh-llm-pi-ai'
+  if (!piAiEntry.config || typeof piAiEntry.config !== 'object') piAiEntry.config = {}
+  if (!piAiEntry.config.providers || typeof piAiEntry.config.providers !== 'object') {
+    piAiEntry.config.providers = {}
+  }
+  const providers = piAiEntry.config.providers
+
+  let removedLegacyDefault = false
+  const removedRefs = []
+  const legacyBoot = providers['openai-compatible']
+  if (legacyBoot && typeof legacyBoot === 'object' && legacyBoot.apiKeyEnv === 'DSH_DEFAULT_LLM_API_KEY') {
+    if (cfg.replaceManaged || legacyBoot.displayName === cfg.displayName || legacyBoot.baseURL === cfg.baseUrl) {
+      delete providers['openai-compatible']
+      removedLegacyDefault = true
+    }
+  }
+  if (cfg.replaceManaged) {
+    for (const key of Object.keys(providers)) {
+      if (key.startsWith('mgr-') && key !== cfg.providerKey) {
+        const ref = providers[key] && providers[key].apiKeyEnv
+        if (typeof ref === 'string' && ref.startsWith('DSH_LLM_MGR_')) removedRefs.push(ref)
+        delete providers[key]
+      }
+    }
+  }
+
+  const api = cfg.apiProtocol || 'openai-completions'
+  const providerObj = {
+    api,
+    baseURL: cfg.baseUrl,
+    displayName: cfg.displayName,
+    apiKeyEnv: cfg.credRef,
+    ...(VALID_EFFORTS.has(cfg.reasoningEffort) ? { reasoning: cfg.reasoningEffort } : {}),
+    ...(cfg.thinkingFormat && api === 'openai-completions'
+      ? { compat: { thinkingFormat: cfg.thinkingFormat } }
+      : {}),
+    models: [buildModelEntry(cfg)],
+  }
+  providers[cfg.providerKey] = providerObj
+
+  let defaultEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'agent-default-model')
+  const shouldUpdateDefault =
+    Boolean(cfg.setAsDefault) ||
+    (removedLegacyDefault && defaultEntry && defaultEntry.config && defaultEntry.config.provider === 'openai-compatible')
+  if (shouldUpdateDefault) {
+    const defaultConfig = { provider: cfg.providerKey, model: cfg.model }
+    if (VALID_EFFORTS.has(cfg.reasoningEffort) && cfg.reasoningEffort !== 'off') {
+      defaultConfig.reasoningEffort = cfg.reasoningEffort
+    }
+    if (!defaultEntry) {
+      entries.unshift({ id: 'agent-default-model', config: defaultConfig })
+    } else {
+      defaultEntry.config = defaultConfig
+    }
+  }
+
+  // Write credentials FIRST (dsh-credentials-local watches .credentials.yaml with 100ms debounce)
+  let credDoc = { version: 1, refs: {} }
+  if (fs.existsSync(CRED_PATH)) {
+    const parsedCred = yaml.parse(fs.readFileSync(CRED_PATH, 'utf8'))
+    if (parsedCred && typeof parsedCred === 'object' && !Array.isArray(parsedCred)) {
+      credDoc = parsedCred
+    }
+  }
+  credDoc.version = 1
+  if (!credDoc.refs || typeof credDoc.refs !== 'object' || Array.isArray(credDoc.refs)) {
+    credDoc.refs = {}
+  }
+  for (const oldRef of removedRefs) delete credDoc.refs[oldRef]
+  credDoc.refs[cfg.credRef] = cfg.apiKey || 'local-no-key'
+  atomicWrite(CRED_PATH, yaml.stringify(credDoc), 0o600)
+
+  writePatchEntries(yaml, entries)
+  console.log(`LLM_SYNC_OK:${cfg.providerKey}:${cfg.model}`)
+}
+
+function syncTheme() {
+  const yaml = loadYaml()
+  const raw = process.env.METIS_BRAND_THEME_JSON || ''
+  if (!raw.trim()) return
+  const managedBrand = JSON.parse(raw)
+  fs.mkdirSync(PROFILE_DIR, { recursive: true })
+  const entries = readPatchEntries(yaml)
+  let entry = entries.find((e) => e && typeof e === 'object' && e.id === 'custom-theme')
+  if (!entry) {
+    let installed = false
+    if (fs.existsSync(PKG_PATH)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'))
+        installed = Boolean(pkg?.dependencies && ('@metis/custom-theme' in pkg.dependencies))
+      } catch {}
+    } else {
+      installed = true
+    }
+    if (!installed) {
+      console.log('THEME_SYNC_SKIPPED:not_installed')
+      return
+    }
+    entry = { id: 'custom-theme', config: {} }
+    entries.push(entry)
+  }
+  if (!entry.config || typeof entry.config !== 'object') entry.config = {}
+  entry.config.managedBrand = managedBrand
+  writePatchEntries(yaml, entries)
+  console.log('THEME_SYNC_OK')
+}
+
+const [cmd, flag] = process.argv.slice(2)
+if (cmd === 'sync-market') {
+  syncMarket()
+} else if (cmd === 'sync-llm') {
+  syncLlm(flag === '--boot-only')
+} else if (cmd === 'sync-theme') {
+  syncTheme()
+} else {
+  console.error('Usage: metis-dsh-config <sync-market|sync-llm [--boot-only]|sync-theme>')
+  process.exit(1)
+}

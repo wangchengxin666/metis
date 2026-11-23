@@ -145,7 +145,6 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
         return ",".join(resolved)
 
     def environment(self, sandbox: Sandbox) -> dict[str, str]:
-        suffix = sandbox.slug.replace("-", "_")
         manager_url = self.settings.sandbox_reachable_manager_url
         base_path = f"/s/{sandbox.slug}"
         dsh_mount = f"{base_path}/dsh"
@@ -174,7 +173,6 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
             "DSH_MOUNT": dsh_mount,
             "DSH_PUBLIC_URL": dsh_public_url,
             "DSH_TRUSTED_HOSTS": trusted_hosts,
-            "DSH_TOKEN_COOKIE_NAME": f"dsh_token_seen_{suffix}",
             "METIS_GATEWAY_AUTH_SECRET": derive_sandbox_gateway_secret(
                 sandbox.id, sandbox.slug
             ),
@@ -191,6 +189,10 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
                 [str(u) for u in extra_indexes if str(u).strip()],
                 ensure_ascii=False,
             )
+
+        brand_payload = getattr(sandbox, "_brand_theme_payload", None)
+        if isinstance(brand_payload, dict) and brand_payload:
+            env["METIS_BRAND_THEME_JSON"] = json.dumps(brand_payload, ensure_ascii=False)
 
         if self.settings.gateway_internal_url and self.settings.gateway_internal_url.strip():
             env["DSH_GATEWAY_INTERNAL_URL"] = self.settings.gateway_internal_url.strip().rstrip("/")

@@ -20,7 +20,6 @@ def sandbox_traefik_dsh_rule(slug: str) -> str:
     return (
         f"Path(`/s/{slug}`) || "
         f"Path(`/s/{slug}/`) || "
-        f"Path(`/s/{slug}/_dsh-token`) || "
         f"Path(`/s/{slug}/dsh`) || "
         f"PathPrefix(`/s/{slug}/dsh/`)"
     )

@@ -1,4 +1,5 @@
 import {
+  applyManagedBrandToState,
   buildDefaultThemeState,
   compileTokenOverrides,
   normalizeThemeState,
@@ -50,6 +51,8 @@ export function createThemeController({
 }) {
   const H = React.createElement
   let state = resolveInitialThemeState(globalObj)
+  let stateSource = 'default'
+  let latestManagedBrand = null
   let colorPreference = themeSvc?.getTheme?.()?.preference || 'system'
   let activeScheme = themeSvc?.getTheme?.()?.active?.colorScheme || 'light'
   let statusKind = 'idle'
@@ -157,12 +160,25 @@ export function createThemeController({
       })
       if (!res.ok || disposed) return
       const data = await res.json()
+      if (data?.source === 'file' || data?.source === 'default') {
+        stateSource = data.source
+      }
       if (data?.state && !disposed) {
-        applyStateLocally(data.state)
+        const next = stateSource === 'default' && latestManagedBrand
+          ? applyManagedBrandToState(data.state, latestManagedBrand)
+          : data.state
+        applyStateLocally(next)
       }
     } catch {
       // Keep boot/cached theme cleanly if Host is temporarily unreachable.
     }
+  }
+
+  function applyManagedBrand(managedBrand) {
+    latestManagedBrand = managedBrand && typeof managedBrand === 'object' ? managedBrand : null
+    if (disposed || stateSource === 'file' || !latestManagedBrand) return
+    const next = applyManagedBrandToState(buildDefaultThemeState(), latestManagedBrand)
+    applyStateLocally(next, { persistCache: false })
   }
 
   async function saveState(candidateState = state, { statusOverrideKey = 'statusSaved' } = {}) {
@@ -171,6 +187,7 @@ export function createThemeController({
       saveTimer = null
     }
     const normalized = normalizeThemeState(candidateState)
+    stateSource = 'file'
     applyStateLocally(normalized)
     statusKind = 'saving'
     statusKey = 'statusSaving'
@@ -202,6 +219,7 @@ export function createThemeController({
         return { ok: false, error: errorText }
       }
       if (payload?.state) {
+        stateSource = 'file'
         applyStateLocally(payload.state)
       }
       statusKind = 'saved'
@@ -270,6 +288,8 @@ export function createThemeController({
         notify()
         return { ok: false, error: errorText }
       }
+      if (mode === 'default') stateSource = 'default'
+      else stateSource = 'file'
       applyStateLocally(payload.state)
       statusKind = 'saved'
       statusKey = 'statusReset'
@@ -340,6 +360,7 @@ export function createThemeController({
       return () => { listeners.delete(listener) }
     },
     syncFromHost,
+    applyManagedBrand,
     applyPreview: (next) => applyStateLocally(next),
     scheduleSave,
     saveState,

@@ -127,7 +127,7 @@ sandbox-expose web 5173
 The route is **open by default** (no outer gateway ForwardAuth). If
 the service needs authentication, implement it inside the service (session cookie,
 Bearer token, login form, API key). Only DSH routes (`${SANDBOX_BASE_PATH}/`,
-`${SANDBOX_BASE_PATH}/dsh/*`, `${SANDBOX_BASE_PATH}/_dsh-token`) enforce owner/admin identity auth.
+`${SANDBOX_BASE_PATH}/dsh/*`) enforce owner/admin identity auth.
 
 Useful forms:
 
@@ -142,14 +142,13 @@ sandbox-expose web 5173 /apps/custom/   # automatically scoped under $SANDBOX_BA
 Caddy. The route persists in the home volume. Do not edit generated snippets by
 hand; regenerate them.
 
-Reserved ports (never expose): `2019` (Caddy admin), `3080` (DSH), `3090`
-(token helper), `8080` (Caddy). `sandbox-expose` rejects
-them, and `/p/<port>/` returns 404 for them.
+Reserved ports (never expose): `2019` (Caddy admin), `3080` (DSH), `8080` (Caddy).
+`sandbox-expose` rejects them, and `/p/<port>/` returns 404 for them.
 
 ## 4. Authentication and base paths
 
 - **Gateway identity auth protects DSH only** (`${SANDBOX_BASE_PATH}/`,
-  `${SANDBOX_BASE_PATH}/dsh/*`, `${SANDBOX_BASE_PATH}/_dsh-token`).
+  `${SANDBOX_BASE_PATH}/dsh/*`).
 - `/apps/*` and `/p/*` are **open by default** (no platform login gate). If your app
   needs access control, implement authentication inside the application itself.
 - The app must work under `${SANDBOX_BASE_PATH}/apps/<name>/`:

@@ -14,27 +14,25 @@
 PID 1  supervisord (root)
 ├── caddy             :8080
 ├── cron
-├── dsh-token         127.0.0.1:3090
 ├── user-services     用户级 supervisord (workspace)
 │   └── 用户定义的服务
 └── dsh               127.0.0.1:3080 (workspace)
 ```
 
-容器级 supervisor 保证 Caddy、cron、dsh-token 和用户服务编排器在 DSH 重启时仍然运行。
+容器级 supervisor 保证 Caddy、cron 和用户服务编排器在 DSH 重启时仍然运行。
 DSH 进程自身崩溃时由 supervisor 拉起；用户服务由嵌套 supervisor 管理。
 
 ## 路径规划
 
 ```text
 /s/<slug>/                302 /s/<slug>/dsh/         (Traefik ForwardAuth: owner / admin)
-/s/<slug>/dsh/*           DSH Web GUI / API / WS     (Traefik ForwardAuth: owner / admin)
-/s/<slug>/_dsh-token      登录后自动交换 DSH token      (Traefik ForwardAuth: owner / admin)
+/s/<slug>/dsh/*           DSH Web GUI / API / WS     (Traefik ForwardAuth + @metis/gateway-auth)
 /s/<slug>/apps/<name>/*   用户服务（sandbox-expose）  (默认公开，服务自行鉴权)
 /s/<slug>/p/<port>/*      loopback 端口临时转发       (默认公开，服务自行鉴权)
 /s/<slug>/healthz         Caddy 健康检查
 ```
 
-除 DSH 入口、`/dsh/*` 和 `/_dsh-token` 外，其余路径不经过平台 ForwardAuth。
+除 DSH 入口和 `/dsh/*` 外，其余路径不经过平台 ForwardAuth。
 
 ## 认证流程
 
@@ -46,16 +44,11 @@ Traefik (:9000) ── ForwardAuth ──▶ dsh-manager /api/auth/verify-sandbo
                                      │  校验 session / OIDC 或本地密码 / owner 或 admin
                                      │  未登录 → 302 /login 或 /auth/oidc/start
                                      │  无权限 → 403
-                                     ▼  通过 (200)
-Caddy (:8080) ──▶ dsh-token (/_dsh-token) ──▶ /s/<slug>/dsh/?token=... ──▶ DSH (127.0.0.1:3080)
+                                     ▼  通过 (200) + 注入 X-Metis-Gateway-Auth (HMAC)
+Caddy (:8080) ── 剥离 /dsh 前缀 ──▶ DSH (127.0.0.1:3080, @metis/gateway-auth 验签放行)
 ```
 
-登录成功后，首次访问 `/s/<slug>/dsh/`（没有 `dsh_token_seen` cookie）会经过：
-
-```text
-/s/<slug>/dsh/ → /s/<slug>/_dsh-token → 读取 web.log 中的启动 token
-               → 302 /s/<slug>/dsh/?token=... → DSH 设置 session cookie
-```
+登录成功后访问 `/s/<slug>/dsh/` 直接返回 `200`（WebSocket 直接 `101`），无需中间重定向或额外 cookie。
 
 ## Caddy 的角色
 
@@ -80,7 +73,6 @@ Caddy 必须：
 | --- | --- |
 | `2019` | Caddy admin API |
 | `3080` | DSH |
-| `3090` | token helper |
 | `8080` | Caddy 自身（仅容器网络 / 网关转发，托管模式不暴露到宿主机） |
 
 ## 持久化

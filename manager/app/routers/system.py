@@ -232,6 +232,21 @@ def api_update_branding(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Best-effort live HMR push of brand tokens into running sandboxes (@metis/custom-theme)
+    runtime = resolve_docker()
+    if hasattr(runtime, "sync_brand_theme"):
+        running_sandboxes = list(
+            db.scalars(
+                select(Sandbox).where(Sandbox.deleted_at.is_(None), Sandbox.status == "running")
+            ).all()
+        )
+        for sbx in running_sandboxes:
+            try:
+                runtime.sync_brand_theme(sbx, cfg)
+            except Exception:
+                continue
+
     return BrandingOut(**cfg)
 
 

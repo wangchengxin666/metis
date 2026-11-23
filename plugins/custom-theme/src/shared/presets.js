@@ -217,6 +217,43 @@ export function buildDefaultThemeState() {
   }
 }
 
+export function applyManagedBrandToState(baseState, managedBrand) {
+  const next = normalizeThemeState(baseState || buildDefaultThemeState())
+  if (!managedBrand || typeof managedBrand !== 'object') {
+    return next
+  }
+  const primary = sanitizeCssValue(managedBrand.primary)
+  const accent = sanitizeCssValue(managedBrand.accent)
+  if (primary) {
+    next.tokens['--dsw-alias-brand-primary'] = {
+      light: primary,
+      dark: accent || primary,
+    }
+    next.tokens['--dsw-alias-state-business-primary'] = {
+      light: primary,
+      dark: accent || primary,
+    }
+  }
+  if (accent || primary) {
+    next.tokens['--dsw-alias-link'] = {
+      light: primary || accent,
+      dark: accent || primary,
+    }
+  }
+  const brandTitle = typeof managedBrand.brandTitle === 'string'
+    ? managedBrand.brandTitle.trim().slice(0, 48)
+    : ''
+  const brandLogoSvg = sanitizeBrandSvg(managedBrand.brandLogoSvg)
+  if (brandTitle || brandLogoSvg) {
+    next.brand = {
+      enabled: true,
+      name: brandTitle,
+      iconSvg: brandLogoSvg,
+    }
+  }
+  return next
+}
+
 export function normalizeThemeState(input) {
   const defaults = buildDefaultThemeState()
   if (!input || typeof input !== 'object') {

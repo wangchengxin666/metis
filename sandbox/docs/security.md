@@ -4,8 +4,7 @@
 
 ```text
 /s/<slug>/           Traefik ForwardAuth (owner 或 admin)
-/s/<slug>/dsh/*      Traefik ForwardAuth (owner 或 admin)
-/s/<slug>/_dsh-token Traefik ForwardAuth (owner 或 admin)
+/s/<slug>/dsh/*      Traefik ForwardAuth + @metis/gateway-auth HMAC 验签 (owner 或 admin)
 /s/<slug>/apps/*     公开，服务自行鉴权
 /s/<slug>/p/*        公开，服务自行鉴权
 /s/<slug>/healthz    公开
@@ -58,7 +57,6 @@
 ```text
 2019  Caddy admin
 3080  DSH
-3090  token helper
 8080  Caddy
 ```
 

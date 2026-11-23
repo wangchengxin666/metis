@@ -49,15 +49,21 @@ export const en = {
   openAppBtn: 'Open',
   unexposeBtn: 'Remove',
 
+  // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
+  composerHintDefault: 'Describe a task, set up a scheduled routine, or ask to publish an online deliverable…',
+  composerHintRole: 'Ask {role} to run a task, schedule a routine, or publish a deliverable…',
+
   // AI Usage & Shared Files
   finopsTitle: 'AI Usage & Shared Team Files',
-  estimatedTokens: 'Estimated usage: {tokens} tokens ({sessions} files · {messages} team messages)',
+  estimatedTokens: 'Usage: {tokens} tokens ({sessions} sessions · {messages} messages)',
   sharedFilesTitle: 'Shared Team Files (/home/workspace/shared)',
   sharedFilesEmpty: 'No shared project files yet.',
 
   // Scheduled Routines
   cronTitle: 'Scheduled Routines',
   cronEmpty: 'No scheduled routines yet. Simply ask the AI in chat, e.g. "Run my daily report every weekday at 9 AM".',
+  scheduleSourceDsh: 'AI Schedule',
+  scheduleSourceCron: 'System Cron',
   removeBtn: 'Remove',
 
   // Team & Services
@@ -140,15 +146,21 @@ export const zh = {
   openAppBtn: '打开查看',
   unexposeBtn: '下线',
 
+  // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
+  composerHintDefault: '直接交代工作目标，或让我创建定时事务、发布在线成果页面与待审批任务…',
+  composerHintRole: '向「{role}」派发任务、创建定时事务或发布在线成果页面…',
+
   // AI Usage & Shared Files
   finopsTitle: 'AI 用量统计与团队共享文件',
-  estimatedTokens: '累计估算用量：{tokens} Tokens（{sessions} 个记录文件 · {messages} 条协同消息）',
+  estimatedTokens: '累计用量：{tokens} Tokens（{sessions} 个会话 · {messages} 条消息）',
   sharedFilesTitle: '团队共享文件（/home/workspace/shared）',
   sharedFilesEmpty: '暂无共享项目文件。',
 
   // Scheduled Routines
   cronTitle: '定时事务与值守计划',
   cronEmpty: '暂未设置定时事务。直接在 AI 对话中说「每个工作日 9 点帮我跑一份日报」即可自动配置。',
+  scheduleSourceDsh: 'AI 定时任务',
+  scheduleSourceCron: '系统 Cron',
   removeBtn: '移除',
 
   // Team & Services

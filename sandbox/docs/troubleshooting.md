@@ -8,7 +8,7 @@
 | `/dsh/` 502 | 容器内 DSH 没起，或外层 Traefik 无法连接容器 `:8080`；看 `[program:dsh]` 和 `dsh-manager` 日志 |
 | 一直跳 IdP / 登录循环 | 检查 `manager/.env` 中的 `MANAGER_PUBLIC_URL` 与实际访问 scheme/host 是否一致；IdP 是否登记 `<MANAGER_PUBLIC_URL>/auth/callback` |
 | 登录成功但 403 | 当前登录账号既不是工作区 owner，也不是 `platform_admins`，或账号已被管理员禁用 |
-| 浏览器仍要求 token | 删除 `dsh_token_seen_*` cookie 后重新访问 `/s/<slug>/dsh/`；或查 `/_dsh-token` 和 `web.log` 里的启动 URL |
+| `/dsh/` 返回 401 或要求 token | 确认沙箱已升级到 `dsh-sandbox:latest`（启用 `@metis/gateway-auth`），并检查 Traefik ForwardAuth `authResponseHeaders` 包含 `X-Metis-Gateway-Auth` 且容器内 `METIS_GATEWAY_AUTH_SECRET` 与 Manager 派生一致 |
 | `/apps/*` 不跳登录 | 正常，apps 默认开放；鉴权由服务自己实现 |
 | `/apps/*` 403 | 服务自己的认证拒绝了请求；与网关鉴权无关 |
 

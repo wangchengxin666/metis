@@ -26,7 +26,7 @@ def llm_provider_identifiers(profile: LlmProfile) -> tuple[str, str]:
 
 
 class SandboxSyncMixin:
-    """Plugin Market and LLM hot-sync operations executed inside running sandboxes."""
+    """Plugin Market, LLM, and Brand Theme HMR hot-sync operations inside running sandboxes."""
 
     def sync_plugin_market(
         self,
@@ -35,7 +35,7 @@ class SandboxSyncMixin:
         force_reinstall: bool = False,
         extra_indexes: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Ensure Plugin Market config and optionally force-reinstall built-in plugins in a sandbox."""
+        """Ensure Plugin Market config (via HMR) and optionally reinstall built-in plugins."""
         st = self._workload_status(sandbox)
         if st != "running":
             return {"slug": sandbox.slug, "ok": False, "detail": f"status={st}"}
@@ -55,91 +55,16 @@ class SandboxSyncMixin:
             pkg = registry.get_by_package_name(spec) or registry.get_by_slug_or_filename(spec)
             explicit_targets.append(pkg.name if pkg else spec)
 
-        node_script = """
-const fs = require('fs');
-const indexUrl = process.env.INDEX_URL;
-const npmRegistry = process.env.NPM_REGISTRY || '';
-let extraIndexes = [];
-try {
-  const parsed = JSON.parse(process.env.EXTRA_INDEXES || '[]');
-  if (Array.isArray(parsed)) extraIndexes = parsed.map((x) => String(x || '').trim()).filter(Boolean);
-} catch {}
-const desiredIndexes = [];
-for (const u of [indexUrl, ...extraIndexes]) {
-  if (u && !desiredIndexes.includes(u)) desiredIndexes.push(u);
-}
-try { fs.rmSync('/home/workspace/.cache/pnpm', { recursive: true, force: true }); } catch {}
-fs.mkdirSync('/home/workspace/.dsh-sandbox', { recursive: true });
-fs.writeFileSync('/home/workspace/.dsh-sandbox/plugin-index-url.txt', indexUrl + '\\n');
-fs.writeFileSync('/home/workspace/.dsh-sandbox/plugin-extra-indexes.json', JSON.stringify(extraIndexes) + '\\n');
-if (npmRegistry) {
-  fs.writeFileSync('/home/workspace/.dsh-sandbox/plugin-npm-registry.txt', npmRegistry + '\\n');
-}
-const profileDir = '/home/workspace/.dsh/profiles/web';
-const pkgPath = profileDir + '/package.json';
-const patchPath = profileDir + '/cordis.patch.yml';
-const npmrcPath = profileDir + '/.npmrc';
-if (npmRegistry && fs.existsSync(profileDir)) {
-  const existing = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, 'utf8') : '';
-  const lines = existing.split(/\\r?\\n/).filter((l) => l.trim() !== '' && !/^registry\\s*=/.test(l.trim()));
-  lines.unshift('registry=' + npmRegistry);
-  fs.writeFileSync(npmrcPath, lines.join('\\n') + '\\n');
-}
-let installedDeps = [];
-if (fs.existsSync(pkgPath)) {
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-  installedDeps = Object.keys(pkg.dependencies || {});
-  pkg.dsh = pkg.dsh || {};
-  pkg.dsh.profile = pkg.dsh.profile || {};
-  pkg.dsh.profile.bundles = Array.isArray(pkg.dsh.profile.bundles) ? pkg.dsh.profile.bundles : [];
-  const bundle = '@deepseek-ai/dsh-experimental-plugin-market-bundle';
-  if (!pkg.dsh.profile.bundles.includes(bundle)) {
-    pkg.dsh.profile.bundles.push(bundle);
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\\n');
-  }
-}
-if (fs.existsSync(patchPath)) {
-  let yaml = null;
-  try {
-    yaml = require('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml');
-  } catch {}
-  if (yaml) {
-    const raw = fs.readFileSync(patchPath, 'utf8');
-    let parsed = yaml.parse(raw);
-    if (!Array.isArray(parsed)) parsed = [];
-    let entry = parsed.find((x) => x && typeof x === 'object' && x.id === 'plugin-market');
-    if (!entry) {
-      entry = { id: 'plugin-market', name: '@deepseek-ai/dsh-plugin-market', config: { indexes: [] } };
-      parsed.push(entry);
-    }
-    if (!entry.name) entry.name = '@deepseek-ai/dsh-plugin-market';
-    if (!entry.config || typeof entry.config !== 'object') entry.config = {};
-    entry.config.indexes = desiredIndexes;
-    fs.writeFileSync(patchPath, yaml.stringify(parsed));
-  } else {
-    let content = fs.readFileSync(patchPath, 'utf8');
-    content = content.replace(/^\\s*\\[\\]\\s*$/m, '');
-    const listLines = desiredIndexes.map((u) => '      - ' + JSON.stringify(u)).join('\\n');
-    if (!content.includes('id: plugin-market')) {
-      content = content.trimEnd() + '\\n\\n- id: plugin-market\\n  name: "@deepseek-ai/dsh-plugin-market"\\n  config:\\n    indexes:\\n' + listLines + '\\n';
-      fs.writeFileSync(patchPath, content);
-    } else if (!content.includes(indexUrl)) {
-      content = content.replace(/(- id: plugin-market[\\s\\S]*?indexes:)\\s*\\[\\s*\\]/, '$1\\n' + listLines);
-      fs.writeFileSync(patchPath, content);
-    }
-  }
-}
-console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
-"""
         ec1, out1 = self.exec_command(
             sandbox,
-            ["node", "-e", node_script],
+            ["/usr/local/bin/metis-dsh-config", "sync-market"],
             user="workspace",
             environment={
                 "INDEX_URL": index_url,
                 "EXTRA_INDEXES": json.dumps(extra_list, ensure_ascii=False),
                 "NPM_REGISTRY": npm_registry,
                 "HOME": "/home/workspace",
+                "DSH_HOME": "/home/workspace/.dsh",
             },
         )
         text1 = out1.decode("utf-8", errors="replace").strip() if out1 else ""
@@ -218,17 +143,25 @@ console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
                     }
                 reinstalled.append(spec)
 
-        ec2, out2 = self.exec_command(
-            sandbox,
-            ["supervisorctl", "restart", "dsh"],
-            user="root",
-        )
-        text = out2.decode("utf-8", errors="replace").strip() if out2 else ""
+            ec2, out2 = self.exec_command(
+                sandbox,
+                ["supervisorctl", "restart", "dsh"],
+                user="root",
+            )
+            text = out2.decode("utf-8", errors="replace").strip() if out2 else ""
+            return {
+                "slug": sandbox.slug,
+                "ok": ec2 == 0,
+                "reinstalled": reinstalled,
+                "detail": text[-300:] if text else "reinstalled",
+            }
+
+        # market_only: plugin-market.indexes is Volatile and cordis.patch.yml is watched by dsh-hmr
         return {
             "slug": sandbox.slug,
-            "ok": ec2 == 0,
-            "reinstalled": reinstalled,
-            "detail": text[-300:] if text else "synced",
+            "ok": True,
+            "reinstalled": [],
+            "detail": "hmr-synced",
         }
 
     def sync_llm_profile(
@@ -239,7 +172,7 @@ console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
         set_as_default: bool = True,
         replace_managed: bool = False,
     ) -> dict[str, Any]:
-        """Hot-push an LLM profile into a running sandbox's DSH config and restart dsh."""
+        """Hot-push an LLM profile into a running sandbox via HMR (zero restart)."""
         st = self._workload_status(sandbox)
         if st != "running":
             return {
@@ -280,155 +213,9 @@ console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
             "replaceManaged": bool(replace_managed),
         }
 
-        node_script = """
-const fs = require('fs');
-const path = require('path');
-const yaml = require('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml');
-
-const cfg = JSON.parse(process.env.LLM_PUSH_PAYLOAD || '{}');
-const validEfforts = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-
-const dshHome = '/home/workspace/.dsh';
-const profileDir = path.join(dshHome, 'profiles', 'web');
-const patchPath = path.join(profileDir, 'cordis.patch.yml');
-const credPath = path.join(dshHome, '.credentials.yaml');
-
-fs.mkdirSync(profileDir, { recursive: true });
-
-let entries = [];
-if (fs.existsSync(patchPath)) {
-  const raw = fs.readFileSync(patchPath, 'utf8');
-  const parsed = yaml.parse(raw);
-  if (Array.isArray(parsed)) entries = parsed;
-}
-
-let piAiEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'llm-pi-ai');
-if (!piAiEntry) {
-  piAiEntry = { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: {} } };
-  entries.push(piAiEntry);
-}
-if (!piAiEntry.name) piAiEntry.name = '@deepseek-ai/dsh-llm-pi-ai';
-if (!piAiEntry.config || typeof piAiEntry.config !== 'object') piAiEntry.config = {};
-if (!piAiEntry.config.providers || typeof piAiEntry.config.providers !== 'object') {
-  piAiEntry.config.providers = {};
-}
-const providers = piAiEntry.config.providers;
-
-let removedLegacyDefault = false;
-const removedRefs = [];
-const legacyBoot = providers['openai-compatible'];
-if (legacyBoot && typeof legacyBoot === 'object' && legacyBoot.apiKeyEnv === 'DSH_DEFAULT_LLM_API_KEY') {
-  if (
-    cfg.replaceManaged
-    || legacyBoot.displayName === cfg.displayName
-    || legacyBoot.baseURL === cfg.baseUrl
-  ) {
-    delete providers['openai-compatible'];
-    removedLegacyDefault = true;
-  }
-}
-if (cfg.replaceManaged) {
-  for (const key of Object.keys(providers)) {
-    if (key.startsWith('mgr-') && key !== cfg.providerKey) {
-      const ref = providers[key] && providers[key].apiKeyEnv;
-      if (typeof ref === 'string' && ref.startsWith('DSH_LLM_MGR_')) {
-        removedRefs.push(ref);
-      }
-      delete providers[key];
-    }
-  }
-}
-
-const modelEntry = {
-  id: cfg.model,
-  name: cfg.model,
-  input: cfg.supportsImage ? ['text', 'image'] : ['text'],
-};
-if (Number.isFinite(cfg.contextWindow) && cfg.contextWindow >= 1024) {
-  modelEntry.contextWindow = Math.floor(cfg.contextWindow);
-}
-if (Number.isFinite(cfg.maxTokens) && cfg.maxTokens >= 128) {
-  modelEntry.maxTokens = Math.floor(cfg.maxTokens);
-}
-if (cfg.reasoningEffort === 'off') {
-  modelEntry.reasoningEfforts = false;
-} else if (validEfforts.has(cfg.reasoningEffort)) {
-  modelEntry.reasoningEfforts = {
-    off: null,
-    minimal: 'minimal',
-    low: 'low',
-    medium: 'medium',
-    high: 'high',
-    xhigh: 'xhigh',
-    max: 'max',
-  };
-}
-
-const providerObj = {
-  api: cfg.apiProtocol || 'openai-completions',
-  baseURL: cfg.baseUrl,
-  displayName: cfg.displayName,
-  apiKeyEnv: cfg.credRef,
-};
-if (validEfforts.has(cfg.reasoningEffort)) {
-  providerObj.reasoning = cfg.reasoningEffort;
-}
-if (cfg.thinkingFormat && providerObj.api === 'openai-completions') {
-  providerObj.compat = { thinkingFormat: cfg.thinkingFormat };
-}
-providerObj.models = [modelEntry];
-providers[cfg.providerKey] = providerObj;
-
-let defaultEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'agent-default-model');
-const shouldUpdateDefault = Boolean(cfg.setAsDefault)
-  || (removedLegacyDefault && defaultEntry && defaultEntry.config && defaultEntry.config.provider === 'openai-compatible');
-if (shouldUpdateDefault) {
-  const defaultConfig = {
-    provider: cfg.providerKey,
-    model: cfg.model,
-  };
-  if (validEfforts.has(cfg.reasoningEffort) && cfg.reasoningEffort !== 'off') {
-    defaultConfig.reasoningEffort = cfg.reasoningEffort;
-  }
-  if (!defaultEntry) {
-    defaultEntry = { id: 'agent-default-model', config: defaultConfig };
-    entries.unshift(defaultEntry);
-  } else {
-    defaultEntry.config = defaultConfig;
-  }
-}
-
-const patchTmp = patchPath + '.tmp.' + process.pid;
-fs.writeFileSync(patchTmp, yaml.stringify(entries), 'utf8');
-fs.renameSync(patchTmp, patchPath);
-
-let credDoc = { version: 1, refs: {} };
-if (fs.existsSync(credPath)) {
-  const rawCred = fs.readFileSync(credPath, 'utf8');
-  const parsedCred = yaml.parse(rawCred);
-  if (parsedCred && typeof parsedCred === 'object' && !Array.isArray(parsedCred)) {
-    credDoc = parsedCred;
-  }
-}
-credDoc.version = 1;
-if (!credDoc.refs || typeof credDoc.refs !== 'object' || Array.isArray(credDoc.refs)) {
-  credDoc.refs = {};
-}
-for (const oldRef of removedRefs) {
-  delete credDoc.refs[oldRef];
-}
-credDoc.refs[cfg.credRef] = cfg.apiKey || 'local-no-key';
-
-const credTmp = credPath + '.tmp.' + process.pid;
-fs.writeFileSync(credTmp, yaml.stringify(credDoc), { encoding: 'utf8', mode: 0o600 });
-fs.chmodSync(credTmp, 0o600);
-fs.renameSync(credTmp, credPath);
-fs.chmodSync(credPath, 0o600);
-console.log('LLM_SYNC_OK:' + cfg.providerKey + ':' + cfg.model);
-"""
         ec1, out1 = self.exec_command(
             sandbox,
-            ["node", "-e", node_script],
+            ["/usr/local/bin/metis-dsh-config", "sync-llm"],
             user="workspace",
             environment={
                 "HOME": "/home/workspace",
@@ -443,22 +230,53 @@ console.log('LLM_SYNC_OK:' + cfg.providerKey + ':' + cfg.model);
                 "sandbox_id": sandbox.id,
                 "ok": False,
                 "skipped": False,
-                "detail": text1[-300:] or f"node exit {ec1}",
+                "detail": text1[-300:] or f"metis-dsh-config exit {ec1}",
             }
 
-        ec2, out2 = self.exec_command(
-            sandbox,
-            ["supervisorctl", "restart", "dsh"],
-            user="root",
-        )
-        text2 = out2.decode("utf-8", errors="replace").strip() if out2 else ""
+        # Both cordis.patch.yml (dsh-hmr) and .credentials.yaml (dsh-credentials-local) auto-reload live
         return {
             "slug": sandbox.slug,
             "sandbox_id": sandbox.id,
-            "ok": ec2 == 0,
+            "ok": True,
             "skipped": False,
             "provider": provider_key,
             "model": profile.model,
             "set_as_default": bool(set_as_default),
-            "detail": text2[-300:] if text2 else "synced",
+            "detail": text1[-300:] if text1 else "hmr-synced",
+        }
+
+    def sync_brand_theme(
+        self,
+        sandbox: Sandbox,
+        brand_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Hot-push platform brand theme tokens to @metis/custom-theme Volatile config via HMR."""
+        st = self._workload_status(sandbox)
+        if st != "running":
+            return {"slug": sandbox.slug, "ok": False, "skipped": True, "detail": f"status={st}"}
+
+        theme = brand_config.get("brand_theme") if isinstance(brand_config.get("brand_theme"), dict) else {}
+        payload = {
+            "primary": str(theme.get("primary") or "#6366f1"),
+            "accent": str(theme.get("accent") or "#06b6d4"),
+            "mode": str(theme.get("mode") or "dark"),
+            "brandTitle": str(brand_config.get("brand_name_zh") or brand_config.get("brand_name_en") or "Metis"),
+            "brandLogoSvg": str(brand_config.get("brand_logo_svg") or ""),
+        }
+        ec, out = self.exec_command(
+            sandbox,
+            ["/usr/local/bin/metis-dsh-config", "sync-theme"],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "DSH_HOME": "/home/workspace/.dsh",
+                "METIS_BRAND_THEME_JSON": json.dumps(payload, ensure_ascii=False),
+            },
+        )
+        text = out.decode("utf-8", errors="replace").strip() if out else ""
+        return {
+            "slug": sandbox.slug,
+            "ok": ec == 0,
+            "skipped": False,
+            "detail": text[-200:] if text else "hmr-synced",
         }

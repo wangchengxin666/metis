@@ -38,7 +38,7 @@
                  ┌──────────────────────────────────┐   ┌─────────────────────────────────┐
                  │ Metis 管理控制平面 (:9000)       │   │ 数字员工独立容器 / Pod           │
                  │ FastAPI（模块化路由与领域服务）  │   │ 本地 Docker / 远程 TLS / K8s    │
-                 │ SQLite / PostgreSQL / MySQL      │   │ Caddy + Agent OS + dsh-token    │
+                 │ SQLite / PostgreSQL / MySQL      │   │ Caddy + Agent OS (Gateway Auth) │
                  │ React 19 控制台 & 个人门户       │   │ 用户级 supervisord + cron + mesh│
                  │ 内置插件仓库 + 服务端快照中心    │   │ /home/workspace 持久化存储卷    │
                  └──────────────────────────────────┘   └─────────────────────────────────┘
@@ -51,8 +51,8 @@
   - **远程 Docker（TLS / SSH）**：配置 `DOCKER_HOST` 与 `DOCKER_PUBLIC_HOST` 即可跨机编排，自动映射临时端口并由 Traefik HTTP Provider 动态路由。
   - **Kubernetes（`SANDBOX_RUNTIME=kubernetes`）**：为每位数字员工编排 `StatefulSet` + `PVC` + `Service`，无缝对接 Traefik 动态路由或 CRD。
 - **多关系型数据库（`DATABASE_URL`）**：单机开箱即用 SQLite，生产环境无缝切换 PostgreSQL / MySQL（支持自动 Schema 迁移与连接池）。
-- **精细化访问边界（Traefik ForwardAuth）**：
-  - 数字员工工位（`/s/<slug>/`、`/s/<slug>/dsh/*`、`/s/<slug>/_dsh-token`）严格校验仅归属人或平台管理员可访问。
+- **精细化访问边界（Traefik ForwardAuth + `@metis/gateway-auth`）**：
+  - 数字员工工位（`/s/<slug>/`、`/s/<slug>/dsh/*`）通过 HMAC 签名网关头严格校验仅归属人或平台管理员可访问（零重定向直达 DSH）。
   - 发布的预览应用（`/s/<slug>/apps/<name>/`）支持按员工独立切换 **公开免登（Public）** 或 **仅登录成员（Authenticated）**，同时保留 `sandbox-mesh` 跨员工加密协同通信（`/s/<slug>/p/4090`）。
 
 ## 企业全链路核心能力
@@ -167,11 +167,11 @@ pip install -r requirements-dev.txt && pytest -v
 cd manager/frontend && corepack yarn install --immutable && corepack yarn typecheck && corepack yarn test && corepack yarn build
 
 # 3. Sandbox 辅助脚本与容器测试
-node --test sandbox/tests/test_dsh_token.mjs
+node --test sandbox/tests/test_gateway_auth.mjs sandbox/tests/test_metis_dsh_config.mjs
 docker run --rm --entrypoint /bin/bash -v "$PWD:/repo:ro" dsh-sandbox:latest /repo/sandbox/tests/test_sandbox_scripts.sh /repo
 
 # 4. 内置插件测试
-for p in file-manager workspace-user custom-theme sandbox-mesh sandbox-memory; do
+for p in file-manager workspace-user custom-theme sandbox-mesh sandbox-memory work-delivery; do
   docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
     -w "/work/plugins/$p" dsh-sandbox:latest -c "node .test/run.mjs"
 done

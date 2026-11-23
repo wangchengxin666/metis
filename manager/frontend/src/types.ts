@@ -182,9 +182,12 @@ export interface WorkforceRuntimeData {
     autostart?: boolean
   }>
   cron_jobs: Array<{
+    id?: string
     name?: string
     schedule: string
     command: string
+    source?: 'dsh-schedule' | 'cron'
+    status?: string
     raw?: string
   }>
   shared_files?: Array<{
@@ -193,9 +196,13 @@ export interface WorkforceRuntimeData {
   }>
   token_usage?: {
     estimated_tokens: number
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_tokens?: number
     sessions_count: number
     messages_count: number
     daily_limit?: number | null
+    exact?: boolean
   }
   mesh_summary?: {
     role?: string

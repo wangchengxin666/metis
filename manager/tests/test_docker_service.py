@@ -70,7 +70,8 @@ def test_environment_generation_and_plugin_resolution(tmp_path):
     assert env["SANDBOX_PUBLIC_URL"] == "https://sandbox.corp.example/s/alice/"
     assert env["DSH_MOUNT"] == "/s/alice/dsh"
     assert env["DSH_PUBLIC_URL"] == "https://sandbox.corp.example/s/alice/dsh/"
-    assert env["DSH_TOKEN_COOKIE_NAME"] == "dsh_token_seen_alice"
+    assert "DSH_TOKEN_COOKIE_NAME" not in env
+    assert len(env["METIS_GATEWAY_AUTH_SECRET"]) == 64
     assert env["DSH_PLUGIN_INDEX_URL"] == "http://dsh-manager:9000/plugins/index.json"
     assert env["DSH_PLUGIN_NPM_REGISTRY"] == "http://dsh-manager:9000/plugins/npm"
     assert env["DSH_DEFAULT_LLM_PROVIDER"] == "openai-compatible"
@@ -375,12 +376,11 @@ def test_sync_llm_profile_exec_payload_and_stopped_skip():
     assert skipped["skipped"] is True
     assert "exited" in skipped["detail"]
 
-    # 2. Running container executes node config sync (passing secret via env) and restarts dsh
+    # 2. Running container executes metis-dsh-config sync-llm via HMR (zero restart)
     running_container = MagicMock()
     running_container.status = "running"
     running_container.exec_run.side_effect = [
         (0, b"LLM_SYNC_OK:mgr-abcdef123456:iq3_xxs\n"),
-        (0, b"dsh: stopped\ndsh: started\n"),
     ]
     svc.get = MagicMock(return_value=running_container)
     res = svc.sync_llm_profile(sbx, profile, set_as_default=True, replace_managed=True)
@@ -388,9 +388,10 @@ def test_sync_llm_profile_exec_payload_and_stopped_skip():
     assert res["skipped"] is False
     prov_key, cred_ref = llm_provider_identifiers(profile)
     assert res["provider"] == prov_key
-    assert running_container.exec_run.call_count == 2
+    assert running_container.exec_run.call_count == 1
 
     first_call = running_container.exec_run.call_args_list[0]
+    assert first_call.args[0] == ["/usr/local/bin/metis-dsh-config", "sync-llm"]
     assert first_call.kwargs["user"] == "workspace"
     payload = json.loads(first_call.kwargs["environment"]["LLM_PUSH_PAYLOAD"])
     assert payload["providerKey"] == prov_key
@@ -403,10 +404,6 @@ def test_sync_llm_profile_exec_payload_and_stopped_skip():
     assert payload["thinkingFormat"] == "qwen"
     assert payload["setAsDefault"] is True
     assert payload["replaceManaged"] is True
-
-    second_call = running_container.exec_run.call_args_list[1]
-    assert second_call.args[0] == ["supervisorctl", "restart", "dsh"]
-    assert second_call.kwargs["user"] == "root"
 
     # 3. Non-completions protocols (e.g. anthropic-messages / openai-responses) must NOT emit thinkingFormat
     anthropic_profile = LlmProfile(
@@ -425,10 +422,10 @@ def test_sync_llm_profile_exec_payload_and_stopped_skip():
     running_container.exec_run.reset_mock()
     running_container.exec_run.side_effect = [
         (0, b"LLM_SYNC_OK:mgr-112233445566:claude-sonnet-4-5\n"),
-        (0, b"dsh: stopped\ndsh: started\n"),
     ]
     res_ant = svc.sync_llm_profile(sbx, anthropic_profile)
     assert res_ant["ok"] is True
+    assert running_container.exec_run.call_count == 1
     ant_payload = json.loads(running_container.exec_run.call_args_list[0].kwargs["environment"]["LLM_PUSH_PAYLOAD"])
     assert ant_payload["apiProtocol"] == "anthropic-messages"
     assert ant_payload["thinkingFormat"] == ""
@@ -436,6 +433,25 @@ def test_sync_llm_profile_exec_payload_and_stopped_skip():
     assert ant_payload["maxTokens"] == 64000
     sbx_ant = _make_sandbox(slug="claude-box", llm_profile=anthropic_profile)
     assert "DSH_DEFAULT_LLM_THINKING_FORMAT" not in svc.environment(sbx_ant)
+
+    # 4. Brand theme hot-sync uses metis-dsh-config sync-theme via HMR (zero restart)
+    running_container.exec_run.reset_mock()
+    running_container.exec_run.side_effect = [(0, b"THEME_SYNC_OK\n")]
+    res_theme = svc.sync_brand_theme(
+        sbx,
+        {
+            "brand_name_zh": "Acme AI",
+            "brand_theme": {"primary": "#10b981", "accent": "#0ea5e9", "mode": "light"},
+        },
+    )
+    assert res_theme["ok"] is True
+    assert running_container.exec_run.call_count == 1
+    theme_call = running_container.exec_run.call_args_list[0]
+    assert theme_call.args[0] == ["/usr/local/bin/metis-dsh-config", "sync-theme"]
+    theme_payload = json.loads(theme_call.kwargs["environment"]["METIS_BRAND_THEME_JSON"])
+    assert theme_payload["primary"] == "#10b981"
+    assert theme_payload["mode"] == "light"
+    assert theme_payload["brandTitle"] == "Acme AI"
 
 
 def test_sync_role_profile_assemble_team_inspect_workforce_and_control_service(monkeypatch):

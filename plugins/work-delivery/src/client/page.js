@@ -29,15 +29,6 @@ function statusLabel(status, t) {
   return t('statusOpen')
 }
 
-function copyPromptText(text) {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(text).then(() => true).catch(() => false)
-    }
-  } catch {}
-  return Promise.resolve(false)
-}
-
 export function createWorkDeliveryPage({ React, controller, getLocale, subscribeLocale }) {
   const h = React.createElement
 
@@ -51,7 +42,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
     const [appLimit, setAppLimit] = React.useState(PAGE_SIZE)
     const [cronLimit, setCronLimit] = React.useState(PAGE_SIZE)
     const [fileLimit, setFileLimit] = React.useState(12)
-    const [copiedNote, setCopiedNote] = React.useState('')
 
     // Service logs inspection state
     const [logSvc, setLogSvc] = React.useState('')
@@ -89,7 +79,7 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
     const peers = state.peers || []
 
     const filteredApps = allApps.filter((a) => matchText(a.name, a.mount_path, a.target))
-    const filteredCrons = allCrons.filter((j) => matchText(j.schedule, formatScheduleHuman(j.schedule, lang), j.command))
+    const filteredCrons = allCrons.filter((j) => matchText(j.name, j.schedule, formatScheduleHuman(j.schedule, lang), j.command))
     const filteredServices = allServices.filter((sv) => matchText(sv.name, sv.command, sv.status))
     const filteredFiles = allFiles.filter((f) => matchText(f.name))
     const filteredTasks = allTasks.filter((tk) => {
@@ -99,15 +89,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
       if (taskFilter === 'approval') return Boolean(tk.approval_required && tk.approval_status === 'pending')
       return true
     })
-
-    const handleCopyPrompt = (text) => {
-      void copyPromptText(text).then((ok) => {
-        if (ok) {
-          setCopiedNote(t('copiedHint'))
-          setTimeout(() => setCopiedNote(''), 2600)
-        }
-      })
-    }
 
     const handleToggleLogs = async (name) => {
       if (logSvc === name) {
@@ -239,23 +220,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
                 })
               : null,
           ),
-
-          // LLM-First Prompt Chips — shown ONLY when empty so populated views stay ultra-clean
-          (allApps.length === 0 && allTasks.length === 0 && allCrons.length === 0)
-            ? h(
-                'div',
-                { className: 'wd-prompt-bar' },
-                h('span', null, t('chatHintPrefix')),
-                [t('promptExamplePage'), t('promptExampleCron'), t('promptExampleTask')].map((ex) =>
-                  h(
-                    'button',
-                    { key: ex, type: 'button', className: 'wd-prompt-chip', onClick: () => handleCopyPrompt(ex) },
-                    `“${ex}”`,
-                  ),
-                ),
-                copiedNote ? h('span', { className: 'wd-badge wd-badge-ok' }, copiedNote) : null,
-              )
-            : null,
 
           // TAB 1: Work & Deliverables (Read-Only + Approvals + Open + Pagination)
           activeTab === 'work'
@@ -522,29 +486,41 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
                         filteredCrons.slice(0, cronLimit).map((job, idx) =>
                           h(
                             'div',
-                            { key: `${job.raw}-${idx}`, className: 'wd-item' },
+                            { key: `${job.id || job.raw}-${idx}`, className: 'wd-item' },
                             h(
                               'div',
                               { className: 'wd-item-col' },
                               h(
                                 'div',
                                 { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' } },
+                                h(
+                                  'span',
+                                  {
+                                    className: job.source === 'dsh-schedule' ? 'wd-badge wd-badge-ok' : 'wd-badge',
+                                  },
+                                  job.source === 'dsh-schedule' ? t('scheduleSourceDsh') : t('scheduleSourceCron'),
+                                ),
+                                job.name
+                                  ? h('span', { className: 'wd-item-title' }, job.name)
+                                  : null,
                                 h('span', { className: 'wd-badge wd-badge-warn', title: job.schedule }, formatScheduleHuman(job.schedule, lang)),
                                 h('span', { className: 'wd-mono' }, job.schedule),
                               ),
                               h('span', { className: 'wd-mono', style: { fontSize: '13px' } }, job.command),
                             ),
-                            h(
-                              'button',
-                              {
-                                type: 'button',
-                                className: 'wd-btn wd-btn-sm wd-btn-danger',
-                                title: t('removeBtn'),
-                                disabled: busy,
-                                onClick: () => void controller.removeCronJob({ raw: job.raw || `${job.schedule} ${job.command}` }),
-                              },
-                              h(TrashIcon, { React, size: 13 }),
-                            ),
+                            job.source === 'dsh-schedule'
+                              ? null
+                              : h(
+                                  'button',
+                                  {
+                                    type: 'button',
+                                    className: 'wd-btn wd-btn-sm wd-btn-danger',
+                                    title: t('removeBtn'),
+                                    disabled: busy,
+                                    onClick: () => void controller.removeCronJob({ raw: job.raw || `${job.schedule} ${job.command}` }),
+                                  },
+                                  h(TrashIcon, { React, size: 13 }),
+                                ),
                           ),
                         ),
                       ),

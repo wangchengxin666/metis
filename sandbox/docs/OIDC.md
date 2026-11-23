@@ -4,8 +4,7 @@ DSH 沙箱平台已将身份认证统一收口至外层 **Traefik + `dsh-manager
 
 ```text
 /s/<slug>/           -> Traefik ForwardAuth -> dsh-manager (/api/auth/verify-sandbox/<slug>)
-/s/<slug>/dsh/*      -> Traefik ForwardAuth -> dsh-manager -> sandbox Caddy -> DSH
-/s/<slug>/_dsh-token -> Traefik ForwardAuth -> dsh-manager -> 交换 DSH launch token
+/s/<slug>/dsh/*      -> Traefik ForwardAuth -> dsh-manager (HMAC 签名头) -> sandbox Caddy -> DSH (@metis/gateway-auth)
 /s/<slug>/apps/*     -> 公开（服务自行实现鉴权）
 /s/<slug>/p/*        -> 公开（服务自行实现鉴权）
 /s/<slug>/healthz    -> 公开健康检查
@@ -61,11 +60,10 @@ OIDC_EMAIL_CLAIM=email
 - Manager 通过提供方的 `email_claim`（默认 `email`，如改用 `preferred_username` 可相应修改）提取用户邮箱，先校验该提供方的邮箱域名白名单（如有），再与 `platform_admins`（需同时开启 `allow_admin_login`）或沙箱 owner 邮箱（大小写不敏感）比对；
 - 已登录但被管理员禁用（`status != "active"`）的普通用户在访问 `/login`、OIDC 回调、`/my` 或 `/s/<slug>/dsh/*` 时会被拒绝（403 / 提示账号已禁用）。
 
-## 登录后自动带 token
+## 登录后零重定向直达 DSH
 
 首次访问 `/s/<slug>/dsh/`：
 
 1. Traefik 先调用 `/api/auth/verify-sandbox/<slug>`：未登录会 302 跳转至 OIDC 登录（或本地 `/login`）；登录身份既非 owner 也非管理员则返回 403；
-2. 鉴权通过后请求抵达沙箱 Caddy；Caddy 若检测到浏览器没有 `dsh_token_seen_<slug>` cookie，自动 302 到 `/s/<slug>/_dsh-token`；
-3. `/_dsh-token` 从 `/home/workspace/.dsh/web.log` 读取最新 launch token，种下标记 cookie 并 302 到 `/s/<slug>/dsh/?token=...`；
-4. DSH 完成 token 交换并签发自己的 session cookie。
+2. 鉴权通过后，Manager 签发短时效 HMAC-SHA256 请求头 `X-Metis-Gateway-Auth` 与身份头（`X-Auth-Request-Email` 等），由 Traefik 注入请求转发至沙箱 Caddy；
+3. DSH 内置的 `@metis/gateway-auth` 服务拦截器验证 HMAC 签名与时间戳（防止容器内伪造头），校验通过即以 `workspace` 会话身份直接返回 `200` / WebSocket `101`，无需额外的 launch-token 跳转。

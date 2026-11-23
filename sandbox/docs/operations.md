@@ -48,7 +48,7 @@ docker build -t dsh-sandbox:latest .
 
 ```bash
 docker build \
-  --build-arg DSH_VERSION=0.2.2-rc.3 \
+  --build-arg DSH_VERSION=0.2.3-alpha.2 \
   --build-arg TARGETARCH=amd64 \
   -t dsh-sandbox:latest .
 ```
@@ -59,7 +59,7 @@ docker build \
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `DSH_VERSION` | `0.2.2-rc.3` | `@deepseek-ai/dsh` 版本 |
+| `DSH_VERSION` | `0.2.3-alpha.2` | `@deepseek-ai/dsh` 版本 |
 | `NODE_VERSION` | `24.22.3` | Node 运行时 |
 | `INSTALL_TOOLCHAIN` | `false` | 是否在构建期按顺序执行 `sandbox/toolchain/toolchain.d/*.sh` 将自定义工具链安装至 `/opt/toolchain`（默认提供 `10-dotnet.sh`） |
 | `INSTALL_BROWSER` | `false` | 是否安装无头 Chromium + Xvfb |

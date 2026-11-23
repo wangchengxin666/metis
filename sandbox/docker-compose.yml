@@ -7,7 +7,7 @@ services:
         WORKSPACE_UID: ${WORKSPACE_UID:-1000}
         WORKSPACE_GID: ${WORKSPACE_GID:-1000}
         NODE_VERSION: ${NODE_VERSION:-24.22.3}
-        DSH_VERSION: ${DSH_VERSION:-0.2.2-rc.3}
+        DSH_VERSION: ${DSH_VERSION:-0.2.3-alpha.2}
         INSTALL_TOOLCHAIN: ${INSTALL_TOOLCHAIN:-false}
         INSTALL_BROWSER: ${INSTALL_BROWSER:-false}
         # Override in .env when using private mirrors or internal registries.

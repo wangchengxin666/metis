@@ -36,9 +36,6 @@ try {
           'utf8',
         )
       }
-      if (cmd === '/usr/local/bin/sandbox-cron' && args[0] === 'add') {
-        writeFileSync(join(tmpHome, '.dsh-sandbox', 'crontab'), `${args[1]}\n`, 'utf8')
-      }
       return 'OK'
     },
   })
@@ -69,15 +66,7 @@ try {
   assert.equal(done.ok, true)
   assert.equal(done.state.done_tasks_count, 1)
 
-  // 3. Cron add & remove
-  const cronAdded = service.addCronJob({ schedule: '0 9 * * 1-5', command: '~/daily.sh' })
-  assert.equal(cronAdded.ok, true)
-  assert.equal(cronAdded.state.cron_jobs.length, 1)
-  const cronRemoved = service.removeCronJob({ raw: '0 9 * * 1-5 ~/daily.sh' })
-  assert.equal(cronRemoved.ok, true)
-  assert.equal(cronRemoved.state.cron_jobs.length, 0)
-
-  // 4. Service logs & validation
+  // 3. Service logs & validation
   const logsRes = service.readServiceLogs({ name: 'api', tail: 50 })
   assert.equal(logsRes.ok, true)
   assert.ok(logsRes.logs.includes('server listening'))

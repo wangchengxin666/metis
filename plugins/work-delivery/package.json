@@ -1,7 +1,7 @@
 {
   "name": "@metis/work-delivery",
   "version": "0.1.0",
-  "description": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, schedules, tasks, and services directly via AI chat.",
+  "description": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, tasks, and services directly via AI chat.",
   "type": "module",
   "main": "./index.js",
   "files": [
@@ -57,7 +57,6 @@
     "work-delivery",
     "tasks",
     "deliverables",
-    "schedule",
     "services"
   ]
 }

@@ -27,9 +27,6 @@ const mockState = {
   exposed_apps: [
     { name: 'demo', target: '127.0.0.1:5173', mount_path: '/s/lead/apps/demo/', url: 'http://localhost:9000/s/lead/apps/demo/' },
   ],
-  cron_jobs: [
-    { schedule: '0 9 * * 1-5', command: '~/daily-report.sh', raw: '0 9 * * 1-5 ~/daily-report.sh' },
-  ],
   user_services: [],
   shared_files: [{ name: 'TEAM_README.md', size_bytes: 256 }],
   token_usage: { estimated_tokens: 1200, sessions_count: 3, messages_count: 8 },
@@ -65,6 +62,8 @@ assert.ok(html.includes('Deliverable Task #1'))
 assert.ok(!html.includes('Deliverable Task #12'))
 assert.ok(html.includes('剩余 7 条'))
 assert.ok(html.includes('TEAM_README.md'))
+// Scheduled tasks are owned by DSH native Automations (dsh-schedule), not duplicated here
+assert.ok(!html.includes('定时事务'))
 
 // Render AI chat tool view for delivery_task_create
 const ToolView = createWorkDeliveryToolView({

@@ -40,16 +40,6 @@ export function GlobeIcon({ React, size = 15 }) {
   )
 }
 
-export function ClockIcon({ React, size = 15 }) {
-  const h = React.createElement
-  return h(
-    'svg',
-    { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' },
-    h('circle', { cx: 12, cy: 12, r: 9 }),
-    h('polyline', { points: '12 7 12 12 15.5 14' }),
-  )
-}
-
 export function ServerIcon({ React, size = 15 }) {
   const h = React.createElement
   return h(

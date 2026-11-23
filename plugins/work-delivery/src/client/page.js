@@ -1,9 +1,8 @@
-import { formatBytes, formatScheduleHuman } from '../shared/model.js'
-import { createTranslator, resolveLang } from './locale.js'
+import { formatBytes } from '../shared/model.js'
+import { createTranslator } from './locale.js'
 import {
   CheckIcon,
   ChevronIcon,
-  ClockIcon,
   ExternalLinkIcon,
   GlobeIcon,
   RefreshIcon,
@@ -40,7 +39,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
     const [expandedTaskId, setExpandedTaskId] = React.useState('')
     const [taskLimit, setTaskLimit] = React.useState(PAGE_SIZE)
     const [appLimit, setAppLimit] = React.useState(PAGE_SIZE)
-    const [cronLimit, setCronLimit] = React.useState(PAGE_SIZE)
     const [fileLimit, setFileLimit] = React.useState(12)
 
     // Service logs inspection state
@@ -62,7 +60,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
     void tick
 
     const rawLocale = typeof getLocale === 'function' ? getLocale() : 'zh'
-    const lang = resolveLang(rawLocale)
     const t = createTranslator(rawLocale)
     const { state, loading, busy, toast } = controller.getSnapshot()
 
@@ -71,7 +68,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
 
     const allApprovals = state.pending_approvals || []
     const allApps = state.exposed_apps || []
-    const allCrons = state.cron_jobs || []
     const allServices = state.user_services || []
     const allFiles = state.shared_files || []
     const allTasks = state.tasks || []
@@ -79,7 +75,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
     const peers = state.peers || []
 
     const filteredApps = allApps.filter((a) => matchText(a.name, a.mount_path, a.target))
-    const filteredCrons = allCrons.filter((j) => matchText(j.name, j.schedule, formatScheduleHuman(j.schedule, lang), j.command))
     const filteredServices = allServices.filter((sv) => matchText(sv.name, sv.command, sv.status))
     const filteredFiles = allFiles.filter((f) => matchText(f.name))
     const filteredTasks = allTasks.filter((tk) => {
@@ -178,7 +173,7 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
               )
             : null,
 
-          // Toolbar: 3-Tab Switcher + Conditional Live Search
+          // Toolbar: 2-Tab Switcher + Conditional Live Search
           h(
             'div',
             { className: 'wd-toolbar' },
@@ -187,7 +182,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
               { className: 'wd-tabs', role: 'tablist' },
               [
                 { id: 'work', label: t('tabWork'), count: allTasks.length + allApps.length },
-                { id: 'schedule', label: t('tabSchedule'), count: allCrons.length },
                 { id: 'advanced', label: t('tabAdvanced'), count: allServices.length },
               ].map((tab) =>
                 h(
@@ -205,7 +199,7 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
                 ),
               ),
             ),
-            (allTasks.length + allApps.length + allCrons.length + allServices.length > 5 || search)
+            (allTasks.length + allApps.length + allServices.length > 5 || search)
               ? h('input', {
                   className: 'wd-input',
                   style: { minWidth: '240px', flex: '1 1 240px', maxWidth: '380px' },
@@ -215,7 +209,6 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
                     setSearch(e.target.value)
                     setTaskLimit(PAGE_SIZE)
                     setAppLimit(PAGE_SIZE)
-                    setCronLimit(PAGE_SIZE)
                   },
                 })
               : null,
@@ -465,71 +458,7 @@ export function createWorkDeliveryPage({ React, controller, getLocale, subscribe
               )
             : null,
 
-          // TAB 2: Scheduled Routines (Read-Only + Remove + Pagination)
-          activeTab === 'schedule'
-            ? h(
-                'div',
-                { className: 'wd-card' },
-                h(
-                  'div',
-                  { className: 'wd-card-head' },
-                  h('span', { className: 'wd-card-title' }, h(ClockIcon, { React, size: 16 }), t('cronTitle'), h('span', { className: 'wd-badge' }, String(filteredCrons.length))),
-                ),
-                filteredCrons.length === 0
-                  ? h('p', { className: 'wd-muted' }, q ? t('noSearchMatch', { query: search }) : t('cronEmpty'))
-                  : h(
-                      React.Fragment,
-                      null,
-                      h(
-                        'div',
-                        { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-                        filteredCrons.slice(0, cronLimit).map((job, idx) =>
-                          h(
-                            'div',
-                            { key: `${job.id || job.raw}-${idx}`, className: 'wd-item' },
-                            h(
-                              'div',
-                              { className: 'wd-item-col' },
-                              h(
-                                'div',
-                                { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' } },
-                                h(
-                                  'span',
-                                  {
-                                    className: job.source === 'dsh-schedule' ? 'wd-badge wd-badge-ok' : 'wd-badge',
-                                  },
-                                  job.source === 'dsh-schedule' ? t('scheduleSourceDsh') : t('scheduleSourceCron'),
-                                ),
-                                job.name
-                                  ? h('span', { className: 'wd-item-title' }, job.name)
-                                  : null,
-                                h('span', { className: 'wd-badge wd-badge-warn', title: job.schedule }, formatScheduleHuman(job.schedule, lang)),
-                                h('span', { className: 'wd-mono' }, job.schedule),
-                              ),
-                              h('span', { className: 'wd-mono', style: { fontSize: '13px' } }, job.command),
-                            ),
-                            job.source === 'dsh-schedule'
-                              ? null
-                              : h(
-                                  'button',
-                                  {
-                                    type: 'button',
-                                    className: 'wd-btn wd-btn-sm wd-btn-danger',
-                                    title: t('removeBtn'),
-                                    disabled: busy,
-                                    onClick: () => void controller.removeCronJob({ raw: job.raw || `${job.schedule} ${job.command}` }),
-                                  },
-                                  h(TrashIcon, { React, size: 13 }),
-                                ),
-                          ),
-                        ),
-                      ),
-                      renderPagination(filteredCrons.length, cronLimit, setCronLimit),
-                    ),
-              )
-            : null,
-
-          // TAB 3: Team & Background Services (Read-Only + Light Runtime Controls)
+          // TAB 2: Team & Background Services (Read-Only + Light Runtime Controls)
           activeTab === 'advanced'
             ? h(
                 React.Fragment,

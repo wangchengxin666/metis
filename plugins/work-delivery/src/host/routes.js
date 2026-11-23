@@ -4,8 +4,6 @@ export const TASK_STATUS_ENDPOINT = '/api/work-delivery.task-status'
 export const TASK_APPROVE_ENDPOINT = '/api/work-delivery.task-approve'
 export const APP_EXPOSE_ENDPOINT = '/api/work-delivery.app-expose'
 export const APP_UNEXPOSE_ENDPOINT = '/api/work-delivery.app-unexpose'
-export const CRON_ADD_ENDPOINT = '/api/work-delivery.cron-add'
-export const CRON_REMOVE_ENDPOINT = '/api/work-delivery.cron-remove'
 export const SERVICE_ACTION_ENDPOINT = '/api/work-delivery.service-action'
 export const SERVICE_ADD_ENDPOINT = '/api/work-delivery.service-add'
 export const SERVICE_REMOVE_ENDPOINT = '/api/work-delivery.service-remove'
@@ -70,16 +68,6 @@ export function registerBrowserRoutes(ctx, service) {
         path: APP_UNEXPOSE_ENDPOINT,
         validate: (body) => (body && body.name ? null : 'name is required'),
         run: (body) => service.unexposeApp({ name: body.name }),
-      },
-      {
-        path: CRON_ADD_ENDPOINT,
-        validate: (body) => (body && body.schedule && body.command ? null : 'schedule and command are required'),
-        run: (body) => service.addCronJob({ schedule: body.schedule, command: body.command }),
-      },
-      {
-        path: CRON_REMOVE_ENDPOINT,
-        validate: (body) => (body && body.raw ? null : 'raw is required'),
-        run: (body) => service.removeCronJob({ raw: body.raw }),
       },
       {
         path: SERVICE_ACTION_ENDPOINT,

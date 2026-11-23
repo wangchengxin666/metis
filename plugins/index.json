@@ -64,8 +64,8 @@
         "zh": "工作与交付"
       },
       "description": {
-        "en": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, schedules, tasks, and services directly via AI chat.",
-        "zh": "DSH 内置工作与交付中心：支持搜索、筛选、分页浏览与人工审批；通过 AI 对话直接创建在线成果页面、定时事务、任务与后台服务。"
+        "en": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, tasks, and services directly via AI chat.",
+        "zh": "DSH 内置工作与交付中心：支持搜索、筛选、分页浏览与人工审批；通过 AI 对话直接创建在线成果页面、任务与后台服务。"
       },
       "icon": "icons/work-delivery.svg",
       "author": "Metis",
@@ -85,8 +85,6 @@
           "work",
           "delivery",
           "tasks",
-          "schedule",
-          "cron",
           "pages",
           "services"
         ]

@@ -1,27 +1,15 @@
 export const en = {
   panel: 'Work & Delivery',
   title: 'Work & Delivery Hub',
-  subtitle: 'Inspect tasks, approvals, online pages, scheduled routines, and services. Create or modify anything directly in AI chat.',
+  subtitle: 'Inspect tasks, approvals, online pages, shared files, and background services. Create or modify anything directly in AI chat.',
   refresh: 'Refresh',
   refreshing: 'Refreshing...',
   sopToggle: 'View Role SOP & Standing Guidelines',
   tabWork: 'Tasks & Pages',
-  tabSchedule: 'Scheduled Routines',
   tabAdvanced: 'Team & Services',
 
-  // KPI & Prompt bar
-  kpiPages: 'Online Pages',
-  kpiActiveTasks: 'Active Tasks',
-  kpiApprovals: 'Pending Approval',
-  kpiSchedules: 'Schedules',
-  chatHintPrefix: 'Create via AI chat (click to copy example):',
-  promptExamplePage: 'Publish my local demo app as an online shareable link',
-  promptExampleCron: 'Set up a weekday 9:00 AM scheduled routine to generate a daily report',
-  promptExampleTask: 'Create a task to review Q4 metrics and request my approval when done',
-  copiedHint: 'Prompt copied — paste into AI chat',
-
   // Search & Filter & Pagination
-  searchPlaceholder: 'Filter tasks, pages, schedules, files, or services...',
+  searchPlaceholder: 'Filter tasks, pages, files, or services...',
   filterAll: 'All',
   filterActive: 'Active',
   filterDone: 'Done',
@@ -50,20 +38,14 @@ export const en = {
   unexposeBtn: 'Remove',
 
   // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
-  composerHintDefault: 'Describe a task, set up a scheduled routine, or ask to publish an online deliverable…',
-  composerHintRole: 'Ask {role} to run a task, schedule a routine, or publish a deliverable…',
+  composerHintDefault: 'Describe a task, request a deliverable, or ask to publish an online preview page…',
+  composerHintRole: 'Ask {role} to complete a task, capture an approval, or publish an online deliverable…',
 
   // AI Usage & Shared Files
   finopsTitle: 'AI Usage & Shared Team Files',
   estimatedTokens: 'Usage: {tokens} tokens ({sessions} sessions · {messages} messages)',
   sharedFilesTitle: 'Shared Team Files (/home/workspace/shared)',
   sharedFilesEmpty: 'No shared project files yet.',
-
-  // Scheduled Routines
-  cronTitle: 'Scheduled Routines',
-  cronEmpty: 'No scheduled routines yet. Simply ask the AI in chat, e.g. "Run my daily report every weekday at 9 AM".',
-  scheduleSourceDsh: 'AI Schedule',
-  scheduleSourceCron: 'System Cron',
   removeBtn: 'Remove',
 
   // Team & Services
@@ -90,7 +72,6 @@ export const en = {
   toastTaskUpdated: 'Task updated',
   toastApproved: 'Approval decision saved',
   toastAppRemoved: 'Online page removed',
-  toastCronRemoved: 'Scheduled routine removed',
   toastServiceOk: 'Service action completed',
   toastError: 'Action failed',
 }
@@ -98,27 +79,15 @@ export const en = {
 export const zh = {
   panel: '工作与交付',
   title: '工作与交付中心',
-  subtitle: '集中查看任务进度、待办审批、在线成果页面、定时事务与后台服务；新增与修改直接告诉 AI 对话即可。',
+  subtitle: '集中查看任务进度、待办审批、在线成果页面、团队共享文件与后台服务；新增与修改直接告诉 AI 对话即可。',
   refresh: '刷新',
   refreshing: '刷新中...',
   sopToggle: '展开查看岗位作业规范 (SOP)',
   tabWork: '任务与成果',
-  tabSchedule: '定时事务',
-  tabAdvanced: '团队协同与高级运维',
-
-  // KPI & Prompt bar
-  kpiPages: '在线页面',
-  kpiActiveTasks: '进行中任务',
-  kpiApprovals: '待人工审批',
-  kpiSchedules: '定时事务',
-  chatHintPrefix: '通过 AI 对话直接创建（点击复制示例）：',
-  promptExamplePage: '把我刚做好的页面发布成一个可分享的在线演示链接',
-  promptExampleCron: '帮我设置一个每个工作日早上 9 点自动运行的日报定时事务',
-  promptExampleTask: '帮我建一个待办任务：整理本周数据复盘，完成后发给我审批',
-  copiedHint: '示例已复制，直接粘贴到 AI 对话即可',
+  tabAdvanced: '团队协同与后台服务',
 
   // Search & Filter & Pagination
-  searchPlaceholder: '搜索任务、在线页面、定时事务、共享文件或后台服务...',
+  searchPlaceholder: '搜索任务、在线页面、共享文件或后台服务...',
   filterAll: '全部',
   filterActive: '进行中',
   filterDone: '已完成',
@@ -147,20 +116,14 @@ export const zh = {
   unexposeBtn: '下线',
 
   // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
-  composerHintDefault: '直接交代工作目标，或让我创建定时事务、发布在线成果页面与待审批任务…',
-  composerHintRole: '向「{role}」派发任务、创建定时事务或发布在线成果页面…',
+  composerHintDefault: '直接交代工作目标，或让我发布在线成果页面与待审批任务…',
+  composerHintRole: '向「{role}」派发任务、发起人工审批或发布在线成果页面…',
 
   // AI Usage & Shared Files
   finopsTitle: 'AI 用量统计与团队共享文件',
   estimatedTokens: '累计用量：{tokens} Tokens（{sessions} 个会话 · {messages} 条消息）',
   sharedFilesTitle: '团队共享文件（/home/workspace/shared）',
   sharedFilesEmpty: '暂无共享项目文件。',
-
-  // Scheduled Routines
-  cronTitle: '定时事务与值守计划',
-  cronEmpty: '暂未设置定时事务。直接在 AI 对话中说「每个工作日 9 点帮我跑一份日报」即可自动配置。',
-  scheduleSourceDsh: 'AI 定时任务',
-  scheduleSourceCron: '系统 Cron',
   removeBtn: '移除',
 
   // Team & Services
@@ -187,7 +150,6 @@ export const zh = {
   toastTaskUpdated: '任务状态已更新',
   toastApproved: '审批结果已保存',
   toastAppRemoved: '在线页面已下线',
-  toastCronRemoved: '已移除定时事务',
   toastServiceOk: '服务操作已完成',
   toastError: '操作失败',
 }

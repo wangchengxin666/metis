@@ -4,8 +4,6 @@ const WD_TASK_STATUS_API = 'api/work-delivery.task-status'
 const WD_TASK_APPROVE_API = 'api/work-delivery.task-approve'
 const WD_APP_EXPOSE_API = 'api/work-delivery.app-expose'
 const WD_APP_UNEXPOSE_API = 'api/work-delivery.app-unexpose'
-const WD_CRON_ADD_API = 'api/work-delivery.cron-add'
-const WD_CRON_REMOVE_API = 'api/work-delivery.cron-remove'
 const WD_SERVICE_ACTION_API = 'api/work-delivery.service-action'
 const WD_SERVICE_ADD_API = 'api/work-delivery.service-add'
 const WD_SERVICE_REMOVE_API = 'api/work-delivery.service-remove'
@@ -18,7 +16,6 @@ function defaultWorkDeliveryState() {
     description: '',
     sop: '',
     exposed_apps: [],
-    cron_jobs: [],
     user_services: [],
     shared_files: [],
     token_usage: { estimated_tokens: 0, sessions_count: 0, messages_count: 0 },
@@ -192,14 +189,6 @@ export function createWorkDeliveryController({
     return mutate(WD_APP_UNEXPOSE_API, { name }, 'toastAppRemoved')
   }
 
-  function addCronJob({ schedule, command }) {
-    return mutate(WD_CRON_ADD_API, { schedule, command }, 'toastCronAdded')
-  }
-
-  function removeCronJob({ raw }) {
-    return mutate(WD_CRON_REMOVE_API, { raw }, 'toastCronRemoved')
-  }
-
   function controlService({ name, action }) {
     return mutate(WD_SERVICE_ACTION_API, { name, action }, 'toastServiceOk')
   }
@@ -233,8 +222,6 @@ export function createWorkDeliveryController({
     decideApproval,
     exposeApp,
     unexposeApp,
-    addCronJob,
-    removeCronJob,
     controlService,
     addService,
     removeService,

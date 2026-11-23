@@ -5,33 +5,8 @@ window.__ModuleLoader__.load({
     const React = require('react')
 
     // --- shared/model.js ---
-    const SCHEDULE_PRESETS = [
-      { cron: '0 9 * * *', zh: '每天 09:00', en: 'Daily at 09:00' },
-      { cron: '0 9 * * 1-5', zh: '每个工作日 09:00', en: 'Weekdays at 09:00' },
-      { cron: '0 18 * * 1-5', zh: '每个工作日 18:00', en: 'Weekdays at 18:00' },
-      { cron: '0 9 * * 1', zh: '每周一 09:00', en: 'Every Monday 09:00' },
-      { cron: '0 17 * * 5', zh: '每周五 17:00', en: 'Every Friday 17:00' },
-      { cron: '0 * * * *', zh: '每小时整点', en: 'Every hour' },
-    ]
-
     const APP_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/
     const SERVICE_NAME_RE = /^[a-z0-9_-]{1,48}$/
-
-    function formatScheduleHuman(cron, lang = 'zh') {
-      const norm = String(cron || '').trim().replace(/\s+/g, ' ')
-      const preset = SCHEDULE_PRESETS.find((p) => p.cron === norm)
-      if (preset) return lang === 'en' ? preset.en : preset.zh
-      const parts = norm.split(' ')
-      if (parts.length === 5) {
-        const [min, hour, dom, mon, dow] = parts
-        if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*') {
-          const hhmm = `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
-          if (dow === '*') return lang === 'en' ? `Daily at ${hhmm}` : `每天 ${hhmm}`
-          if (dow === '1-5') return lang === 'en' ? `Weekdays at ${hhmm}` : `每个工作日 ${hhmm}`
-        }
-      }
-      return norm || (lang === 'en' ? 'Custom schedule' : '自定义计划')
-    }
 
     function normalizeAppName(raw) {
       return String(raw || '').trim().toLowerCase()
@@ -39,14 +14,6 @@ window.__ModuleLoader__.load({
 
     function normalizeServiceName(raw) {
       return String(raw || '').trim()
-    }
-
-    function validateCronSchedule(raw) {
-      const norm = String(raw || '').trim().replace(/\s+/g, ' ')
-      if (!norm || /[\r\n]/.test(norm)) return ''
-      const parts = norm.split(' ')
-      if (parts.length !== 5) return ''
-      return norm
     }
 
     function formatBytes(bytes) {
@@ -61,27 +28,15 @@ window.__ModuleLoader__.load({
     const en = {
       panel: 'Work & Delivery',
       title: 'Work & Delivery Hub',
-      subtitle: 'Inspect tasks, approvals, online pages, scheduled routines, and services. Create or modify anything directly in AI chat.',
+      subtitle: 'Inspect tasks, approvals, online pages, shared files, and background services. Create or modify anything directly in AI chat.',
       refresh: 'Refresh',
       refreshing: 'Refreshing...',
       sopToggle: 'View Role SOP & Standing Guidelines',
       tabWork: 'Tasks & Pages',
-      tabSchedule: 'Scheduled Routines',
       tabAdvanced: 'Team & Services',
 
-      // KPI & Prompt bar
-      kpiPages: 'Online Pages',
-      kpiActiveTasks: 'Active Tasks',
-      kpiApprovals: 'Pending Approval',
-      kpiSchedules: 'Schedules',
-      chatHintPrefix: 'Create via AI chat (click to copy example):',
-      promptExamplePage: 'Publish my local demo app as an online shareable link',
-      promptExampleCron: 'Set up a weekday 9:00 AM scheduled routine to generate a daily report',
-      promptExampleTask: 'Create a task to review Q4 metrics and request my approval when done',
-      copiedHint: 'Prompt copied — paste into AI chat',
-
       // Search & Filter & Pagination
-      searchPlaceholder: 'Filter tasks, pages, schedules, files, or services...',
+      searchPlaceholder: 'Filter tasks, pages, files, or services...',
       filterAll: 'All',
       filterActive: 'Active',
       filterDone: 'Done',
@@ -110,20 +65,14 @@ window.__ModuleLoader__.load({
       unexposeBtn: 'Remove',
 
       // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
-      composerHintDefault: 'Describe a task, set up a scheduled routine, or ask to publish an online deliverable…',
-      composerHintRole: 'Ask {role} to run a task, schedule a routine, or publish a deliverable…',
+      composerHintDefault: 'Describe a task, request a deliverable, or ask to publish an online preview page…',
+      composerHintRole: 'Ask {role} to complete a task, capture an approval, or publish an online deliverable…',
 
       // AI Usage & Shared Files
       finopsTitle: 'AI Usage & Shared Team Files',
       estimatedTokens: 'Usage: {tokens} tokens ({sessions} sessions · {messages} messages)',
       sharedFilesTitle: 'Shared Team Files (/home/workspace/shared)',
       sharedFilesEmpty: 'No shared project files yet.',
-
-      // Scheduled Routines
-      cronTitle: 'Scheduled Routines',
-      cronEmpty: 'No scheduled routines yet. Simply ask the AI in chat, e.g. "Run my daily report every weekday at 9 AM".',
-      scheduleSourceDsh: 'AI Schedule',
-      scheduleSourceCron: 'System Cron',
       removeBtn: 'Remove',
 
       // Team & Services
@@ -150,7 +99,6 @@ window.__ModuleLoader__.load({
       toastTaskUpdated: 'Task updated',
       toastApproved: 'Approval decision saved',
       toastAppRemoved: 'Online page removed',
-      toastCronRemoved: 'Scheduled routine removed',
       toastServiceOk: 'Service action completed',
       toastError: 'Action failed',
     }
@@ -158,27 +106,15 @@ window.__ModuleLoader__.load({
     const zh = {
       panel: '工作与交付',
       title: '工作与交付中心',
-      subtitle: '集中查看任务进度、待办审批、在线成果页面、定时事务与后台服务；新增与修改直接告诉 AI 对话即可。',
+      subtitle: '集中查看任务进度、待办审批、在线成果页面、团队共享文件与后台服务；新增与修改直接告诉 AI 对话即可。',
       refresh: '刷新',
       refreshing: '刷新中...',
       sopToggle: '展开查看岗位作业规范 (SOP)',
       tabWork: '任务与成果',
-      tabSchedule: '定时事务',
-      tabAdvanced: '团队协同与高级运维',
-
-      // KPI & Prompt bar
-      kpiPages: '在线页面',
-      kpiActiveTasks: '进行中任务',
-      kpiApprovals: '待人工审批',
-      kpiSchedules: '定时事务',
-      chatHintPrefix: '通过 AI 对话直接创建（点击复制示例）：',
-      promptExamplePage: '把我刚做好的页面发布成一个可分享的在线演示链接',
-      promptExampleCron: '帮我设置一个每个工作日早上 9 点自动运行的日报定时事务',
-      promptExampleTask: '帮我建一个待办任务：整理本周数据复盘，完成后发给我审批',
-      copiedHint: '示例已复制，直接粘贴到 AI 对话即可',
+      tabAdvanced: '团队协同与后台服务',
 
       // Search & Filter & Pagination
-      searchPlaceholder: '搜索任务、在线页面、定时事务、共享文件或后台服务...',
+      searchPlaceholder: '搜索任务、在线页面、共享文件或后台服务...',
       filterAll: '全部',
       filterActive: '进行中',
       filterDone: '已完成',
@@ -207,20 +143,14 @@ window.__ModuleLoader__.load({
       unexposeBtn: '下线',
 
       // Empty-composer inline hint (DSH 0.2.3+ conversation.input.placeholder)
-      composerHintDefault: '直接交代工作目标，或让我创建定时事务、发布在线成果页面与待审批任务…',
-      composerHintRole: '向「{role}」派发任务、创建定时事务或发布在线成果页面…',
+      composerHintDefault: '直接交代工作目标，或让我发布在线成果页面与待审批任务…',
+      composerHintRole: '向「{role}」派发任务、发起人工审批或发布在线成果页面…',
 
       // AI Usage & Shared Files
       finopsTitle: 'AI 用量统计与团队共享文件',
       estimatedTokens: '累计用量：{tokens} Tokens（{sessions} 个会话 · {messages} 条消息）',
       sharedFilesTitle: '团队共享文件（/home/workspace/shared）',
       sharedFilesEmpty: '暂无共享项目文件。',
-
-      // Scheduled Routines
-      cronTitle: '定时事务与值守计划',
-      cronEmpty: '暂未设置定时事务。直接在 AI 对话中说「每个工作日 9 点帮我跑一份日报」即可自动配置。',
-      scheduleSourceDsh: 'AI 定时任务',
-      scheduleSourceCron: '系统 Cron',
       removeBtn: '移除',
 
       // Team & Services
@@ -247,7 +177,6 @@ window.__ModuleLoader__.load({
       toastTaskUpdated: '任务状态已更新',
       toastApproved: '审批结果已保存',
       toastAppRemoved: '在线页面已下线',
-      toastCronRemoved: '已移除定时事务',
       toastServiceOk: '服务操作已完成',
       toastError: '操作失败',
     }
@@ -861,16 +790,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ClockIcon({ React, size = 15 }) {
-      const h = React.createElement
-      return h(
-        'svg',
-        { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' },
-        h('circle', { cx: 12, cy: 12, r: 9 }),
-        h('polyline', { points: '12 7 12 12 15.5 14' }),
-      )
-    }
-
     function ServerIcon({ React, size = 15 }) {
       const h = React.createElement
       return h(
@@ -1029,8 +948,6 @@ window.__ModuleLoader__.load({
     const WD_TASK_APPROVE_API = 'api/work-delivery.task-approve'
     const WD_APP_EXPOSE_API = 'api/work-delivery.app-expose'
     const WD_APP_UNEXPOSE_API = 'api/work-delivery.app-unexpose'
-    const WD_CRON_ADD_API = 'api/work-delivery.cron-add'
-    const WD_CRON_REMOVE_API = 'api/work-delivery.cron-remove'
     const WD_SERVICE_ACTION_API = 'api/work-delivery.service-action'
     const WD_SERVICE_ADD_API = 'api/work-delivery.service-add'
     const WD_SERVICE_REMOVE_API = 'api/work-delivery.service-remove'
@@ -1043,7 +960,6 @@ window.__ModuleLoader__.load({
         description: '',
         sop: '',
         exposed_apps: [],
-        cron_jobs: [],
         user_services: [],
         shared_files: [],
         token_usage: { estimated_tokens: 0, sessions_count: 0, messages_count: 0 },
@@ -1217,14 +1133,6 @@ window.__ModuleLoader__.load({
         return mutate(WD_APP_UNEXPOSE_API, { name }, 'toastAppRemoved')
       }
 
-      function addCronJob({ schedule, command }) {
-        return mutate(WD_CRON_ADD_API, { schedule, command }, 'toastCronAdded')
-      }
-
-      function removeCronJob({ raw }) {
-        return mutate(WD_CRON_REMOVE_API, { raw }, 'toastCronRemoved')
-      }
-
       function controlService({ name, action }) {
         return mutate(WD_SERVICE_ACTION_API, { name, action }, 'toastServiceOk')
       }
@@ -1258,8 +1166,6 @@ window.__ModuleLoader__.load({
         decideApproval,
         exposeApp,
         unexposeApp,
-        addCronJob,
-        removeCronJob,
         controlService,
         addService,
         removeService,
@@ -1301,7 +1207,6 @@ window.__ModuleLoader__.load({
         const [expandedTaskId, setExpandedTaskId] = React.useState('')
         const [taskLimit, setTaskLimit] = React.useState(PAGE_SIZE)
         const [appLimit, setAppLimit] = React.useState(PAGE_SIZE)
-        const [cronLimit, setCronLimit] = React.useState(PAGE_SIZE)
         const [fileLimit, setFileLimit] = React.useState(12)
 
         // Service logs inspection state
@@ -1323,7 +1228,6 @@ window.__ModuleLoader__.load({
         void tick
 
         const rawLocale = typeof getLocale === 'function' ? getLocale() : 'zh'
-        const lang = resolveLang(rawLocale)
         const t = createTranslator(rawLocale)
         const { state, loading, busy, toast } = controller.getSnapshot()
 
@@ -1332,7 +1236,6 @@ window.__ModuleLoader__.load({
 
         const allApprovals = state.pending_approvals || []
         const allApps = state.exposed_apps || []
-        const allCrons = state.cron_jobs || []
         const allServices = state.user_services || []
         const allFiles = state.shared_files || []
         const allTasks = state.tasks || []
@@ -1340,7 +1243,6 @@ window.__ModuleLoader__.load({
         const peers = state.peers || []
 
         const filteredApps = allApps.filter((a) => matchText(a.name, a.mount_path, a.target))
-        const filteredCrons = allCrons.filter((j) => matchText(j.name, j.schedule, formatScheduleHuman(j.schedule, lang), j.command))
         const filteredServices = allServices.filter((sv) => matchText(sv.name, sv.command, sv.status))
         const filteredFiles = allFiles.filter((f) => matchText(f.name))
         const filteredTasks = allTasks.filter((tk) => {
@@ -1439,7 +1341,7 @@ window.__ModuleLoader__.load({
                   )
                 : null,
 
-              // Toolbar: 3-Tab Switcher + Conditional Live Search
+              // Toolbar: 2-Tab Switcher + Conditional Live Search
               h(
                 'div',
                 { className: 'wd-toolbar' },
@@ -1448,7 +1350,6 @@ window.__ModuleLoader__.load({
                   { className: 'wd-tabs', role: 'tablist' },
                   [
                     { id: 'work', label: t('tabWork'), count: allTasks.length + allApps.length },
-                    { id: 'schedule', label: t('tabSchedule'), count: allCrons.length },
                     { id: 'advanced', label: t('tabAdvanced'), count: allServices.length },
                   ].map((tab) =>
                     h(
@@ -1466,7 +1367,7 @@ window.__ModuleLoader__.load({
                     ),
                   ),
                 ),
-                (allTasks.length + allApps.length + allCrons.length + allServices.length > 5 || search)
+                (allTasks.length + allApps.length + allServices.length > 5 || search)
                   ? h('input', {
                       className: 'wd-input',
                       style: { minWidth: '240px', flex: '1 1 240px', maxWidth: '380px' },
@@ -1476,7 +1377,6 @@ window.__ModuleLoader__.load({
                         setSearch(e.target.value)
                         setTaskLimit(PAGE_SIZE)
                         setAppLimit(PAGE_SIZE)
-                        setCronLimit(PAGE_SIZE)
                       },
                     })
                   : null,
@@ -1726,71 +1626,7 @@ window.__ModuleLoader__.load({
                   )
                 : null,
 
-              // TAB 2: Scheduled Routines (Read-Only + Remove + Pagination)
-              activeTab === 'schedule'
-                ? h(
-                    'div',
-                    { className: 'wd-card' },
-                    h(
-                      'div',
-                      { className: 'wd-card-head' },
-                      h('span', { className: 'wd-card-title' }, h(ClockIcon, { React, size: 16 }), t('cronTitle'), h('span', { className: 'wd-badge' }, String(filteredCrons.length))),
-                    ),
-                    filteredCrons.length === 0
-                      ? h('p', { className: 'wd-muted' }, q ? t('noSearchMatch', { query: search }) : t('cronEmpty'))
-                      : h(
-                          React.Fragment,
-                          null,
-                          h(
-                            'div',
-                            { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-                            filteredCrons.slice(0, cronLimit).map((job, idx) =>
-                              h(
-                                'div',
-                                { key: `${job.id || job.raw}-${idx}`, className: 'wd-item' },
-                                h(
-                                  'div',
-                                  { className: 'wd-item-col' },
-                                  h(
-                                    'div',
-                                    { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' } },
-                                    h(
-                                      'span',
-                                      {
-                                        className: job.source === 'dsh-schedule' ? 'wd-badge wd-badge-ok' : 'wd-badge',
-                                      },
-                                      job.source === 'dsh-schedule' ? t('scheduleSourceDsh') : t('scheduleSourceCron'),
-                                    ),
-                                    job.name
-                                      ? h('span', { className: 'wd-item-title' }, job.name)
-                                      : null,
-                                    h('span', { className: 'wd-badge wd-badge-warn', title: job.schedule }, formatScheduleHuman(job.schedule, lang)),
-                                    h('span', { className: 'wd-mono' }, job.schedule),
-                                  ),
-                                  h('span', { className: 'wd-mono', style: { fontSize: '13px' } }, job.command),
-                                ),
-                                job.source === 'dsh-schedule'
-                                  ? null
-                                  : h(
-                                      'button',
-                                      {
-                                        type: 'button',
-                                        className: 'wd-btn wd-btn-sm wd-btn-danger',
-                                        title: t('removeBtn'),
-                                        disabled: busy,
-                                        onClick: () => void controller.removeCronJob({ raw: job.raw || `${job.schedule} ${job.command}` }),
-                                      },
-                                      h(TrashIcon, { React, size: 13 }),
-                                    ),
-                              ),
-                            ),
-                          ),
-                          renderPagination(filteredCrons.length, cronLimit, setCronLimit),
-                        ),
-                  )
-                : null,
-
-              // TAB 3: Team & Background Services (Read-Only + Light Runtime Controls)
+              // TAB 2: Team & Background Services (Read-Only + Light Runtime Controls)
               activeTab === 'advanced'
                 ? h(
                     React.Fragment,

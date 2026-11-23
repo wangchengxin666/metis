@@ -17,7 +17,6 @@ import {
   SERVICE_NAME_RE,
   normalizeAppName,
   normalizeServiceName,
-  validateCronSchedule,
 } from '../shared/model.js'
 
 function defaultExec(cmd, args, opts = {}) {
@@ -58,7 +57,6 @@ export function createWorkDeliveryService({
   const appsDir = join(sandboxDir, 'caddy', 'apps.d')
   const servicesConfDir = join(sandboxDir, 'services', 'conf.d')
   const supConf = join(sandboxDir, 'services', 'supervisord.conf')
-  const cronFile = join(sandboxDir, 'crontab')
   const sharedDir = join(home, 'shared')
   const logsDir = join(home, 'logs')
 
@@ -151,72 +149,6 @@ export function createWorkDeliveryService({
       }
     } catch {}
     return list
-  }
-
-  function formatDshScheduleRule(t) {
-    if (!t || typeof t !== 'object') return ''
-    if (t.kind === 'cron' && t.expression) return String(t.expression)
-    if (t.kind === 'daily' && t.time) return `daily ${String(t.time).slice(0, 5)}`
-    if (t.kind === 'weekly' && t.time) {
-      const days = Array.isArray(t.weekdays) ? t.weekdays.join(',') : ''
-      return `weekly(${days}) ${String(t.time).slice(0, 5)}`
-    }
-    if (t.kind === 'every' && t.everySeconds) {
-      const s = Number(t.everySeconds)
-      if (s % 3600 === 0) return `every ${s / 3600}h`
-      if (s % 60 === 0) return `every ${s / 60}m`
-      return `every ${s}s`
-    }
-    if (t.kind === 'rrule' && t.rrule) return String(t.rrule)
-    if (t.scheduledAt) return `${t.kind} ${String(t.scheduledAt).slice(0, 16).replace('T', ' ')}`
-    return String(t.kind || '')
-  }
-
-  function readCronJobs() {
-    const jobs = []
-    const dshScheduleFile = join(dshHome, 'storages', 'schedule.json')
-    if (existsSync(dshScheduleFile)) {
-      const schedDoc = readJsonSafe(dshScheduleFile, {})
-      const taskMap = schedDoc?.tables?.tasks || {}
-      for (const [taskId, task] of Object.entries(taskMap)) {
-        if (!task || typeof task !== 'object' || task.status === 'ended') continue
-        const rule = formatDshScheduleRule(task)
-        jobs.push({
-          id: task.id || taskId,
-          name: task.title || taskId,
-          schedule: rule,
-          command: task.prompt || '',
-          status: task.status || 'active',
-          source: 'dsh-schedule',
-          raw: `${task.title || taskId} (${rule})`,
-        })
-      }
-    }
-    if (!existsSync(cronFile)) return jobs
-    try {
-      const raw = readFileSync(cronFile, 'utf8')
-      for (const line of raw.split(/\r?\n/)) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) continue
-        const tokens = trimmed.split(/\s+/)
-        if (tokens.length >= 6) {
-          jobs.push({
-            schedule: tokens.slice(0, 5).join(' '),
-            command: tokens.slice(5).join(' '),
-            source: 'cron',
-            raw: trimmed,
-          })
-        } else {
-          jobs.push({
-            schedule: '',
-            command: trimmed,
-            source: 'cron',
-            raw: trimmed,
-          })
-        }
-      }
-    } catch {}
-    return jobs
   }
 
   function readSharedFiles() {
@@ -409,7 +341,6 @@ export function createWorkDeliveryService({
       description: mesh.description,
       sop: mesh.sop,
       exposed_apps: readExposedApps(),
-      cron_jobs: readCronJobs(),
       user_services: readServices(),
       shared_files: readSharedFiles(),
       token_usage,
@@ -613,56 +544,6 @@ export function createWorkDeliveryService({
     }
   }
 
-  function addCronJob({ schedule, command }) {
-    const cleanSched = validateCronSchedule(schedule)
-    const cleanCmd = String(command || '').trim()
-    if (!cleanSched) {
-      return { ok: false, error: 'Invalid 5-field cron schedule', status: 400 }
-    }
-    if (!cleanCmd || /[\r\n]/.test(cleanCmd)) {
-      return { ok: false, error: 'Command is required and must be a single line', status: 400 }
-    }
-    const line = `${cleanSched} ${cleanCmd}`
-    try {
-      if (existsSync('/usr/local/bin/sandbox-cron')) {
-        execCmd('/usr/local/bin/sandbox-cron', ['add', line], {
-          env: { ...env, HOME: home },
-        })
-      } else {
-        mkdirSync(sandboxDir, { recursive: true })
-        const existing = existsSync(cronFile) ? readFileSync(cronFile, 'utf8') : ''
-        const lines = existing.split(/\r?\n/).filter((l) => l.trim().length > 0)
-        if (!lines.includes(line)) lines.push(line)
-        writeFileSync(cronFile, `${lines.join('\n')}\n`, 'utf8')
-      }
-      return { ok: true, line, state: getStateSnapshot() }
-    } catch (err) {
-      const msg = String(err?.stderr || err?.stdout || err?.message || err).trim().slice(-240)
-      return { ok: false, error: msg || 'Failed to add schedule', status: 500 }
-    }
-  }
-
-  function removeCronJob({ raw }) {
-    const target = String(raw || '').trim()
-    if (!target) return { ok: false, error: 'raw schedule line is required', status: 400 }
-    try {
-      if (existsSync(cronFile)) {
-        const lines = readFileSync(cronFile, 'utf8')
-          .split(/\r?\n/)
-          .filter((l) => l.trim() && l.trim() !== target)
-        writeFileSync(cronFile, lines.length ? `${lines.join('\n')}\n` : '', 'utf8')
-        if (existsSync('/usr/local/bin/sandbox-cron')) {
-          try {
-            execCmd('/usr/local/bin/sandbox-cron', ['sync'], { env: { ...env, HOME: home } })
-          } catch {}
-        }
-      }
-      return { ok: true, state: getStateSnapshot() }
-    } catch (err) {
-      return { ok: false, error: err?.message || 'Failed to remove schedule', status: 500 }
-    }
-  }
-
   function controlService({ name, action }) {
     const cleanName = normalizeServiceName(name)
     if (!SERVICE_NAME_RE.test(cleanName)) {
@@ -751,8 +632,6 @@ export function createWorkDeliveryService({
     decideApproval,
     exposeApp,
     unexposeApp,
-    addCronJob,
-    removeCronJob,
     controlService,
     addService,
     removeService,

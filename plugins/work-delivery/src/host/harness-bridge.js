@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { formatScheduleHuman } from '../shared/model.js'
 
 const GLOBAL_DSH_NM = '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai'
 
@@ -32,9 +31,9 @@ export function buildStandingGuide() {
   return [
     '## Work & Delivery Hub (工作与交付)',
     'Users create deliverables conversationally in chat and view/approve them in the "Work & Delivery" sidebar:',
-    '- Online pages (`sandbox-expose`), recurring schedules (`sandbox-cron`), and background services (`sandbox-service`) created via shell (see `sandbox-services` skill) appear live in Work & Delivery automatically.',
+    '- Online pages (`sandbox-expose`) and background services (`sandbox-service`) created via shell (see `sandbox-services` skill) appear live in Work & Delivery automatically. Recurring AI schedules belong in DSH native Automations (`schedule` tool).',
     '- Team tasks & approvals use `sandbox-mesh` (`mesh_dispatch_tasks`, `mesh_task_update`, `mesh_request_approval`); for quick solo personal tasks outside a group, use `delivery_task_create`.',
-    '- Call `delivery_overview()` whenever you need a single compact view of all current tasks, pending approvals, published pages, schedules, and services.',
+    '- Call `delivery_overview()` whenever you need a single compact view of all current tasks, pending approvals, published pages, and services.',
   ].join('\n')
 }
 
@@ -43,7 +42,7 @@ export function buildWorkDeliverySkillMarkdown(service) {
   return [
     '# Work & Delivery Hub Skill',
     '',
-    `Current status: ${snap.active_tasks_count} active tasks (${snap.pending_approvals.length} pending approvals), ${snap.exposed_apps.length} published pages, ${snap.cron_jobs.length} scheduled routines, ${snap.user_services.length} background services.`,
+    `Current status: ${snap.active_tasks_count} active tasks (${snap.pending_approvals.length} pending approvals), ${snap.exposed_apps.length} published pages, ${snap.user_services.length} background services.`,
     '',
     buildStandingGuide(),
   ].join('\n')
@@ -89,8 +88,8 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
           return [
             {
               name: 'work-delivery',
-              description: 'Inspect current Work & Delivery items (tasks, approvals, published pages, schedules, services) or capture a personal task.',
-              whenToUse: 'Use when summarizing current deliverables/schedules/tasks or capturing a solo personal task outside a project group.',
+              description: 'Inspect current Work & Delivery items (tasks, approvals, published pages, services) or capture a personal task.',
+              whenToUse: 'Use when summarizing current deliverables/tasks/services or capturing a solo personal task outside a project group.',
               invocation: { modelInvocable: true, userInvocable: true },
               source: 'runtime',
               provider: 'work-delivery-skill-provider',
@@ -102,8 +101,8 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
         async get() {
           return {
             name: 'work-delivery',
-            description: 'Inspect current Work & Delivery items (tasks, approvals, published pages, schedules, services) or capture a personal task.',
-            whenToUse: 'Use when summarizing current deliverables/schedules/tasks or capturing a solo personal task outside a project group.',
+            description: 'Inspect current Work & Delivery items (tasks, approvals, published pages, services) or capture a personal task.',
+            whenToUse: 'Use when summarizing current deliverables/tasks/services or capturing a solo personal task outside a project group.',
             invocation: { modelInvocable: true, userInvocable: true },
             source: 'runtime',
             provider: 'work-delivery-skill-provider',
@@ -133,7 +132,7 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
 
       reg({
         name: 'delivery_overview',
-        description: 'Inspect current Work & Delivery Hub summary: active tasks, pending human approvals, published online web pages, scheduled routines, shared files, and background services.',
+        description: 'Inspect current Work & Delivery Hub summary: active tasks, pending human approvals, published online web pages, shared files, and background services.',
         parameters: {},
         output: {
           schema: { type: 'object', additionalProperties: true },
@@ -143,7 +142,6 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
               `Work & Delivery Overview (@${s.slug || 'sandbox'}${s.role ? ` · ${s.role}` : ''})`,
               `- Tasks: ${s.active_tasks_count || 0} active, ${s.done_tasks_count || 0} done, ${(s.pending_approvals || []).length} pending approval`,
               `- Published Pages (${(s.exposed_apps || []).length}): ${(s.exposed_apps || []).map((a) => `${a.name} -> ${a.url || a.mount_path}`).join('; ') || 'none'}`,
-              `- Scheduled Routines (${(s.cron_jobs || []).length}): ${(s.cron_jobs || []).map((j) => `${formatScheduleHuman(j.schedule, 'en')} [${j.schedule}] ${j.command}`).join('; ') || 'none'}`,
               `- Background Services (${(s.user_services || []).length}): ${(s.user_services || []).map((sv) => `${sv.name} (${sv.status})`).join('; ') || 'none'}`,
             ]
             return [{ type: 'text', text: lines.join('\n') }]

@@ -18,7 +18,7 @@ import httpx
 from ..config import Settings
 from ..models import LlmProfile, Sandbox
 from ..plugin_registry import PluginRegistryService
-from ..security import decrypt_secret
+from ..security import decrypt_secret, derive_sandbox_gateway_secret
 from .errors import SandboxRuntimeError
 from .operations import WorkforceOperationsMixin
 from .sync import SandboxSyncMixin, llm_provider_identifiers
@@ -175,12 +175,22 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
             "DSH_PUBLIC_URL": dsh_public_url,
             "DSH_TRUSTED_HOSTS": trusted_hosts,
             "DSH_TOKEN_COOKIE_NAME": f"dsh_token_seen_{suffix}",
+            "METIS_GATEWAY_AUTH_SECRET": derive_sandbox_gateway_secret(
+                sandbox.id, sandbox.slug
+            ),
             "DSH_PERMISSION_MODE": self.settings.dsh_permission_mode,
             "DSH_PLUGIN_INDEX_URL": f"{manager_url}/plugins/index.json",
             "DSH_PLUGIN_NPM_REGISTRY": f"{manager_url}/plugins/npm",
             "SANDBOX_TEMPLATE": sandbox.template or "agent-os",
             "TZ": self.settings.sandbox_timezone,
         }
+
+        extra_indexes = getattr(sandbox, "_extra_plugin_indexes", None)
+        if isinstance(extra_indexes, list) and extra_indexes:
+            env["DSH_EXTRA_PLUGIN_INDEX_URLS"] = json.dumps(
+                [str(u) for u in extra_indexes if str(u).strip()],
+                ensure_ascii=False,
+            )
 
         if self.settings.gateway_internal_url and self.settings.gateway_internal_url.strip():
             env["DSH_GATEWAY_INTERNAL_URL"] = self.settings.gateway_internal_url.strip().rstrip("/")

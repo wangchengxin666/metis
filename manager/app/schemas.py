@@ -247,6 +247,17 @@ class PluginSyncRequest(BaseModel):
     sandbox_ids: list[str] | None = None
 
 
+class PluginIndexSourceIn(BaseModel):
+    url: str = Field(min_length=1, max_length=1024)
+    label: str = Field(default="", max_length=80)
+    enabled: bool = True
+
+
+class PluginIndexSourcesUpdate(BaseModel):
+    indexes: list[PluginIndexSourceIn] = Field(default_factory=list)
+    sync_sandboxes: bool = False
+
+
 class IdleSleepPolicyOut(BaseModel):
     enabled: bool = False
     idle_minutes: int = Field(default=240, ge=5, le=43200)

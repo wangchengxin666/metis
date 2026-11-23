@@ -12,6 +12,7 @@ AUTH_RESPONSE_HEADERS = [
     "X-Auth-Request-Name",
     "X-Auth-Request-Admin",
     "X-Sandbox-Owner-Name",
+    "X-Metis-Gateway-Auth",
 ]
 
 

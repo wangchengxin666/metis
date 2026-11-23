@@ -23,6 +23,7 @@ APPS_DIR=${APPS_DIR:-/home/workspace/.dsh-sandbox/caddy/apps.d}
 DSH_TOKEN_PORT=${DSH_TOKEN_PORT:-3090}
 PUBLIC_SCHEME=${PUBLIC_SCHEME:-http}
 DSH_TOKEN_COOKIE_NAME=$(printf '%s' "${DSH_TOKEN_COOKIE_NAME:-dsh_token_seen}" | tr -c 'A-Za-z0-9_-' '_')
+DSH_GATEWAY_AUTH_ACTIVE=${DSH_GATEWAY_AUTH_ACTIVE:-false}
 
 case "${DSH_MOUNT}" in
   /*) ;;
@@ -77,6 +78,10 @@ fi
 
 	# Authentication for DSH routes (/dsh/*, /_dsh-token) is enforced at the
 	# outer Traefik gateway via ForwardAuth; /apps/* and /p/* remain open by default.
+EOF
+
+  if [ "${DSH_GATEWAY_AUTH_ACTIVE}" != "true" ]; then
+    cat <<EOF
 
 	# Send a browser that has not completed a DSH launch-token exchange to
 	# the loopback helper so /s/<slug>/ works seamlessly with Traefik ForwardAuth.
@@ -91,9 +96,12 @@ fi
 	handle @dshToken {
 		reverse_proxy 127.0.0.1:${DSH_TOKEN_PORT}
 	}
+EOF
+  fi
 
-	# The bare mount must reach the listener as <mount>/ because only that
-	# document URL exchanges the launch token and resolves relative assets.
+  cat <<EOF
+
+	# The bare mount must reach the listener as <mount>/ so relative assets resolve.
 	@dshBare path ${DSH_MOUNT}
 	redir @dshBare ${DSH_MOUNT}/{?query} 308
 

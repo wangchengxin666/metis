@@ -15,6 +15,9 @@
     "build": "node scripts/build.mjs",
     "test": "node .test/run.mjs"
   },
+  "engines": {
+    "dsh": ">=0.2.0 <0.3.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

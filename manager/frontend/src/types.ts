@@ -259,6 +259,13 @@ export interface LlmProfileItem {
   has_api_key?: boolean
 }
 
+export interface PluginIndexSource {
+  url: string
+  label: string
+  kind: 'git' | 'http'
+  enabled: boolean
+}
+
 export interface PluginItem {
   slug: string
   package_name: string
@@ -269,6 +276,7 @@ export interface PluginItem {
   description_en: string
   author: string
   category: string
+  labels?: string[]
   icon_url: string | null
   tarball_url: string
   npm_packument_url: string

@@ -218,12 +218,12 @@ class PluginRegistryService:
             doc = {}
 
         doc.setdefault("format", 1)
-        doc.setdefault("title", {"en": "DSH Sandbox Plugins", "zh": "DSH 沙箱平台插件"})
+        doc.setdefault("title", {"en": "Metis Platform Plugins", "zh": "Metis 平台能力插件"})
         doc.setdefault(
             "description",
             {
-                "en": "Self-hosted plugins for DSH sandboxes.",
-                "zh": "由 DSH 沙箱托管平台自托管的插件索引。",
+                "en": "Built-in plugins maintained and hosted by Metis.",
+                "zh": "由 Metis 平台维护与托管的内置能力插件。",
             },
         )
 
@@ -241,16 +241,28 @@ class PluginRegistryService:
             else f"{reachable_base}/plugins/npm"
         )
 
+        existing_order: list[str] = []
         existing_entries: dict[str, dict[str, Any]] = {}
         for item in doc.get("plugins", []):
             if isinstance(item, dict) and item.get("name"):
-                existing_entries[str(item["name"])] = copy.deepcopy(item)
+                name_key = str(item["name"])
+                existing_entries[name_key] = copy.deepcopy(item)
+                if name_key not in existing_order:
+                    existing_order.append(name_key)
+
+        ordered_packages: list[BuiltPluginPackage] = []
+        for name_key in existing_order:
+            if name_key in packages_by_name:
+                ordered_packages.append(packages_by_name[name_key])
+        for pkg_obj in packages:
+            if pkg_obj.name not in existing_entries:
+                ordered_packages.append(pkg_obj)
 
         merged_plugins: list[dict[str, Any]] = []
         seen_names: set[str] = set()
 
-        # First process all live packages discovered on disk so version/files are always up-to-date
-        for pkg_obj in packages:
+        # Process live packages in index.json display order so version/files are always up-to-date
+        for pkg_obj in ordered_packages:
             seen_names.add(pkg_obj.name)
             entry = existing_entries.get(pkg_obj.name, {})
             pkg_json = pkg_obj.package_json
@@ -283,7 +295,7 @@ class PluginRegistryService:
             entry["author"] = (
                 self.settings.plugin_index_author
                 or entry.get("author")
-                or str(pkg_json.get("author") or "DSH Sandbox Platform")
+                or str(pkg_json.get("author") or "Metis")
             )
 
             if self.settings.plugin_git_url:

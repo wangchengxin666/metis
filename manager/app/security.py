@@ -73,3 +73,10 @@ def verify_password(password: str, stored_hash: str | None) -> bool:
         dklen=len(expected),
     )
     return hmac.compare_digest(derived, expected)
+
+
+def derive_sandbox_gateway_secret(sandbox_id: str, slug: str) -> str:
+    """Derive a stable per-sandbox HMAC secret for Traefik ForwardAuth -> DSH verification."""
+    key = get_settings().secret_key.encode("utf-8")
+    msg = f"metis-gateway-auth:v1:{sandbox_id}:{slug}".encode("utf-8")
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()

@@ -8,7 +8,103 @@
     "en": "Built-in plugins maintained and hosted by Metis.",
     "zh": "由 Metis 平台维护与托管的内置能力插件。"
   },
+  "metadata": {
+    "categories": {
+      "core": {
+        "title": {
+          "en": "Platform Core",
+          "zh": "平台核心"
+        }
+      },
+      "workspace": {
+        "title": {
+          "en": "Work & Files",
+          "zh": "工作与文件"
+        }
+      },
+      "collaboration": {
+        "title": {
+          "en": "Collaboration & Memory",
+          "zh": "协同与记忆"
+        }
+      }
+    },
+    "labels": {
+      "builtin": {
+        "title": {
+          "en": "Built-in",
+          "zh": "平台内置"
+        }
+      },
+      "sidebar": {
+        "title": {
+          "en": "Sidebar",
+          "zh": "侧边栏"
+        }
+      },
+      "ai-tools": {
+        "title": {
+          "en": "AI Tools",
+          "zh": "AI 工具"
+        }
+      },
+      "multi-agent": {
+        "title": {
+          "en": "Multi-Agent",
+          "zh": "多员工协同"
+        }
+      }
+    }
+  },
   "plugins": [
+    {
+      "name": "@metis/work-delivery",
+      "title": {
+        "en": "Work & Delivery",
+        "zh": "工作与交付"
+      },
+      "description": {
+        "en": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, schedules, tasks, and services directly via AI chat.",
+        "zh": "DSH 内置工作与交付中心：支持搜索、筛选、分页浏览与人工审批；通过 AI 对话直接创建在线成果页面、定时事务、任务与后台服务。"
+      },
+      "icon": "icons/work-delivery.svg",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/work-delivery",
+      "repository": {
+        "url": "https://github.com/wangchengxin666/metis",
+        "directory": "plugins/work-delivery"
+      },
+      "metadata": {
+        "category": "workspace",
+        "labels": [
+          "builtin",
+          "sidebar",
+          "ai-tools"
+        ],
+        "keywords": [
+          "work",
+          "delivery",
+          "tasks",
+          "schedule",
+          "cron",
+          "pages",
+          "services"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1795356000,
+          "source": {
+            "type": "npm",
+            "registry": "http://localhost:9000/plugins/npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0 <0.3.0"
+          }
+        }
+      ]
+    },
     {
       "name": "@metis/file-manager",
       "title": {
@@ -23,93 +119,27 @@
       "author": "Metis",
       "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/file-manager",
       "repository": {
-        "url": "https://github.com/wangchengxin666/metis"
+        "url": "https://github.com/wangchengxin666/metis",
+        "directory": "plugins/file-manager"
       },
-      "keywords": [
-        "files",
-        "file manager",
-        "upload",
-        "download",
-        "zip",
-        "sidebar"
-      ],
+      "metadata": {
+        "category": "workspace",
+        "labels": [
+          "builtin",
+          "sidebar"
+        ],
+        "keywords": [
+          "files",
+          "file manager",
+          "upload",
+          "download",
+          "zip",
+          "sidebar"
+        ]
+      },
       "versions": [
         {
           "version": "1.0.0",
-          "publishTimestamp": 1794564442,
-          "source": {
-            "type": "npm",
-            "registry": "http://localhost:9000/plugins/npm"
-          },
-          "engines": {
-            "dsh": ">=0.2.0 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "@metis/workspace-user",
-      "title": {
-        "en": "Workspace User Identity",
-        "zh": "当前用户身份栏"
-      },
-      "description": {
-        "en": "Displays the signed-in user's name and email at the bottom-left of the sidebar, highlights admin inspection access, and opens a quick navigation menu (/my, /admin, Sign Out).",
-        "zh": "在侧边栏左下角显示当前登录用户的名称与邮箱，标记管理员代管访问状态，并提供返回 /my、管理后台与退出登录快捷菜单。"
-      },
-      "icon": "icons/workspace-user.svg",
-      "author": "Metis",
-      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/workspace-user",
-      "repository": {
-        "url": "https://github.com/wangchengxin666/metis"
-      },
-      "keywords": [
-        "user",
-        "identity",
-        "admin",
-        "sidebar",
-        "menu"
-      ],
-      "versions": [
-        {
-          "version": "0.1.0",
-          "publishTimestamp": 1794564442,
-          "source": {
-            "type": "npm",
-            "registry": "http://localhost:9000/plugins/npm"
-          },
-          "engines": {
-            "dsh": ">=0.2.0 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "@metis/custom-theme",
-      "title": {
-        "en": "Custom Theme & Tokens",
-        "zh": "自定义主题与配色"
-      },
-      "description": {
-        "en": "Ships a default Aurora Blue theme and lets users customize presets, light/dark --dsw-* CSS tokens, custom CSS variables, and sidebar branding with persistent zero-flash injection.",
-        "zh": "自带开箱即用的“极光蔚蓝”默认主题，并支持切换预设、编辑明暗双模式 CSS Token、添加自定义 CSS 变量及定制侧边栏品牌 Logo 与名称，持久化无闪烁生效。"
-      },
-      "icon": "icons/custom-theme.svg",
-      "author": "Metis",
-      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/custom-theme",
-      "repository": {
-        "url": "https://github.com/wangchengxin666/metis"
-      },
-      "keywords": [
-        "theme",
-        "tokens",
-        "appearance",
-        "branding",
-        "colors"
-      ],
-      "versions": [
-        {
-          "version": "0.1.0",
           "publishTimestamp": 1794564442,
           "source": {
             "type": "npm",
@@ -135,16 +165,26 @@
       "author": "Metis",
       "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/sandbox-mesh",
       "repository": {
-        "url": "https://github.com/wangchengxin666/metis"
+        "url": "https://github.com/wangchengxin666/metis",
+        "directory": "plugins/sandbox-mesh"
       },
-      "keywords": [
-        "mesh",
-        "pair",
-        "group",
-        "chat",
-        "agent",
-        "federation"
-      ],
+      "metadata": {
+        "category": "collaboration",
+        "labels": [
+          "builtin",
+          "sidebar",
+          "ai-tools",
+          "multi-agent"
+        ],
+        "keywords": [
+          "mesh",
+          "pair",
+          "group",
+          "chat",
+          "agent",
+          "federation"
+        ]
+      },
       "versions": [
         {
           "version": "0.3.10",
@@ -173,16 +213,25 @@
       "author": "Metis",
       "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/sandbox-memory",
       "repository": {
-        "url": "https://github.com/wangchengxin666/metis"
+        "url": "https://github.com/wangchengxin666/metis",
+        "directory": "plugins/sandbox-memory"
       },
-      "keywords": [
-        "memory",
-        "long-term-memory",
-        "environment",
-        "context",
-        "auto-capture",
-        "sandbox"
-      ],
+      "metadata": {
+        "category": "collaboration",
+        "labels": [
+          "builtin",
+          "sidebar",
+          "ai-tools"
+        ],
+        "keywords": [
+          "memory",
+          "long-term-memory",
+          "environment",
+          "context",
+          "auto-capture",
+          "sandbox"
+        ]
+      },
       "versions": [
         {
           "version": "0.1.0",
@@ -198,34 +247,84 @@
       ]
     },
     {
-      "name": "@metis/work-delivery",
+      "name": "@metis/workspace-user",
       "title": {
-        "en": "Work & Delivery",
-        "zh": "工作与交付"
+        "en": "Workspace User Identity",
+        "zh": "当前用户身份栏"
       },
       "description": {
-        "en": "Read-first Work & Delivery Hub inside DSH with search, filtering, pagination, and human approvals — create pages, schedules, tasks, and services directly via AI chat.",
-        "zh": "DSH 内置工作与交付中心：支持搜索、筛选、分页浏览与人工审批；通过 AI 对话直接创建在线成果页面、定时事务、任务与后台服务。"
+        "en": "Displays the signed-in user's name and email at the bottom-left of the sidebar, highlights admin inspection access, and opens a quick navigation menu (/my, /admin, Sign Out).",
+        "zh": "在侧边栏左下角显示当前登录用户的名称与邮箱，标记管理员代管访问状态，并提供返回 /my、管理后台与退出登录快捷菜单。"
       },
-      "icon": "icons/work-delivery.svg",
+      "icon": "icons/workspace-user.svg",
       "author": "Metis",
-      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/work-delivery",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/workspace-user",
       "repository": {
-        "url": "https://github.com/wangchengxin666/metis"
+        "url": "https://github.com/wangchengxin666/metis",
+        "directory": "plugins/workspace-user"
       },
-      "keywords": [
-        "work",
-        "delivery",
-        "tasks",
-        "schedule",
-        "cron",
-        "pages",
-        "services"
-      ],
+      "metadata": {
+        "category": "core",
+        "labels": [
+          "builtin",
+          "sidebar"
+        ],
+        "keywords": [
+          "user",
+          "identity",
+          "admin",
+          "sidebar",
+          "menu"
+        ]
+      },
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1795356000,
+          "publishTimestamp": 1794564442,
+          "source": {
+            "type": "npm",
+            "registry": "http://localhost:9000/plugins/npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@metis/custom-theme",
+      "title": {
+        "en": "Custom Theme & Tokens",
+        "zh": "自定义主题与配色"
+      },
+      "description": {
+        "en": "Ships a default Aurora Blue theme and lets users customize presets, light/dark --dsw-* CSS tokens, custom CSS variables, and sidebar branding with persistent zero-flash injection.",
+        "zh": "自带开箱即用的“极光蔚蓝”默认主题，并支持切换预设、编辑明暗双模式 CSS Token、添加自定义 CSS 变量及定制侧边栏品牌 Logo 与名称，持久化无闪烁生效。"
+      },
+      "icon": "icons/custom-theme.svg",
+      "author": "Metis",
+      "homepage": "https://github.com/wangchengxin666/metis/tree/main/plugins/custom-theme",
+      "repository": {
+        "url": "https://github.com/wangchengxin666/metis",
+        "directory": "plugins/custom-theme"
+      },
+      "metadata": {
+        "category": "core",
+        "labels": [
+          "builtin"
+        ],
+        "keywords": [
+          "theme",
+          "tokens",
+          "appearance",
+          "branding",
+          "colors"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794564442,
           "source": {
             "type": "npm",
             "registry": "http://localhost:9000/plugins/npm"

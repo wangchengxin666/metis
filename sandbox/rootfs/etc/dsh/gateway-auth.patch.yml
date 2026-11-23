@@ -1,0 +1,13 @@
+# Metis Gateway Auth overlay (applied automatically on DSH >= 0.2.3 when
+# METIS_GATEWAY_AUTH_SECRET is configured by Metis Manager).
+# Replaces DSH's standalone launch-token + QR/pairing authentication with
+# zero-redirect Traefik ForwardAuth verification via ctx.connection.authentication.
+- id: authentication-token
+  disabled: true
+
+- id: remote-connection
+  disabled: true
+
+- insert:
+    - id: metis-gateway-auth
+      name: 'file:///opt/metis-gateway-auth/index.js'

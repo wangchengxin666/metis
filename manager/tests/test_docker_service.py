@@ -160,8 +160,11 @@ def test_create_container_uses_no_host_ports_and_traefik_forwardauth(tmp_path):
     )
     assert labels["traefik.http.middlewares.dsh-auth-alice.forwardauth.authResponseHeaders"] == (
         "X-Auth-Request-Email,X-Forwarded-User,X-Sandbox-Owner,"
-        "X-Auth-Request-Name,X-Auth-Request-Admin,X-Sandbox-Owner-Name"
+        "X-Auth-Request-Name,X-Auth-Request-Admin,X-Sandbox-Owner-Name,"
+        "X-Metis-Gateway-Auth"
     )
+    assert "METIS_GATEWAY_AUTH_SECRET" in kwargs["environment"]
+    assert len(kwargs["environment"]["METIS_GATEWAY_AUTH_SECRET"]) == 64
     assert labels["traefik.http.services.dsh-sbx-alice.loadbalancer.server.port"] == "8080"
 
 

@@ -16,8 +16,8 @@ from ..deps import (
     settings,
 )
 from ..models import Sandbox
-from ..schemas import PluginSyncRequest
-from ..services import audit
+from ..schemas import PluginIndexSourcesUpdate, PluginSyncRequest
+from ..services import audit, get_extra_plugin_indexes, set_extra_plugin_indexes
 
 router = APIRouter()
 
@@ -99,6 +99,7 @@ def plugin_npm_packument(package_name: str, request: Request):
 
 @router.get("/api/plugins")
 def api_plugins(
+    db: Session = Depends(get_db),
     _: None = Depends(require_admin_api),
 ):
     base_url = settings.manager_base_url
@@ -107,11 +108,13 @@ def api_plugins(
     index_by_name = {
         entry.get("name"): entry for entry in index_doc.get("plugins", [])
     }
+    root_meta = index_doc.get("metadata") if isinstance(index_doc.get("metadata"), dict) else {}
     items = []
     for pkg in packages:
         entry = index_by_name.get(pkg.name) or {}
         title_obj = entry.get("title") or {}
         desc_obj = entry.get("description") or {}
+        entry_meta = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
         items.append(
             {
                 "slug": pkg.slug,
@@ -137,8 +140,9 @@ def api_plugins(
                     else pkg.description
                 )
                 or pkg.description,
-                "author": entry.get("author") or "DSH Sandbox Platform",
-                "category": (entry.get("categories") or ["utility"])[0],
+                "author": entry.get("author") or "Metis",
+                "category": entry_meta.get("category") or (entry.get("categories") or ["utility"])[0],
+                "labels": entry_meta.get("labels") or [],
                 "icon_url": f"{base_url}/plugins/icons/{pkg.slug}.svg",
                 "tarball_url": f"{base_url}/plugins/packages/{pkg.slug}.tgz",
                 "npm_packument_url": f"{base_url}/plugins/npm/{pkg.name}",
@@ -150,7 +154,51 @@ def api_plugins(
         "npm_registry_url": f"{base_url}/plugins/npm",
         "source_type": settings.plugin_source_type,
         "auto_install_default": settings.sandbox_auto_install_plugins,
+        "categories": root_meta.get("categories") or {},
+        "extra_indexes": get_extra_plugin_indexes(db),
         "items": items,
+    }
+
+
+@router.put("/api/plugins/indexes")
+def api_update_plugin_indexes(
+    payload: PluginIndexSourcesUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    actor = session_email(request) if request is not None else None
+    try:
+        saved = set_extra_plugin_indexes(
+            db,
+            [item.model_dump() for item in payload.indexes],
+            actor=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    synced = 0
+    results: list[dict] = []
+    if payload.sync_sandboxes:
+        enabled_urls = [str(x["url"]) for x in saved if x.get("enabled", True)]
+        sandboxes = list(
+            db.scalars(select(Sandbox).where(Sandbox.deleted_at.is_(None))).all()
+        )
+        for sbx in sandboxes:
+            try:
+                res = resolve_docker().sync_plugin_market(
+                    sbx,
+                    extra_indexes=enabled_urls,
+                )
+                results.append(res)
+            except Exception as exc:
+                results.append({"slug": sbx.slug, "ok": False, "detail": str(exc)})
+        synced = len([r for r in results if r.get("ok")])
+
+    return {
+        "extra_indexes": saved,
+        "synced": synced,
+        "results": results,
     }
 
 
@@ -171,6 +219,11 @@ def api_sync_plugins_to_sandboxes(
         req.plugins if req.mode == "reinstall_selected" and req.plugins else None
     )
     force_reinstall = req.mode == "reinstall_builtin"
+    extra_urls = [
+        str(x["url"])
+        for x in get_extra_plugin_indexes(db)
+        if x.get("enabled", True) and x.get("url")
+    ]
 
     results = []
     for sbx in sandboxes:
@@ -179,6 +232,7 @@ def api_sync_plugins_to_sandboxes(
                 sbx,
                 reinstall_plugins=reinstall_plugins,
                 force_reinstall=force_reinstall,
+                extra_indexes=extra_urls,
             )
             results.append(res)
         except Exception as exc:

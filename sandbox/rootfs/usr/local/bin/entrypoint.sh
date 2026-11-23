@@ -275,6 +275,11 @@ if [ -n "${DSH_PLUGIN_INDEX_URL:-}" ]; then
   chown "${WORKSPACE_USER}:${WORKSPACE_USER}" /home/workspace/.dsh-sandbox/plugin-index-url.txt
   log "plugin index URL configured: ${DSH_PLUGIN_INDEX_URL}"
 fi
+if [ -n "${DSH_EXTRA_PLUGIN_INDEX_URLS:-}" ]; then
+  printf '%s\n' "${DSH_EXTRA_PLUGIN_INDEX_URLS}" >/home/workspace/.dsh-sandbox/plugin-extra-indexes.json
+  chown "${WORKSPACE_USER}:${WORKSPACE_USER}" /home/workspace/.dsh-sandbox/plugin-extra-indexes.json
+  log "extra plugin index sources configured"
+fi
 if [ -n "${npm_registry}" ]; then
   printf '%s\n' "${npm_registry}" >/home/workspace/.dsh-sandbox/plugin-npm-registry.txt
   chown "${WORKSPACE_USER}:${WORKSPACE_USER}" /home/workspace/.dsh-sandbox/plugin-npm-registry.txt
@@ -338,6 +343,17 @@ rm -f /etc/supervisor/conf.d/10-oauth2-proxy.conf /etc/supervisor/conf.d/11-oaut
 # ---------------------------------------------------------------------------
 # Runtime configuration
 # ---------------------------------------------------------------------------
+DSH_GATEWAY_AUTH_MODE=${DSH_GATEWAY_AUTH_MODE:-auto}
+DSH_GATEWAY_AUTH_ACTIVE=false
+if [ "${DSH_GATEWAY_AUTH_MODE}" = "gateway" ]; then
+  DSH_GATEWAY_AUTH_ACTIVE=true
+elif [ "${DSH_GATEWAY_AUTH_MODE}" = "auto" ] \
+  && [ -n "${METIS_GATEWAY_AUTH_SECRET:-}" ] \
+  && [ -d /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-authentication-token ]; then
+  DSH_GATEWAY_AUTH_ACTIVE=true
+fi
+export DSH_GATEWAY_AUTH_ACTIVE
+
 /usr/local/bin/render-caddyfile.sh /etc/caddy/Caddyfile
 /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 chmod 0644 /etc/caddy/Caddyfile
@@ -387,6 +403,10 @@ killasgroup=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 redirect_stderr=true
+EOF
+
+if [ "${DSH_GATEWAY_AUTH_ACTIVE}" != "true" ]; then
+  cat >>/etc/supervisor/conf.d/00-runtime.conf <<'EOF'
 
 [program:dsh-token]
 command=/usr/local/bin/dsh-token
@@ -402,6 +422,10 @@ killasgroup=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 redirect_stderr=true
+EOF
+fi
+
+cat >>/etc/supervisor/conf.d/00-runtime.conf <<'EOF'
 
 [program:dsh]
 command=/usr/local/bin/dsh-web
@@ -421,6 +445,10 @@ EOF
 
 log "public URL: ${PUBLIC_URL}"
 log "DSH listener: 127.0.0.1:${DSH_PORT} (mount ${DSH_MOUNT}, base ${SANDBOX_BASE_PATH:-/}); Caddy: :${CADDY_PORT}"
-log "open ${PUBLIC_URL} with the ?token=... suffix printed by the dsh program below"
+if [ "${DSH_GATEWAY_AUTH_ACTIVE}" = "true" ]; then
+  log "auth mode: metis-gateway-auth (zero-redirect Traefik ForwardAuth via ctx.connection.authentication)"
+else
+  log "auth mode: dsh-token (launch-token cookie exchange)"
+fi
 
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf -n

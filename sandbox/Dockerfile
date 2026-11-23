@@ -191,10 +191,11 @@ RUN sed -i 's/\r$//' \
       /usr/local/bin/sandbox-service \
       /usr/local/bin/user-services \
       /etc/dsh/*.yml \
+      /opt/metis-gateway-auth/* \
       /etc/profile.d/toolchain.sh \
       /etc/supervisor/supervisord.conf \
- && chmod 0755 /usr /usr/local /usr/local/bin /etc /etc/dsh /etc/profile.d /etc/supervisor \
- && chmod -R a+rX /etc/dsh \
+ && chmod 0755 /usr /usr/local /usr/local/bin /etc /etc/dsh /etc/profile.d /etc/supervisor /opt /opt/metis-gateway-auth \
+ && chmod -R a+rX /etc/dsh /opt/metis-gateway-auth \
  && chmod 0755 /usr/local/bin/* \
  && chmod 0644 /etc/profile.d/toolchain.sh /etc/supervisor/supervisord.conf \
  && grep -Fq '/opt/toolchain/env.sh' /etc/bash.bashrc \
@@ -206,7 +207,7 @@ USER workspace
 RUN HOME=/home/workspace DSH_HOME=/home/workspace/.dsh dsh --profile web --help >/dev/null
 USER root
 
-# Build-time guard: root-mounted and subpath-mounted (/s/alice) variants must parse.
+# Build-time guard: root-mounted, subpath token-mode, and subpath gateway-auth variants must parse.
 RUN CADDY_PORT=8080 DSH_PORT=3080 DSH_MOUNT=/dsh \
       APPS_DIR=/home/workspace/.dsh-sandbox/caddy/apps.d PUBLIC_SCHEME=http \
       /usr/local/bin/render-caddyfile.sh /tmp/Caddyfile.root \
@@ -215,7 +216,11 @@ RUN CADDY_PORT=8080 DSH_PORT=3080 DSH_MOUNT=/dsh \
       APPS_DIR=/home/workspace/.dsh-sandbox/caddy/apps.d PUBLIC_SCHEME=https \
       /usr/local/bin/render-caddyfile.sh /tmp/Caddyfile.subpath \
  && caddy validate --config /tmp/Caddyfile.subpath --adapter caddyfile \
- && rm -f /tmp/Caddyfile.root /tmp/Caddyfile.subpath
+ && CADDY_PORT=8080 DSH_PORT=3080 SANDBOX_BASE_PATH=/s/alice DSH_MOUNT=/s/alice/dsh \
+      APPS_DIR=/home/workspace/.dsh-sandbox/caddy/apps.d PUBLIC_SCHEME=https DSH_GATEWAY_AUTH_ACTIVE=true \
+      /usr/local/bin/render-caddyfile.sh /tmp/Caddyfile.gwauth \
+ && caddy validate --config /tmp/Caddyfile.gwauth --adapter caddyfile \
+ && rm -f /tmp/Caddyfile.root /tmp/Caddyfile.subpath /tmp/Caddyfile.gwauth
 
 ENV DSH_HOME=/home/workspace/.dsh \
     DSH_PERMISSION_MODE=danger-full-access \

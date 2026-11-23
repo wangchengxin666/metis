@@ -250,6 +250,7 @@ class FakeDockerService:
         sandbox: Sandbox,
         reinstall_plugins: list[str] | None = None,
         force_reinstall: bool = False,
+        extra_indexes: list[str] | None = None,
     ) -> dict[str, Any]:
         self.calls.append(
             ("sync_plugin_market", (sandbox.slug, reinstall_plugins, force_reinstall))

@@ -638,3 +638,135 @@ def set_branding_settings(
     return cfg["brand_name_zh"], cfg["brand_name_en"]
 
 
+_PLUGIN_INDEX_KEY = "plugin_market_extra_indexes_json"
+_SCP_GIT_RE = re.compile(r"^([A-Za-z0-9._-]+)@([A-Za-z0-9.-]+):(.+)$")
+
+
+def normalize_plugin_index_source(raw_url: str, label: str = "") -> dict[str, str]:
+    """Validate and normalize a DSH Plugin Market index source URL (HTTP(S) JSON or Git repo)."""
+    url = (raw_url or "").strip()
+    if not url:
+        raise ValueError("索引源地址不能为空")
+    if len(url) > 1024:
+        raise ValueError("索引源地址过长（上限 1024 字符）")
+    if any(ch.isspace() or ord(ch) < 32 for ch in url):
+        raise ValueError(f"索引源地址包含非法空白或控制字符: {url}")
+
+    scp_match = _SCP_GIT_RE.match(url)
+    if scp_match:
+        user, host, repo_path = scp_match.groups()
+        clean_path = repo_path.lstrip("/")
+        url = f"git+ssh://{user}@{host}/{clean_path}"
+
+    lower = url.lower()
+    if lower.startswith(("git+https://", "git+http://", "git+ssh://")):
+        kind = "git"
+    elif lower.startswith(("https://", "http://")):
+        if "#" in url:
+            raise ValueError(f"HTTP(S) 索引源不允许包含 # 片段: {url}")
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(url)
+        if not parsed.netloc:
+            raise ValueError(f"无效的索引源 URL: {url}")
+        if parsed.username or parsed.password:
+            raise ValueError(f"HTTP(S) 索引源不允许内嵌用户名或密码: {url}")
+        if parsed.path.lower().endswith(".git"):
+            url = f"git+{url}"
+            kind = "git"
+        else:
+            kind = "http"
+    else:
+        raise ValueError(
+            f"仅支持 http(s):// JSON 索引地址，或 git+https:// / git+ssh:// / git@host:repo Git 仓库地址: {url}"
+        )
+
+    clean_label = (label or "").strip()[:80]
+    if not clean_label:
+        clean_label = url.split("://", 1)[-1].split("?", 1)[0][:64]
+    return {"url": url, "label": clean_label, "kind": kind}
+
+
+def get_extra_plugin_indexes(db: Session) -> list[dict[str, object]]:
+    """Return admin-configured extra DSH plugin market index sources (HTTP(S) JSON or Git repos)."""
+    row = db.get(PlatformSetting, _PLUGIN_INDEX_KEY)
+    if not row or not row.value:
+        return []
+    try:
+        parsed = json.loads(row.value)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        raw_url = str(item.get("url") or "").strip()
+        if not raw_url or raw_url in seen:
+            continue
+        try:
+            norm = normalize_plugin_index_source(raw_url, str(item.get("label") or ""))
+        except ValueError:
+            continue
+        if norm["url"] in seen:
+            continue
+        seen.add(norm["url"])
+        out.append(
+            {
+                "url": norm["url"],
+                "label": norm["label"],
+                "kind": norm["kind"],
+                "enabled": bool(item.get("enabled", True)),
+            }
+        )
+    return out
+
+
+def set_extra_plugin_indexes(
+    db: Session,
+    items: list[dict[str, object]],
+    *,
+    actor: str | None = None,
+) -> list[dict[str, object]]:
+    """Validate and persist extra plugin market index sources."""
+    if len(items) > 32:
+        raise ValueError("最多支持配置 32 个外部插件索引源")
+    cleaned: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in items:
+        norm = normalize_plugin_index_source(
+            str(item.get("url") or ""),
+            str(item.get("label") or ""),
+        )
+        if norm["url"] in seen:
+            continue
+        seen.add(norm["url"])
+        cleaned.append(
+            {
+                "url": norm["url"],
+                "label": norm["label"],
+                "kind": norm["kind"],
+                "enabled": bool(item.get("enabled", True)),
+            }
+        )
+    now = utcnow()
+    serialized = json.dumps(cleaned, ensure_ascii=False)
+    row = db.get(PlatformSetting, _PLUGIN_INDEX_KEY)
+    if row is None:
+        db.add(PlatformSetting(key=_PLUGIN_INDEX_KEY, value=serialized, updated_at=now))
+    else:
+        row.value = serialized
+        row.updated_at = now
+    audit(
+        db,
+        "plugins.indexes.update",
+        target="platform",
+        detail=f"count={len(cleaned)},enabled={sum(1 for x in cleaned if x['enabled'])}",
+        actor=actor,
+    )
+    db.commit()
+    return cleaned
+
+

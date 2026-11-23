@@ -20,7 +20,18 @@ from .common import (
     unique_slug,
     utcnow,
 )
+from .policies import get_extra_plugin_indexes
 from .templates import get_template_by_key
+
+
+def _attach_extra_plugin_indexes(db: Session, sandbox: Sandbox) -> None:
+    try:
+        items = get_extra_plugin_indexes(db)
+        sandbox._extra_plugin_indexes = [
+            str(x["url"]) for x in items if x.get("enabled", True) and x.get("url")
+        ]
+    except Exception:
+        sandbox._extra_plugin_indexes = []
 
 
 def create_sandbox(
@@ -142,6 +153,7 @@ def create_sandbox(
     sandbox.llm_profile = llm_profile
     db.commit()
     db.refresh(sandbox)
+    _attach_extra_plugin_indexes(db, sandbox)
 
     try:
         container = docker.create(sandbox)
@@ -294,6 +306,7 @@ def update_sandbox_limits(
         # NanoCpus with CpuQuota/CpuPeriod, so recreate once with the current
         # limits. The named volume (workspace) is preserved.
         try:
+            _attach_extra_plugin_indexes(db, sandbox)
             docker.recreate(sandbox)
             recreated = True
         except Exception as exc:
@@ -329,6 +342,7 @@ def upgrade_sandbox(
         sandbox.image_tag = image_tag
         sandbox.status = "creating"
         db.commit()
+        _attach_extra_plugin_indexes(db, sandbox)
         container = docker.create(sandbox)
         sandbox.container_id = container.id
         sandbox.status = "starting"

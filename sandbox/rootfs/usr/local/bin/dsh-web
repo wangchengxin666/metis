@@ -15,6 +15,24 @@ fi
 # Settings -> Models (or via injected DSH_DEFAULT_LLM_* defaults).
 args=(--profile web --patch /etc/dsh/sandbox.patch.yml --patch /etc/dsh/no-default-model.patch.yml)
 
+# Enable Metis zero-redirect ForwardAuth plugin on DSH >= 0.2.3 when configured.
+gateway_auth_mode="${DSH_GATEWAY_AUTH_MODE:-auto}"
+gateway_auth_active="${DSH_GATEWAY_AUTH_ACTIVE:-}"
+if [ -z "${gateway_auth_active}" ]; then
+  if [ "${gateway_auth_mode}" = "gateway" ]; then
+    gateway_auth_active=true
+  elif [ "${gateway_auth_mode}" = "auto" ] \
+    && [ -n "${METIS_GATEWAY_AUTH_SECRET:-}" ] \
+    && [ -d /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-authentication-token ]; then
+    gateway_auth_active=true
+  else
+    gateway_auth_active=false
+  fi
+fi
+if [ "${gateway_auth_active}" = "true" ] && [ -f /etc/dsh/gateway-auth.patch.yml ]; then
+  args+=(--patch /etc/dsh/gateway-auth.patch.yml)
+fi
+
 # First run: pre-seed DSH's default workspace directly under the user home
 # directory (/home/workspace/default-workspace) instead of nesting under
 # /home/workspace/deepseek-harness/default-workspace, while keeping
@@ -175,13 +193,30 @@ fi
 if [ -z "${plugin_npm_registry}" ] && [[ "${plugin_index_url}" == */index.json ]]; then
   plugin_npm_registry="${plugin_index_url%/index.json}/npm"
 fi
-if [ -n "${plugin_index_url}" ] || [ -n "${plugin_npm_registry}" ]; then
-  PLUGIN_INDEX_URL="${plugin_index_url}" PLUGIN_NPM_REGISTRY="${plugin_npm_registry}" DSH_PROFILE_DIR="${DSH_HOME}/profiles/web" node -e '
+plugin_extra_indexes="${DSH_EXTRA_PLUGIN_INDEX_URLS:-}"
+if [ -z "${plugin_extra_indexes}" ] && [ -s /home/workspace/.dsh-sandbox/plugin-extra-indexes.json ]; then
+  plugin_extra_indexes="$(cat /home/workspace/.dsh-sandbox/plugin-extra-indexes.json)"
+fi
+if [ -n "${plugin_index_url}" ] || [ -n "${plugin_npm_registry}" ] || [ -n "${plugin_extra_indexes}" ]; then
+  PLUGIN_INDEX_URL="${plugin_index_url}" PLUGIN_EXTRA_INDEXES="${plugin_extra_indexes}" PLUGIN_NPM_REGISTRY="${plugin_npm_registry}" DSH_PROFILE_DIR="${DSH_HOME}/profiles/web" node -e '
     const fs = require("fs");
     const path = require("path");
     const dir = process.env.DSH_PROFILE_DIR;
-    const indexUrl = process.env.PLUGIN_INDEX_URL || "";
-    const npmRegistry = process.env.PLUGIN_NPM_REGISTRY || "";
+    const indexUrl = (process.env.PLUGIN_INDEX_URL || "").trim();
+    const npmRegistry = (process.env.PLUGIN_NPM_REGISTRY || "").trim();
+    let extraIndexes = [];
+    if (process.env.PLUGIN_EXTRA_INDEXES) {
+      try {
+        const parsed = JSON.parse(process.env.PLUGIN_EXTRA_INDEXES);
+        if (Array.isArray(parsed)) {
+          extraIndexes = parsed.map((x) => String(x || "").trim()).filter(Boolean);
+        }
+      } catch {}
+    }
+    const desiredIndexes = [];
+    for (const u of [indexUrl, ...extraIndexes]) {
+      if (u && !desiredIndexes.includes(u)) desiredIndexes.push(u);
+    }
     const pkgPath = path.join(dir, "package.json");
     const patchPath = path.join(dir, "cordis.patch.yml");
     const npmrcPath = path.join(dir, ".npmrc");
@@ -191,7 +226,7 @@ if [ -n "${plugin_index_url}" ] || [ -n "${plugin_npm_registry}" ]; then
       lines.unshift("registry=" + npmRegistry);
       fs.writeFileSync(npmrcPath, lines.join("\n") + "\n");
     }
-    if (indexUrl && fs.existsSync(pkgPath)) {
+    if (desiredIndexes.length > 0 && fs.existsSync(pkgPath)) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
       pkg.dsh = pkg.dsh || {};
       pkg.dsh.profile = pkg.dsh.profile || {};
@@ -202,17 +237,38 @@ if [ -n "${plugin_index_url}" ] || [ -n "${plugin_npm_registry}" ]; then
         fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
       }
     }
-    if (indexUrl && fs.existsSync(patchPath)) {
-      let content = fs.readFileSync(patchPath, "utf8").replace(/^\s*\[\]\s*$/m, "");
-      if (!content.includes("id: plugin-market")) {
-        content = content.trimEnd() + "\n\n- id: plugin-market\n  name: \"@deepseek-ai/dsh-plugin-market\"\n  config:\n    indexes:\n      - " + JSON.stringify(indexUrl) + "\n";
-        fs.writeFileSync(patchPath, content);
-      } else if (!content.includes(indexUrl)) {
-        content = content.replace(/(- id: plugin-market[\s\S]*?indexes:)\s*\[\s*\]/, "$1\n      - " + JSON.stringify(indexUrl));
-        if (!content.includes(indexUrl)) {
-          content = content.replace(/(- id: plugin-market[\s\S]*?indexes:)/, "$1\n      - " + JSON.stringify(indexUrl));
+    if (desiredIndexes.length > 0 && fs.existsSync(patchPath)) {
+      let yaml;
+      try {
+        yaml = require("/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml");
+      } catch {
+        yaml = null;
+      }
+      if (yaml) {
+        const raw = fs.readFileSync(patchPath, "utf8");
+        let parsed = yaml.parse(raw);
+        if (!Array.isArray(parsed)) parsed = [];
+        let entry = parsed.find((x) => x && typeof x === "object" && x.id === "plugin-market");
+        if (!entry) {
+          entry = { id: "plugin-market", name: "@deepseek-ai/dsh-plugin-market", config: { indexes: [] } };
+          parsed.push(entry);
         }
-        fs.writeFileSync(patchPath, content);
+        if (!entry.name) entry.name = "@deepseek-ai/dsh-plugin-market";
+        if (!entry.config || typeof entry.config !== "object") entry.config = {};
+        const existing = Array.isArray(entry.config.indexes) ? entry.config.indexes.map((x) => String(x || "").trim()).filter(Boolean) : [];
+        const merged = [...desiredIndexes];
+        for (const u of existing) {
+          if (!merged.includes(u)) merged.push(u);
+        }
+        entry.config.indexes = merged;
+        fs.writeFileSync(patchPath, yaml.stringify(parsed));
+      } else {
+        let content = fs.readFileSync(patchPath, "utf8").replace(/^\s*\[\]\s*$/m, "");
+        if (!content.includes("id: plugin-market")) {
+          const lines = desiredIndexes.map((u) => "      - " + JSON.stringify(u)).join("\n");
+          content = content.trimEnd() + "\n\n- id: plugin-market\n  name: \"@deepseek-ai/dsh-plugin-market\"\n  config:\n    indexes:\n" + lines + "\n";
+          fs.writeFileSync(patchPath, content);
+        }
       }
     }
   ' || true

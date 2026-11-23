@@ -44,7 +44,7 @@ from ..schemas import (
     OidcProviderTestRequest,
     OidcProviderUpdate,
 )
-from ..security import verify_password
+from ..security import derive_sandbox_gateway_secret, verify_password
 from ..services import (
     NotFoundError,
     audit,
@@ -265,6 +265,7 @@ a.btn{{display:inline-block;background:#27272a;color:#f4f4f5;text-decoration:non
             "X-Auth-Request-Name": quote(viewer_name or "", safe=""),
             "X-Auth-Request-Admin": "true" if is_admin else "false",
             "X-Sandbox-Owner-Name": quote(owner_name or "", safe=""),
+            "X-Metis-Gateway-Auth": derive_sandbox_gateway_secret(sandbox.id, sandbox.slug),
         },
     )
 

@@ -33,6 +33,7 @@ class SandboxSyncMixin:
         sandbox: Sandbox,
         reinstall_plugins: list[str] | None = None,
         force_reinstall: bool = False,
+        extra_indexes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Ensure Plugin Market config and optionally force-reinstall built-in plugins in a sandbox."""
         st = self._workload_status(sandbox)
@@ -42,6 +43,7 @@ class SandboxSyncMixin:
         manager_url = self.settings.sandbox_reachable_manager_url
         index_url = f"{manager_url}/plugins/index.json"
         npm_registry = f"{manager_url}/plugins/npm"
+        extra_list = [str(u).strip() for u in (extra_indexes or []) if str(u).strip()]
         registry = PluginRegistryService(self.settings)
         registry_packages = {pkg.name: pkg for pkg in registry.list_packages()}
 
@@ -57,9 +59,19 @@ class SandboxSyncMixin:
 const fs = require('fs');
 const indexUrl = process.env.INDEX_URL;
 const npmRegistry = process.env.NPM_REGISTRY || '';
+let extraIndexes = [];
+try {
+  const parsed = JSON.parse(process.env.EXTRA_INDEXES || '[]');
+  if (Array.isArray(parsed)) extraIndexes = parsed.map((x) => String(x || '').trim()).filter(Boolean);
+} catch {}
+const desiredIndexes = [];
+for (const u of [indexUrl, ...extraIndexes]) {
+  if (u && !desiredIndexes.includes(u)) desiredIndexes.push(u);
+}
 try { fs.rmSync('/home/workspace/.cache/pnpm', { recursive: true, force: true }); } catch {}
 fs.mkdirSync('/home/workspace/.dsh-sandbox', { recursive: true });
 fs.writeFileSync('/home/workspace/.dsh-sandbox/plugin-index-url.txt', indexUrl + '\\n');
+fs.writeFileSync('/home/workspace/.dsh-sandbox/plugin-extra-indexes.json', JSON.stringify(extraIndexes) + '\\n');
 if (npmRegistry) {
   fs.writeFileSync('/home/workspace/.dsh-sandbox/plugin-npm-registry.txt', npmRegistry + '\\n');
 }
@@ -87,17 +99,34 @@ if (fs.existsSync(pkgPath)) {
   }
 }
 if (fs.existsSync(patchPath)) {
-  let content = fs.readFileSync(patchPath, 'utf8');
-  content = content.replace(/^\\s*\\[\\]\\s*$/m, '');
-  if (!content.includes('id: plugin-market')) {
-    content = content.trimEnd() + '\\n\\n- id: plugin-market\\n  name: "@deepseek-ai/dsh-plugin-market"\\n  config:\\n    indexes:\\n      - ' + JSON.stringify(indexUrl) + '\\n';
-    fs.writeFileSync(patchPath, content);
-  } else if (!content.includes(indexUrl)) {
-    content = content.replace(/(- id: plugin-market[\\s\\S]*?indexes:)\\s*\\[\\s*\\]/, '$1\\n      - ' + JSON.stringify(indexUrl));
-    if (!content.includes(indexUrl)) {
-      content = content.replace(/(- id: plugin-market[\\s\\S]*?indexes:)/, '$1\\n      - ' + JSON.stringify(indexUrl));
+  let yaml = null;
+  try {
+    yaml = require('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml');
+  } catch {}
+  if (yaml) {
+    const raw = fs.readFileSync(patchPath, 'utf8');
+    let parsed = yaml.parse(raw);
+    if (!Array.isArray(parsed)) parsed = [];
+    let entry = parsed.find((x) => x && typeof x === 'object' && x.id === 'plugin-market');
+    if (!entry) {
+      entry = { id: 'plugin-market', name: '@deepseek-ai/dsh-plugin-market', config: { indexes: [] } };
+      parsed.push(entry);
     }
-    fs.writeFileSync(patchPath, content);
+    if (!entry.name) entry.name = '@deepseek-ai/dsh-plugin-market';
+    if (!entry.config || typeof entry.config !== 'object') entry.config = {};
+    entry.config.indexes = desiredIndexes;
+    fs.writeFileSync(patchPath, yaml.stringify(parsed));
+  } else {
+    let content = fs.readFileSync(patchPath, 'utf8');
+    content = content.replace(/^\\s*\\[\\]\\s*$/m, '');
+    const listLines = desiredIndexes.map((u) => '      - ' + JSON.stringify(u)).join('\\n');
+    if (!content.includes('id: plugin-market')) {
+      content = content.trimEnd() + '\\n\\n- id: plugin-market\\n  name: "@deepseek-ai/dsh-plugin-market"\\n  config:\\n    indexes:\\n' + listLines + '\\n';
+      fs.writeFileSync(patchPath, content);
+    } else if (!content.includes(indexUrl)) {
+      content = content.replace(/(- id: plugin-market[\\s\\S]*?indexes:)\\s*\\[\\s*\\]/, '$1\\n' + listLines);
+      fs.writeFileSync(patchPath, content);
+    }
   }
 }
 console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
@@ -108,6 +137,7 @@ console.log('INSTALLED_DEPS=' + JSON.stringify(installedDeps));
             user="workspace",
             environment={
                 "INDEX_URL": index_url,
+                "EXTRA_INDEXES": json.dumps(extra_list, ensure_ascii=False),
                 "NPM_REGISTRY": npm_registry,
                 "HOME": "/home/workspace",
             },

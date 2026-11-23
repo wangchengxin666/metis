@@ -181,6 +181,8 @@ def test_real_repo_plugins_package_cleanly():
             assert not any(m.startswith("package/.test/") for m in members)
 
     idx = svc.build_index("http://localhost:9000")
+    assert set(idx["metadata"]["categories"].keys()) >= {"core", "workspace", "collaboration"}
+    assert set(idx["metadata"]["labels"].keys()) >= {"builtin", "sidebar", "ai-tools", "multi-agent"}
     names = {item["name"] for item in idx["plugins"]}
     assert {
         "@metis/file-manager",
@@ -190,3 +192,55 @@ def test_real_repo_plugins_package_cleanly():
         "@metis/sandbox-memory",
         "@metis/work-delivery",
     }.issubset(names)
+    for item in idx["plugins"]:
+        assert item["metadata"]["category"] in idx["metadata"]["categories"]
+        assert all(lbl in idx["metadata"]["labels"] for lbl in item["metadata"]["labels"])
+
+
+def test_normalize_plugin_index_source_and_gateway_secret():
+    import pytest
+
+    from app.runtime.traefik import AUTH_RESPONSE_HEADERS
+    from app.security import derive_sandbox_gateway_secret
+    from app.services import normalize_plugin_index_source
+
+    http_src = normalize_plugin_index_source("https://plugins.corp.example/index.json", "Corp")
+    assert http_src == {
+        "url": "https://plugins.corp.example/index.json",
+        "label": "Corp",
+        "kind": "http",
+    }
+
+    git_https = normalize_plugin_index_source("https://git.corp.example/ai/plugins.git")
+    assert git_https["url"] == "git+https://git.corp.example/ai/plugins.git"
+    assert git_https["kind"] == "git"
+
+    git_scp = normalize_plugin_index_source("git@git.corp.example:ai/plugins.git", "Private Git")
+    assert git_scp == {
+        "url": "git+ssh://git@git.corp.example/ai/plugins.git",
+        "label": "Private Git",
+        "kind": "git",
+    }
+
+    git_explicit = normalize_plugin_index_source(
+        "git+https://github.com/acme/plugins.git?path=market%2Findex.json&ref=main"
+    )
+    assert git_explicit["kind"] == "git"
+
+    for bad in (
+        "",
+        "ftp://example.com/index.json",
+        "https://user:pass@example.com/index.json",
+        "https://example.com/index.json#frag",
+        "https://example.com/bad url",
+    ):
+        with pytest.raises(ValueError):
+            normalize_plugin_index_source(bad)
+
+    s1 = derive_sandbox_gateway_secret("sbx-1", "alice")
+    s1_again = derive_sandbox_gateway_secret("sbx-1", "alice")
+    s2 = derive_sandbox_gateway_secret("sbx-2", "bob")
+    assert len(s1) == 64
+    assert s1 == s1_again
+    assert s1 != s2
+    assert "X-Metis-Gateway-Auth" in AUTH_RESPONSE_HEADERS

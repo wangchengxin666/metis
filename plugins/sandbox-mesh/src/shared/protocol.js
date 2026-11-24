@@ -74,6 +74,66 @@ export function summarizeRoomTasks(tasks = [], threadId = '') {
   return counts
 }
 
+const REWORK_QUALIFIER_RE = /(?:最终|二次|再次|重新|复测|复检|复核|重测|重试|返工|修复后|补充|更新版|第[一二三四五六七八九十0-9]+[轮次])|\b(?:final|re-?run|re-?check|re-?verify|re-?review|re-?test|retry|rework|revised|round\s*\d+|attempt\s*\d+|pass\s*\d+|v\d+)\b/gi
+const TITLE_NOISE_RE = /[\s\-–—_:：,，.。/·()（）【】[\]「」《》"'`!！?？]+/g
+
+export function normalizeTaskTitleForMatch(rawTitle) {
+  return String(rawTitle || '')
+    .trim()
+    .toLowerCase()
+    .replace(REWORK_QUALIFIER_RE, ' ')
+    .replace(TITLE_NOISE_RE, '')
+}
+
+export function areTaskTitlesEquivalent(titleA, titleB) {
+  const a = normalizeTaskTitleForMatch(titleA)
+  const b = normalizeTaskTitleForMatch(titleB)
+  if (!a || !b) return false
+  if (a === b && a.length >= 2) return true
+  const shorter = a.length <= b.length ? a : b
+  const longer = a.length <= b.length ? b : a
+  return shorter.length >= 4 && longer.includes(shorter) && (shorter.length / longer.length) >= 0.6
+}
+
+/**
+ * Find older blocked (or explicitly replaced) tasks in the same room/thread that are superseded
+ * by `targetTask`. Never auto-closes tasks awaiting human approval so agents cannot bypass gates.
+ */
+export function findSupersededBlockedTasks(roomTasks = [], targetTask, { explicitIds = [] } = {}) {
+  if (!Array.isArray(roomTasks) || !targetTask || typeof targetTask !== 'object') return []
+  const targetId = String(targetTask.id || '').trim()
+  const targetAssignee = sanitizeSlug(targetTask.assigneeSlug || '')
+  const targetThread = String(targetTask.threadId || '').trim()
+  const targetCreatedAt = Number(targetTask.createdAt) || 0
+  const explicitSet = new Set(
+    (Array.isArray(explicitIds) ? explicitIds : [])
+      .map((x) => String(x || '').trim())
+      .filter((x) => x && x !== targetId),
+  )
+
+  const matches = []
+  for (const t of roomTasks) {
+    if (!t || typeof t !== 'object' || !t.id || t.id === targetId) continue
+    if (t.status === 'done' || t.status === 'cancelled') continue
+    if (t.approvalRequired && t.approvalStatus === 'pending') continue
+
+    if (explicitSet.has(t.id)) {
+      matches.push(t)
+      continue
+    }
+
+    if (t.status !== 'blocked') continue
+    if (targetThread && t.threadId && t.threadId !== targetThread) continue
+    const tAssignee = sanitizeSlug(t.assigneeSlug || '')
+    if ((targetAssignee || tAssignee) && tAssignee !== targetAssignee) continue
+    if (targetCreatedAt > 0 && Number(t.createdAt) > targetCreatedAt) continue
+    if (areTaskTitlesEquivalent(t.title, targetTask.title)) {
+      matches.push(t)
+    }
+  }
+  return matches
+}
+
 export function sanitizeSlug(raw) {
   if (typeof raw !== 'string') return ''
   const cleaned = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')

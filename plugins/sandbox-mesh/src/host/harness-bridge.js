@@ -220,6 +220,7 @@ export function buildAgentWakePrompt({
       `- Before high-risk or milestone gates (e.g., PRD sign-off, production deploy, destructive migration), call \`mesh_request_approval\` to pause cleanly for human approval instead of calling \`ask_user_question\`.`,
       '- IMPORTANT: Remote sandboxes are NOT local subagents. After calling `mesh_dispatch_tasks(mode="async")` or `mesh_request_approval`, NEVER call `wait_agent`, `sleep`, or polling loops — post a brief status summary and END YOUR TURN immediately. You will be woken automatically in a fresh turn when remote sandboxes finish or a human approves/rejects (and downstream DAG tasks with met dependencies auto-dispatch automatically).',
       '- You may also handle tasks in your own sandbox (using any local MCP tools & Skills) and update task status via `mesh_task_update`.',
+      '- When a previously `blocked` task is resolved or re-dispatched as rework/re-verification, pass `replacesTaskId` in `mesh_dispatch_tasks` or close the stale blocker via `mesh_task_update(..., status="done"|"cancelled")` so resolved blockers never linger on the Task Board.',
       '- Once resolved, write a concise, well-formatted Markdown conclusion directly as your reply (no robotic templates, no raw internal IDs, and never prefix with your own @slug).',
     ].join('\n')
   } else if (isGroup && message.phase === 'turn') {
@@ -1250,7 +1251,7 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
               tasks: {
                 type: 'array',
                 required: true,
-                description: 'Array of tasks to create & dispatch. Each item: { title, description?, assigneeSlug?, priority?: "low"|"medium"|"high"|"urgent", dependsOn?: string[], dependsOnIndices?: number[], approvalRequired?: boolean, approvalPrompt?: string }.',
+                description: 'Array of tasks to create & dispatch. Each item: { title, description?, assigneeSlug?, priority?: "low"|"medium"|"high"|"urgent", dependsOn?: string[], dependsOnIndices?: number[], replacesTaskId?: string, approvalRequired?: boolean, approvalPrompt?: string }.',
                 items: {
                   type: 'object',
                   additionalProperties: false,
@@ -1261,6 +1262,7 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
                     priority: { type: 'string' },
                     dependsOn: { type: 'array', items: { type: 'string' } },
                     dependsOnIndices: { type: 'array', items: { type: 'number' } },
+                    replacesTaskId: { type: 'string' },
                     approvalRequired: { type: 'boolean' },
                     approvalPrompt: { type: 'string' },
                   },

@@ -1698,6 +1698,153 @@ try {
         assert.ok(atomicFileIdx >= 0 && atomicDoneIdx > atomicFileIdx, 'Atomic shareFiles upload must land strictly before DONE notice')
       }
 
+      // 14i. Auto-release of superseded blocked tasks, DAG blocker unblocking, approval unblock, and human /local/cli task-update
+      {
+        const blkGrp = await alice.createGroup({
+          name: 'Blocker Release Squad',
+          memberSlugs: ['bob', 'charlie'],
+          moderatorSlug: 'alice',
+        })
+        assert.equal(blkGrp.ok, true)
+        const blkRoomId = blkGrp.room.id
+
+        // 1) Title-similar & explicit-replacesTaskId auto-superseding in createTasks + live peer sync
+        const initialBatch = await alice.createTasks({
+          roomId: blkRoomId,
+          tasks: [
+            { title: '服务详情面板与告警中心审查', assigneeSlug: 'charlie' },
+            { title: '后端 API 功能审查', assigneeSlug: 'charlie' },
+            { title: '高危生产发布审批', assigneeSlug: 'charlie', approvalRequired: true, approvalPrompt: 'Approve prod' },
+          ],
+          notifyAssignees: false,
+          actor: 'agent',
+        })
+        assert.equal(initialBatch.ok, true)
+        const [tReview1, tApi1, tApprovalGate] = initialBatch.tasks
+
+        // Charlie marks all three blocked
+        await charlie.updateTask({ roomId: blkRoomId, taskId: tReview1.id, status: 'blocked', summary: 'missing panel', actor: 'agent', notifyModerator: false })
+        await charlie.updateTask({ roomId: blkRoomId, taskId: tApi1.id, status: 'blocked', summary: 'missing endpoint', actor: 'agent', notifyModerator: false })
+        await charlie.updateTask({ roomId: blkRoomId, taskId: tApprovalGate.id, status: 'blocked', summary: 'waiting approval', actor: 'agent', notifyModerator: false })
+        assert.equal(alice.store.getTask(blkRoomId, tReview1.id)?.status, 'blocked')
+
+        // Moderator dispatches follow-up with qualifier ("最终审查") -> auto-cancels tReview1 & syncs to Charlie!
+        const followUp1 = await alice.createTasks({
+          roomId: blkRoomId,
+          tasks: [
+            { title: '服务详情面板与告警中心最终审查', assigneeSlug: 'charlie' },
+          ],
+          notifyAssignees: false,
+          actor: 'agent',
+        })
+        assert.equal(followUp1.ok, true)
+        assert.equal(followUp1.supersededTasks.length, 1)
+        assert.equal(followUp1.supersededTasks[0].id, tReview1.id)
+        assert.equal(alice.store.getTask(blkRoomId, tReview1.id)?.status, 'cancelled')
+        assert.equal(charlie.store.getTask(blkRoomId, tReview1.id)?.status, 'cancelled', 'Peer must receive cancelled sync for superseded blocker')
+
+        // Pending human approval gate must NEVER be auto-cancelled even if agent passes replacesTaskId
+        const tryBypass = await alice.createTasks({
+          roomId: blkRoomId,
+          tasks: [
+            { title: '高危生产发布审批', assigneeSlug: 'charlie', replacesTaskId: tApprovalGate.id },
+          ],
+          notifyAssignees: false,
+          actor: 'agent',
+        })
+        assert.equal(tryBypass.ok, true)
+        assert.equal(alice.store.getTask(blkRoomId, tApprovalGate.id)?.status, 'blocked', 'Pending human approval gate must never be auto-cancelled by agent')
+
+        // Approving a blocked approval gate automatically releases the block into in_progress
+        const decided = await alice.decideApproval({
+          roomId: blkRoomId,
+          taskId: tApprovalGate.id,
+          decision: 'approved',
+          comment: 'LGTM',
+        })
+        assert.equal(decided.ok, true)
+        assert.equal(alice.store.getTask(blkRoomId, tApprovalGate.id)?.status, 'in_progress')
+        assert.equal(charlie.store.getTask(blkRoomId, tApprovalGate.id)?.status, 'in_progress')
+
+        // 2) Auto-release on updateTask(done): older same-title blocked task closes AND DAG blocked downstream reopens
+        const dagRes = await alice.createTasks({
+          roomId: blkRoomId,
+          tasks: [
+            { title: '后端接口修复', assigneeSlug: 'bob' },
+            { title: '端到端冒烟验收', assigneeSlug: 'charlie', dependsOnIndices: [0] },
+          ],
+          notifyAssignees: false,
+          actor: 'agent',
+        })
+        assert.equal(dagRes.ok, true)
+        const [tFixApi, tSmoke] = dagRes.tasks
+
+        // Manually inject a concurrent older blocked duplicate with exact title to test updateTask(done) fallback
+        const dupApi = alice.store.createTask(blkRoomId, {
+          threadId: tApi1.threadId,
+          title: '后端 API 功能审查',
+          assigneeSlug: 'charlie',
+          createdBy: 'alice',
+          status: 'todo',
+        })
+        await alice.updateTask({ roomId: blkRoomId, taskId: tSmoke.id, status: 'blocked', summary: 'waiting on backend fix', actor: 'agent', notifyModerator: false })
+        assert.equal(alice.store.getTask(blkRoomId, tApi1.id)?.status, 'blocked')
+        assert.equal(alice.store.getTask(blkRoomId, tSmoke.id)?.status, 'blocked')
+
+        // Completing dupApi automatically releases tApi1 (cancelled) across all peers!
+        const dupDone = await alice.updateTask({
+          roomId: blkRoomId,
+          taskId: dupApi.id,
+          status: 'done',
+          summary: 'all endpoints verified',
+          actor: 'agent',
+          notifyModerator: false,
+        })
+        assert.equal(dupDone.ok, true)
+        assert.equal(alice.store.getTask(blkRoomId, tApi1.id)?.status, 'cancelled')
+        assert.equal(charlie.store.getTask(blkRoomId, tApi1.id)?.status, 'cancelled')
+
+        // Completing upstream tFixApi automatically unblocks downstream DAG blocked task tSmoke -> todo!
+        const fixDone = await bob.updateTask({
+          roomId: blkRoomId,
+          taskId: tFixApi.id,
+          status: 'done',
+          summary: 'fixed api',
+          actor: 'agent',
+          notifyModerator: false,
+        })
+        assert.equal(fixDone.ok, true)
+        assert.equal(bob.store.getTask(blkRoomId, tSmoke.id)?.status, 'todo')
+        assert.equal(alice.store.getTask(blkRoomId, tSmoke.id)?.status, 'todo')
+
+        // 3) /local/cli task-update with actor='human' updates a blocked task & syncs to peers
+        const manualTask = alice.store.createTask(blkRoomId, {
+          title: '人工介入排查',
+          assigneeSlug: 'bob',
+          createdBy: 'alice',
+          status: 'blocked',
+        })
+        await bob.updateTask({ roomId: blkRoomId, taskId: tSmoke.id, status: 'in_progress', actor: 'agent', notifyModerator: false })
+        const cliUpdate = await alice.handleIncomingMeshHttp(
+          'POST',
+          '/local/cli',
+          { authorization: `Bearer ${alice.localToken}` },
+          JSON.stringify({
+            action: 'task-update',
+            roomId: blkRoomId,
+            taskId: manualTask.id,
+            status: 'done',
+            summary: 'Resolved by human operator',
+            actor: 'human',
+            notifyModerator: false,
+          }),
+        )
+        assert.equal(cliUpdate.status, 200)
+        assert.equal(cliUpdate.body.ok, true)
+        assert.equal(alice.store.getTask(blkRoomId, manualTask.id)?.status, 'done')
+        assert.equal(bob.store.getTask(blkRoomId, manualTask.id)?.status, 'done', 'Human CLI task-update must sync to peers')
+      }
+
       await aliceCtx.fiber.dispose()
       await bobCtx.fiber.dispose()
     }

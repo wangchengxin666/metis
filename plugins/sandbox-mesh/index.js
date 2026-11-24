@@ -9,6 +9,7 @@ import {
   DEFAULT_MESH_PORT,
   extractFileReferences,
   extractMentions,
+  findSupersededBlockedTasks,
   pairRoomId,
   parsePairInvite,
   sanitizeSlug,
@@ -1440,6 +1441,9 @@ export function createMeshService({
     memberSet.add(self.slug)
 
     const created = []
+    const superseded = []
+    const supersededIds = new Set()
+    const createdIds = new Set()
     try {
       for (const raw of rawList) {
         const assignee = sanitizeSlug(raw.assigneeSlug || '')
@@ -1475,12 +1479,35 @@ export function createMeshService({
           dependsOn: resolvedDeps,
         })
         created.push(task)
+        createdIds.add(task.id)
+
+        const explicitReplaceIds = [
+          ...(typeof raw.replacesTaskId === 'string' && raw.replacesTaskId.trim() ? [raw.replacesTaskId.trim()] : []),
+          ...(Array.isArray(raw.supersedesTaskIds) ? raw.supersedesTaskIds : []),
+        ]
+        const toSupersede = findSupersededBlockedTasks(store.listRoomTasks(cleanRoomId), task, {
+          explicitIds: explicitReplaceIds,
+        })
+        for (const oldTask of toSupersede) {
+          if (createdIds.has(oldTask.id) || supersededIds.has(oldTask.id)) continue
+          const closed = store.updateTask(
+            cleanRoomId,
+            oldTask.id,
+            {
+              status: 'cancelled',
+              summary: `Superseded by follow-up task [${task.id}]: ${task.title}`,
+            },
+            { allowApprovalDecision: false },
+          )
+          superseded.push(closed)
+          supersededIds.add(oldTask.id)
+        }
       }
     } catch (err) {
       return { ok: false, status: 400, error: err?.message || String(err) }
     }
 
-    const sync = await broadcastTaskSync(room, created)
+    const sync = await broadcastTaskSync(room, [...created, ...superseded])
     const allTasks = store.listRoomTasks(cleanRoomId)
     const dispatchedTasks = []
     const blockedByDependencies = []
@@ -1537,6 +1564,7 @@ export function createMeshService({
       roomId: cleanRoomId,
       threadId: effectiveThreadId,
       tasks: created,
+      supersededTasks: superseded,
       dispatchedTasks,
       blockedByDependencies,
       waitingForApproval,
@@ -1765,7 +1793,55 @@ export function createMeshService({
       }
     }
 
-    const sync = await broadcastTaskSync(room, [updated])
+    const autoReleasedBlockedTasks = []
+    if (updated.status === 'done' && prevStatus !== 'done') {
+      const touchedIds = new Set([updated.id])
+      const allRoomTasks = store.listRoomTasks(cleanRoomId)
+
+      // 1. Auto-close older superseded blocked tasks for the same assignee/title in this room/thread
+      for (const oldTask of findSupersededBlockedTasks(allRoomTasks, updated)) {
+        if (touchedIds.has(oldTask.id)) continue
+        const closed = store.updateTask(
+          cleanRoomId,
+          oldTask.id,
+          {
+            status: 'cancelled',
+            summary: `Auto-resolved by completed task [${updated.id}]: ${updated.title}`,
+          },
+          { allowApprovalDecision: false },
+        )
+        autoReleasedBlockedTasks.push(closed)
+        touchedIds.add(oldTask.id)
+      }
+
+      // 2. Auto-unblock downstream DAG tasks that were blocked waiting on this completed dependency
+      const latestRoomTasks = store.listRoomTasks(cleanRoomId)
+      for (const depTask of latestRoomTasks) {
+        if (
+          touchedIds.has(depTask.id)
+          || depTask.status !== 'blocked'
+          || (depTask.approvalRequired && depTask.approvalStatus === 'pending')
+          || !Array.isArray(depTask.dependsOn)
+          || !depTask.dependsOn.includes(updated.id)
+          || !areTaskDependenciesMet(depTask, latestRoomTasks)
+        ) {
+          continue
+        }
+        const reopened = store.updateTask(
+          cleanRoomId,
+          depTask.id,
+          {
+            status: 'todo',
+            summary: `Unblocked after upstream task [${updated.id}] (${updated.title}) completed`,
+          },
+          { allowApprovalDecision: false },
+        )
+        autoReleasedBlockedTasks.push(reopened)
+        touchedIds.add(depTask.id)
+      }
+    }
+
+    const sync = await broadcastTaskSync(room, [updated, ...autoReleasedBlockedTasks])
 
     const activeTurn = actor === 'agent' ? findActiveAgentTurn(cleanRoomId) : null
     const isHandoffCandidate = (
@@ -1809,6 +1885,7 @@ export function createMeshService({
     return {
       ok: true,
       task: updated,
+      autoReleasedBlockedTasks,
       unblockedDependents,
       sharedFiles: sharedFileResults,
       handoffDeferred,
@@ -1924,7 +2001,7 @@ export function createMeshService({
     const cleanComment = String(comment || '').trim().slice(0, 1000)
     const nextStatus = cleanDecision === 'rejected'
       ? (existing.status === 'done' || existing.status === 'in_review' || existing.status === 'todo' ? 'in_progress' : existing.status)
-      : existing.status
+      : (existing.status === 'blocked' ? 'in_progress' : existing.status)
 
     const updated = store.updateTask(
       cleanRoomId,

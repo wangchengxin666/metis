@@ -1,6 +1,6 @@
 {
   "name": "@metis/sandbox-mesh",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Cross-sandbox pairing, group chat, file transfer, and Human + Agent collaborative mesh over Traefik with HMAC-SHA256 authentication.",
   "type": "module",
   "main": "./index.js",

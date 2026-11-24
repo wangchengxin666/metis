@@ -184,12 +184,21 @@ class SandboxSyncMixin:
             }
 
         provider_key, cred_ref = llm_provider_identifiers(profile)
-        api_key = ""
-        if profile.api_key_ciphertext:
-            try:
-                api_key = decrypt_secret(profile.api_key_ciphertext)
-            except ValueError:
-                api_key = ""
+        gw_key = (getattr(sandbox, "gateway_api_key", None) or "").strip()
+        use_gw = bool(getattr(profile, "gateway_enabled", False) and gw_key)
+        if use_gw:
+            effective_base_url = (
+                f"{self.settings.sandbox_reachable_manager_url}/api/llm-gateway/p/{profile.id}"
+            )
+            api_key = gw_key
+        else:
+            effective_base_url = profile.base_url
+            api_key = ""
+            if profile.api_key_ciphertext:
+                try:
+                    api_key = decrypt_secret(profile.api_key_ciphertext)
+                except ValueError:
+                    api_key = ""
 
         api_protocol = (profile.api_protocol or "openai-completions").strip()
         payload = {
@@ -197,7 +206,7 @@ class SandboxSyncMixin:
             "credRef": cred_ref,
             "displayName": profile.name,
             "apiProtocol": api_protocol,
-            "baseUrl": profile.base_url,
+            "baseUrl": effective_base_url,
             "model": profile.model,
             "apiKey": api_key or "local-no-key",
             "contextWindow": profile.context_window,

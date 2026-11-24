@@ -23,6 +23,7 @@ export interface UsersTabProps {
   enabledOidcCount: number
   effectiveAllowLocalUser: boolean
   onRefresh: () => Promise<void>
+  onOpenAuditCenter?: () => void
   notify: (msg: string, type?: 'success' | 'error') => void
 }
 
@@ -33,6 +34,7 @@ export function UsersTab({
   enabledOidcCount,
   effectiveAllowLocalUser,
   onRefresh,
+  onOpenAuditCenter,
   notify,
 }: UsersTabProps) {
   const { t } = useI18n()
@@ -215,7 +217,14 @@ export function UsersTab({
 
         <Card>
           <CardHeader>
-            <CardTitle>{t('admin.audit.title')}</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>{t('admin.audit.title')}</CardTitle>
+              {onOpenAuditCenter && (
+                <Button type="button" variant="outline" size="sm" onClick={onOpenAuditCenter}>
+                  {t('audit.openFullCenter')}
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <div className="max-h-80 overflow-y-auto divide-y divide-zinc-800/60 text-xs">

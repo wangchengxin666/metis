@@ -633,3 +633,96 @@ def test_phase3_runtime_operations_and_traefik_preview_auth():
     assert sh_res["ok"] is True and sh_res["synced"] == 1
 
 
+def test_batch_statuses_and_include_disk_stats(api_env):
+    """Verify DockerSandboxRuntime.statuses uses single containers.list, refresh_statuses delegates to it,
+    and stats(include_disk=False) skips exec_run while /stats?include_disk=false preserves cached DB disk usage."""
+    client, fake_docker, _registry = api_env
+    login_resp = client.post(
+        "/api/auth/login",
+        json={"email": "admin@example.com", "token": "test-admin-token", "mode": "admin"},
+    )
+    assert login_resp.status_code == 200
+
+    svc = DockerService(Settings(_env_file=None))
+    mock_client = MagicMock()
+    svc._client = mock_client
+
+    sbx_a = _make_sandbox(slug="alpha")
+    sbx_a.id = "id-alpha"
+    sbx_a.container_id = "cid-alpha"
+    sbx_b = _make_sandbox(slug="beta")
+    sbx_b.id = "id-beta"
+    sbx_b.container_id = None
+    sbx_c = _make_sandbox(slug="gamma")
+    sbx_c.id = "id-gamma"
+    sbx_c.container_id = "cid-gone"
+
+    c_alpha = MagicMock(id="cid-alpha", status="running")
+    c_alpha.name = "/dsh-sbx-alpha"
+    c_beta = MagicMock(id="cid-beta", status="exited")
+    c_beta.name = "/dsh-sbx-beta"
+    mock_client.containers.list.return_value = [c_alpha, c_beta]
+
+    result = svc.statuses([sbx_a, sbx_b, sbx_c])
+    mock_client.containers.list.assert_called_once_with(all=True)
+    assert result == {"id-alpha": "running", "id-beta": "exited", "id-gamma": "missing"}
+
+    # stats(include_disk=False) must NOT invoke workspace_disk_usage / exec_run
+    container = MagicMock(status="running")
+    container.stats.return_value = {
+        "cpu_stats": {"cpu_usage": {"total_usage": 300}, "system_cpu_usage": 1000, "online_cpus": 2},
+        "precpu_stats": {"cpu_usage": {"total_usage": 100}, "system_cpu_usage": 500},
+        "memory_stats": {"usage": 128 * 1024 * 1024, "limit": 1024 * 1024 * 1024},
+    }
+    mock_client.containers.get.return_value = container
+    fast_stats = svc.stats(sbx_a, include_disk=False)
+    assert fast_stats["cpu_percent"] == 80.0
+    assert fast_stats["disk_usage_mb"] is None
+    container.exec_run.assert_not_called()
+
+    # API integration: /api/sandboxes?refresh=true calls fake_docker.statuses once
+    created = client.post(
+        "/api/sandboxes",
+        json={"email": "batch@example.com", "slug": "batch-one"},
+    )
+    assert created.status_code == 201
+    sbx_id = created.json()["id"]
+
+    fake_docker.calls.clear()
+    listed = client.get("/api/sandboxes?refresh=true")
+    assert listed.status_code == 200
+    assert any(name == "statuses" for name, _ in fake_docker.calls)
+
+    # First stats call populates cached disk_usage_mb in DB; subsequent include_disk=false preserves it
+    s1 = client.get(f"/api/sandboxes/{sbx_id}/stats")
+    assert s1.status_code == 200
+    assert s1.json()["disk_usage_mb"] == 128.0
+
+    s2 = client.get(f"/api/sandboxes/{sbx_id}/stats?include_disk=false")
+    assert s2.status_code == 200
+    assert s2.json()["disk_usage_mb"] == 128.0
+    assert s2.json()["disk_fs_total_mb"] is None
+    assert ("stats", ("batch-one", False)) in fake_docker.calls
+
+
+def test_sandbox_reachable_manager_url_two_url_model():
+    """Unified 2-URL model: MANAGER_INTERNAL_URL for east-west (Docker/K8s), fallback to MANAGER_PUBLIC_URL (Traefik)."""
+    # 1. Docker / K8s internal service DNS takes precedence for container/Pod callbacks
+    s_k8s = Settings(
+        _env_file=None,
+        manager_public_url="https://metis.corp.com/",
+        manager_internal_url="http://dsh-manager.metis.svc.cluster.local:9000/",
+    )
+    assert s_k8s.manager_base_url == "https://metis.corp.com"
+    assert s_k8s.sandbox_reachable_manager_url == "http://dsh-manager.metis.svc.cluster.local:9000"
+
+    # 2. Remote Docker / Traefik-only mode (MANAGER_INTERNAL_URL empty) automatically uses Traefik public URL
+    s_remote = Settings(
+        _env_file=None,
+        manager_public_url="https://metis.corp.com/",
+        manager_internal_url="",
+    )
+    assert s_remote.sandbox_reachable_manager_url == "https://metis.corp.com"
+
+
+

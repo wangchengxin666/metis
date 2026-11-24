@@ -931,7 +931,9 @@ class KubernetesSandboxRuntime(BaseSandboxRuntime):
         except Exception as exc:
             raise SandboxRuntimeError(f"kubernetes pod exec failed for {sandbox.slug}: {exc}") from exc
 
-    def stats(self, sandbox: Sandbox) -> dict[str, float | int | str | None]:
+    def stats(
+        self, sandbox: Sandbox, *, include_disk: bool = True
+    ) -> dict[str, float | int | str | None]:
         """Query Kubernetes Pod metrics (metrics.k8s.io) with cgroup exec fallback."""
         mem_limit = parse_memory_to_bytes(
             sandbox.memory_limit, default=self.settings.sandbox_memory
@@ -976,7 +978,17 @@ class KubernetesSandboxRuntime(BaseSandboxRuntime):
             except Exception:
                 pass
 
-        disk = self.workspace_disk_usage(sandbox)
+        disk = (
+            self.workspace_disk_usage(sandbox, assume_running=True)
+            if include_disk
+            else {
+                "disk_usage_bytes": None,
+                "disk_usage_mb": None,
+                "disk_fs_total_mb": None,
+                "disk_fs_avail_mb": None,
+                "disk_fs_used_percent": None,
+            }
+        )
         return {
             "cpu_percent": cpu_percent,
             "memory_usage_bytes": mem_usage,

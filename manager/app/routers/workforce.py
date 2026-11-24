@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hmac
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
@@ -18,7 +20,7 @@ from ..deps import (
     session_email,
     settings,
 )
-from ..models import Sandbox
+from ..models import Sandbox, Team, TeamSandbox
 from ..schemas import (
     ApprovalDecisionRequest,
     CronJobCreateRequest,
@@ -27,6 +29,7 @@ from ..schemas import (
     SnapshotCreateRequest,
     SnapshotOut,
     TaskDispatchRequest,
+    TaskStatusUpdateRequest,
     TeamAssembleRequest,
     UserServiceCreateRequest,
     WebhookEventPayload,
@@ -36,13 +39,79 @@ from ..services import (
     audit,
     create_workspace_snapshot,
     delete_workspace_snapshot,
+    get_branding_config,
     list_workspace_snapshots,
     load_sandbox,
     load_sandbox_by_slug,
     restore_workspace_snapshot,
 )
+from ..services.integrations import parse_native_git_webhook, verify_github_signature
+from ..services.notifications import NotificationEvent, dispatch_notification_event
+from ..services.teams import ensure_team_for_assembly
+from ..services.workspace_hub import (
+    refresh_sandbox_snapshot,
+    refresh_sandboxes_snapshots,
+    upsert_sandbox_runtime_snapshot,
+)
 
 router = APIRouter()
+
+
+def _safe_refresh_snapshot(
+    db: Session,
+    sandbox: Sandbox,
+    *,
+    emit_notifications: bool = False,
+    include_team_peers: bool = False,
+    room_id: str | None = None,
+) -> None:
+    try:
+        if not include_team_peers:
+            refresh_sandbox_snapshot(
+                db,
+                resolve_docker(),
+                sandbox,
+                settings=settings,
+                emit_notifications=emit_notifications,
+            )
+            return
+
+        peer_ids: set[str] = {sandbox.id}
+        team_ids = set(
+            db.scalars(
+                select(TeamSandbox.team_id).where(TeamSandbox.sandbox_id == sandbox.id)
+            ).all()
+        )
+        clean_room = (room_id or "").strip()
+        if clean_room:
+            team_ids.update(
+                db.scalars(select(Team.id).where(Team.mesh_room_id == clean_room)).all()
+            )
+        if team_ids:
+            peer_ids.update(
+                db.scalars(
+                    select(TeamSandbox.sandbox_id).where(TeamSandbox.team_id.in_(list(team_ids)))
+                ).all()
+            )
+        targets = list(
+            db.scalars(
+                select(Sandbox).where(
+                    Sandbox.id.in_(list(peer_ids)),
+                    Sandbox.deleted_at.is_(None),
+                )
+            ).all()
+        )
+        if not targets:
+            targets = [sandbox]
+        refresh_sandboxes_snapshots(
+            db,
+            resolve_docker(),
+            targets,
+            settings=settings,
+            emit_notifications=emit_notifications,
+        )
+    except Exception:
+        pass
 
 
 @router.get("/api/sandboxes/{sandbox_id}/workforce")
@@ -55,8 +124,15 @@ def sandbox_workforce_runtime(
     """Inspect exposed preview apps, background services, cron jobs, and mesh team status for a digital employee."""
     try:
         sandbox = load_sandbox(db, sandbox_id)
-        _require_sandbox_owner_or_admin(sandbox, request, db, "无权查看他人的数字员工运行态")
-        return resolve_docker().inspect_workforce_runtime(sandbox)
+        _require_sandbox_owner_or_admin(
+            sandbox, request, db, "无权查看他人的数字员工运行态", allow_shared_member=True
+        )
+        data = resolve_docker().inspect_workforce_runtime(sandbox)
+        try:
+            upsert_sandbox_runtime_snapshot(db, sandbox, data, settings=settings, emit_notifications=False)
+        except Exception:
+            pass
+        return data
     except HTTPException:
         raise
     except Exception as exc:
@@ -133,6 +209,14 @@ def assemble_team_endpoint(
     for sbx in sandboxes:
         sbx.project_team_name = effective_name
     actor = session_email(request) or settings.manager_admin_email
+    ensure_team_for_assembly(
+        db,
+        team_name=effective_name,
+        sandboxes=sandboxes,
+        moderator_slug=result.get("moderator_slug"),
+        mesh_room_id=result.get("room_id"),
+        actor=actor,
+    )
     audit(
         db,
         "team.assemble",
@@ -193,7 +277,9 @@ def dispatch_sandbox_task_endpoint(
     """Dispatch a new task directly from the control center or user portal into a digital employee's mesh task board."""
     try:
         sandbox = load_sandbox(db, sandbox_id)
-        actor = _require_sandbox_owner_or_admin(sandbox, request, db, "无权向他人的数字员工派发任务")
+        actor = _require_sandbox_owner_or_admin(
+            sandbox, request, db, "无权向他人的数字员工派发任务", allow_shared_member=True
+        )
         res = resolve_docker().dispatch_mesh_task(
             sandbox,
             title=payload.title,
@@ -212,6 +298,32 @@ def dispatch_sandbox_task_endpoint(
             detail=f"slug={sandbox.slug},title={payload.title[:48]}",
         )
         db.commit()
+        if payload.approval_required:
+            try:
+                brand = get_branding_config(db)
+                brand_name = str(brand.get("brand_name_zh") or brand.get("brand_name_en") or "Metis")
+                task_id = str(res.get("task_id") or "")
+                dispatch_notification_event(
+                    db,
+                    settings,
+                    NotificationEvent(
+                        event_type="approval.pending",
+                        title=payload.title,
+                        summary=payload.description[:500] or "新建的需审批任务等待确认。",
+                        severity="warning",
+                        sandbox_id=sandbox.id,
+                        sandbox_slug=sandbox.slug,
+                        role_title=sandbox.role_title,
+                        project_team_name=sandbox.project_team_name,
+                        task_id=task_id or None,
+                        dedupe_key=f"approval.pending:{payload.room_id or 'local'}:{task_id}" if task_id else None,
+                        metadata={"room_id": payload.room_id or ""},
+                    ),
+                    brand_name=brand_name,
+                )
+            except Exception:
+                pass
+        _safe_refresh_snapshot(db, sandbox, emit_notifications=False)
         return res
     except HTTPException:
         raise
@@ -231,7 +343,9 @@ def decide_sandbox_approval_endpoint(
     """Approve or reject a pending human-approval task directly from the control center or user portal."""
     try:
         sandbox = load_sandbox(db, sandbox_id)
-        actor = _require_sandbox_owner_or_admin(sandbox, request, db, "无权审批他人的数字员工任务")
+        actor = _require_sandbox_owner_or_admin(
+            sandbox, request, db, "无权审批他人的数字员工任务", allow_shared_member=True
+        )
         res = resolve_docker().decide_mesh_approval(
             sandbox,
             task_id,
@@ -248,6 +362,64 @@ def decide_sandbox_approval_endpoint(
             detail=f"slug={sandbox.slug},task_id={task_id}",
         )
         db.commit()
+        _safe_refresh_snapshot(
+            db,
+            sandbox,
+            emit_notifications=False,
+            include_team_peers=True,
+            room_id=res.get("room_id") or payload.room_id,
+        )
+        return res
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.patch("/api/sandboxes/{sandbox_id}/tasks/{task_id}")
+@router.patch("/api/my/sandboxes/{sandbox_id}/tasks/{task_id}")
+def update_sandbox_task_endpoint(
+    sandbox_id: str,
+    task_id: str,
+    payload: TaskStatusUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Update a tracked mesh task's status (e.g. resolve or dismiss a blocked task) and refresh peer snapshots."""
+    try:
+        sandbox = load_sandbox(db, sandbox_id)
+        actor = _require_sandbox_owner_or_admin(
+            sandbox, request, db, "无权更新他人的数字员工任务", allow_shared_member=True
+        )
+        res = resolve_docker().update_mesh_task_status(
+            sandbox,
+            task_id,
+            status=payload.status,
+            summary=payload.summary,
+            room_id=payload.room_id,
+            actor=actor or "User",
+            notify_moderator=payload.notify_moderator,
+        )
+        if not res.get("ok"):
+            detail = str(res.get("detail") or "更新任务状态失败")
+            code = 404 if "not found" in detail.lower() else 400
+            raise HTTPException(status_code=code, detail=detail)
+        eff_room_id = res.get("room_id") or payload.room_id or ""
+        audit(
+            db,
+            "sandbox.task_update",
+            target=sandbox.id,
+            actor=actor,
+            detail=f"slug={sandbox.slug},task_id={task_id},status={payload.status},room_id={eff_room_id}",
+        )
+        db.commit()
+        _safe_refresh_snapshot(
+            db,
+            sandbox,
+            emit_notifications=False,
+            include_team_peers=True,
+            room_id=eff_room_id or None,
+        )
         return res
     except HTTPException:
         raise
@@ -256,27 +428,57 @@ def decide_sandbox_approval_endpoint(
 
 
 @router.post("/api/webhooks/sandboxes/{slug}")
-def inbound_sandbox_webhook_endpoint(
+async def inbound_sandbox_webhook_endpoint(
     slug: str,
-    payload: WebhookEventPayload,
     request: Request,
     token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    """External webhook trigger (GitHub/GitLab/Feishu/WeCom/CI) to auto-wake a digital employee and dispatch an event task."""
+    """External webhook trigger (native GitHub/GitLab or standard Metis JSON) to auto-wake and dispatch tasks."""
     try:
         sandbox = load_sandbox_by_slug(db, slug)
     except NotFoundError:
         raise HTTPException(status_code=404, detail="数字员工不存在")
 
-    expected = getattr(sandbox, "webhook_token", None)
+    raw_body = await request.body()
+    expected = getattr(sandbox, "webhook_token", None) or ""
     provided = (
         token
         or request.headers.get("x-webhook-token")
+        or request.headers.get("x-gitlab-token")
         or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     )
-    if not expected or not provided or not hmac.compare_digest(expected, provided):
-        raise HTTPException(status_code=401, detail="无效的 Webhook Token")
+    gh_sig_ok = verify_github_signature(
+        expected, raw_body, request.headers.get("x-hub-signature-256")
+    )
+    token_ok = bool(expected and provided and hmac.compare_digest(expected, provided))
+    if not (token_ok or gh_sig_ok):
+        raise HTTPException(status_code=401, detail="无效的 Webhook Token 或签名")
+
+    try:
+        raw_json = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except Exception:
+        raise HTTPException(status_code=400, detail="Webhook 请求体不是合法的 JSON")
+    if not isinstance(raw_json, dict):
+        raise HTTPException(status_code=400, detail="Webhook 请求体必须是 JSON 对象")
+
+    translated = parse_native_git_webhook(dict(request.headers), raw_json)
+    if translated is not None:
+        if translated.get("ignored"):
+            return {
+                "ok": True,
+                "ignored": True,
+                "slug": sandbox.slug,
+                "source": translated.get("source"),
+                "event": translated.get("event"),
+                "reason": translated.get("reason", "ignored"),
+            }
+        payload = WebhookEventPayload.model_validate(translated)
+    else:
+        try:
+            payload = WebhookEventPayload.model_validate(raw_json)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     try:
         if payload.wake_if_sleeping and resolve_docker().status(sandbox) != "running":
@@ -297,6 +499,7 @@ def inbound_sandbox_webhook_endpoint(
             detail=f"slug={sandbox.slug},event={payload.event},title={payload.title[:48]}",
         )
         db.commit()
+        _safe_refresh_snapshot(db, sandbox, emit_notifications=True)
         return {"ok": True, "slug": sandbox.slug, "event": payload.event, **res}
     except Exception as exc:
         raise _manager_error(exc) from exc
@@ -328,6 +531,7 @@ def expose_sandbox_app_endpoint(
             detail=f"slug={sandbox.slug},app={payload.name},port={payload.port}",
         )
         db.commit()
+        _safe_refresh_snapshot(db, sandbox, emit_notifications=False)
         return res
     except HTTPException:
         raise
@@ -356,6 +560,7 @@ def unexpose_sandbox_app_endpoint(
             detail=f"slug={sandbox.slug},app={app_name}",
         )
         db.commit()
+        _safe_refresh_snapshot(db, sandbox, emit_notifications=False)
         return res
     except HTTPException:
         raise

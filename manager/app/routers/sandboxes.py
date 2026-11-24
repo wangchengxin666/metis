@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 import tempfile
 from urllib.parse import urlsplit
@@ -47,6 +48,7 @@ from ..services import (
     load_sandbox,
     load_sandbox_by_slug,
     refresh_status,
+    refresh_statuses,
     restart_sandbox,
     start_sandbox,
     stop_sandbox,
@@ -54,9 +56,38 @@ from ..services import (
     upgrade_sandbox,
     utcnow,
 )
+from ..services.llm_gateway import generate_sandbox_gateway_key
+from ..services.teams import (
+    can_user_open_sandbox_ide,
+    get_sandbox_teams_map,
+    list_accessible_sandboxes,
+)
+from ..services.vault import sync_bound_credentials
 from .auth import verify_sandbox_access
 
 router = APIRouter()
+
+
+def _serialize_sandboxes(
+    db: Session,
+    sandboxes: list[Sandbox],
+    *,
+    viewer_email: str | None,
+    is_admin: bool,
+) -> list[SandboxOut]:
+    tmap = get_sandbox_teams_map(db, [s.id for s in sandboxes])
+    out: list[SandboxOut] = []
+    for s in sandboxes:
+        pairs = tmap.get(s.id, [])
+        out.append(
+            sandbox_out(
+                s,
+                team_ids=[p[0] for p in pairs],
+                team_names=[p[1] for p in pairs],
+                can_open_ide=can_user_open_sandbox_ide(db, s, viewer_email, is_admin),
+            )
+        )
+    return out
 
 
 @router.get("/sandboxes/{sandbox_id}/open", include_in_schema=False)
@@ -196,26 +227,29 @@ def api_my_sandboxes(
     is_admin = _is_authenticated_admin(request, db)
     if not sess_email and not is_admin:
         return SandboxList(items=[])
-    target_email = (email or sess_email or "").strip().lower()
-    if not is_admin:
-        target_email = sess_email
+    if is_admin and email:
+        target_email = email.strip().lower()
+        sandboxes = list(
+            db.scalars(
+                select(Sandbox)
+                .join(Sandbox.user)
+                .options(joinedload(Sandbox.user), joinedload(Sandbox.llm_profile))
+                .where(Sandbox.deleted_at.is_(None), User.email == target_email)
+                .order_by(Sandbox.created_at)
+            ).all()
+        )
+    elif is_admin:
+        sandboxes = list_accessible_sandboxes(db, sess_email, is_admin=True)
+    else:
         _ensure_active_user(db, sess_email)
-    if not target_email:
-        return SandboxList(items=[])
-    sandboxes = list(
-        db.scalars(
-            select(Sandbox)
-            .join(Sandbox.user)
-            .options(joinedload(Sandbox.user), joinedload(Sandbox.llm_profile))
-            .where(Sandbox.deleted_at.is_(None), User.email == target_email)
-            .order_by(Sandbox.created_at)
-        ).all()
-    )
+        sandboxes = list_accessible_sandboxes(db, sess_email, is_admin=False)
     if refresh:
-        docker = resolve_docker()
-        for sandbox in sandboxes:
-            refresh_status(db, docker, sandbox)
-    return SandboxList(items=[sandbox_out(s) for s in sandboxes])
+        refresh_statuses(db, resolve_docker(), sandboxes)
+    return SandboxList(
+        items=_serialize_sandboxes(
+            db, sandboxes, viewer_email=sess_email, is_admin=is_admin
+        )
+    )
 
 
 @router.post("/api/my/password")
@@ -306,11 +340,16 @@ def create_sandbox_endpoint(
             role_description=payload.role_description,
             role_sop=payload.role_sop,
             preview_auth_mode=payload.preview_auth_mode,
+            ownership_mode=payload.ownership_mode,
+            maintainer_emails=payload.maintainer_emails,
+            team_ids=payload.team_ids,
             daily_token_limit=payload.daily_token_limit,
+            budget_action=payload.budget_action,
+            credential_profile_ids=payload.credential_profile_ids,
         )
     except Exception as exc:
         raise _manager_error(exc) from exc
-    return sandbox_out(sandbox)
+    return _serialize_sandboxes(db, [sandbox], viewer_email=None, is_admin=True)[0]
 
 
 @router.get("/api/sandboxes", response_model=SandboxList)
@@ -327,10 +366,10 @@ def list_sandboxes(
         query = query.where(Sandbox.deleted_at.is_(None))
     sandboxes = list(db.scalars(query.order_by(Sandbox.created_at)).all())
     if refresh:
-        docker = resolve_docker()
-        for sandbox in sandboxes:
-            refresh_status(db, docker, sandbox)
-    return SandboxList(items=[sandbox_out(sandbox) for sandbox in sandboxes])
+        refresh_statuses(db, resolve_docker(), sandboxes)
+    return SandboxList(
+        items=_serialize_sandboxes(db, sandboxes, viewer_email=None, is_admin=True)
+    )
 
 
 @router.get("/api/sandboxes/{sandbox_id}", response_model=SandboxOut)
@@ -396,10 +435,16 @@ def recreate_sandbox_endpoint(
 ):
     try:
         sandbox = load_sandbox(db, sandbox_id)
-        resolve_docker().recreate(sandbox)
+        docker = resolve_docker()
+        docker.recreate(sandbox)
         sandbox.status = "running"
         sandbox.last_seen_at = sandbox.updated_at
-        audit(db, "sandbox.recreate", target=sandbox.id)
+        if sandbox.credential_profile_ids and hasattr(docker, "sync_credential_profile"):
+            try:
+                sync_bound_credentials(db, docker, sandbox)
+            except Exception:
+                pass
+        audit(db, "sandbox.recreate", target=sandbox.id, detail=f"slug={sandbox.slug}")
         db.commit()
         db.refresh(sandbox)
     except Exception as exc:
@@ -415,9 +460,11 @@ def patch_sandbox(
     _: None = Depends(require_admin_api),
 ):
     if (
-        payload.image_repo is None
+        payload.display_name is None
+        and payload.image_repo is None
         and payload.image_tag is None
         and payload.llm_profile_id is None
+        and payload.credential_profile_ids is None
         and payload.cpu_limit is None
         and payload.memory_limit is None
         and payload.auto_sleep_exempt is None
@@ -425,14 +472,87 @@ def patch_sandbox(
         and payload.role_description is None
         and payload.role_sop is None
         and payload.preview_auth_mode is None
+        and payload.ownership_mode is None
+        and payload.maintainer_emails is None
         and payload.daily_token_limit is None
+        and payload.budget_action is None
         and not payload.rotate_webhook_token
+        and not payload.rotate_gateway_key
     ):
         raise HTTPException(status_code=400, detail="nothing to update")
     try:
         sandbox = load_sandbox(db, sandbox_id)
         need_recreate = False
         role_updated = False
+        creds_updated = False
+        gateway_key_rotated = False
+        if payload.display_name is not None:
+            sandbox.display_name = payload.display_name.strip() or None
+            role_updated = True
+            audit(
+                db,
+                "sandbox.display_name_update",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},display_name={sandbox.display_name or ''}",
+            )
+            db.commit()
+        if payload.ownership_mode is not None:
+            sandbox.ownership_mode = payload.ownership_mode
+            audit(
+                db,
+                "sandbox.ownership_update",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},mode={payload.ownership_mode}",
+            )
+            db.commit()
+        if payload.maintainer_emails is not None:
+            clean_maint = list(
+                dict.fromkeys(
+                    str(e).strip().lower() for e in payload.maintainer_emails if str(e).strip()
+                )
+            )
+            sandbox.maintainer_emails_json = json.dumps(clean_maint)
+            audit(
+                db,
+                "sandbox.maintainers_update",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},count={len(clean_maint)}",
+            )
+            db.commit()
+        if payload.budget_action is not None:
+            sandbox.budget_action = payload.budget_action
+            audit(
+                db,
+                "sandbox.budget_action",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},action={payload.budget_action}",
+            )
+            db.commit()
+        if payload.rotate_gateway_key or not getattr(sandbox, "gateway_api_key", None):
+            if payload.rotate_gateway_key or not getattr(sandbox, "gateway_api_key", None):
+                sandbox.gateway_api_key = generate_sandbox_gateway_key()
+                gateway_key_rotated = True
+                if payload.rotate_gateway_key:
+                    audit(
+                        db,
+                        "sandbox.gateway_key_rotate",
+                        target=sandbox.id,
+                        detail=f"slug={sandbox.slug}",
+                    )
+                db.commit()
+        if payload.credential_profile_ids is not None:
+            clean_cids = list(
+                dict.fromkeys(str(x).strip() for x in payload.credential_profile_ids if str(x).strip())
+            )
+            sandbox.credential_profile_ids_json = json.dumps(clean_cids)
+            creds_updated = True
+            audit(
+                db,
+                "sandbox.credential_bind",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},profiles={len(clean_cids)}",
+            )
+            db.commit()
         if payload.preview_auth_mode is not None:
             sandbox.preview_auth_mode = payload.preview_auth_mode
             audit(
@@ -534,6 +654,17 @@ def patch_sandbox(
                 resolve_docker().sync_role_profile(sandbox)
             except Exception:
                 pass
+        if (creds_updated or need_recreate) and sandbox.credential_profile_ids and hasattr(
+            resolve_docker(), "sync_credential_profile"
+        ):
+            try:
+                sync_bound_credentials(db, resolve_docker(), sandbox)
+            except Exception:
+                pass
+        if llm_to_sync is None and gateway_key_rotated and sandbox.llm_profile and getattr(
+            sandbox.llm_profile, "gateway_enabled", False
+        ):
+            llm_to_sync = sandbox.llm_profile
         if llm_to_sync is not None:
             # Hot-push updated LLM profile directly into the sandbox's cordis.patch.yml + .credentials.yaml
             # without destroying the container (and after recreate if the image also changed).
@@ -596,16 +727,23 @@ def sandbox_logs(
 def sandbox_stats(
     sandbox_id: str,
     request: Request,
+    include_disk: bool = Query(default=True),
     db: Session = Depends(get_db),
 ):
     try:
         sandbox = load_sandbox(db, sandbox_id)
         _require_sandbox_owner_or_admin(sandbox, request, db, "无权查看他人的工作区状态")
-        data = resolve_docker().stats(sandbox)
+        runtime = resolve_docker()
+        try:
+            data = runtime.stats(sandbox, include_disk=include_disk)
+        except TypeError:
+            data = runtime.stats(sandbox)
         if data.get("disk_usage_mb") is not None:
             sandbox.disk_usage_mb = float(data["disk_usage_mb"])
             sandbox.disk_updated_at = utcnow()
             db.commit()
+        elif not include_disk and sandbox.disk_usage_mb is not None:
+            data = {**data, "disk_usage_mb": float(sandbox.disk_usage_mb)}
         return data
     except HTTPException:
         raise

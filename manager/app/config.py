@@ -91,7 +91,8 @@ class Settings(BaseSettings):
     manager_admin_email: str = "admin@example.com"
     manager_admin_token: str = ""
     manager_public_url: str = "http://localhost:9000"
-    # Internal URL reachable by sandbox containers (defaults to manager_base_url).
+    # Optional east-west internal URL for container/Pod callbacks (plugins & LLM Gateway).
+    # Leave empty on remote Docker / public-only setups to automatically use MANAGER_PUBLIC_URL (Traefik).
     manager_internal_url: str = ""
     # Optional internal Traefik gateway URL reachable by sandbox containers for sandbox-mesh (/s/<slug>/p/4090).
     gateway_internal_url: str = ""
@@ -123,8 +124,13 @@ class Settings(BaseSettings):
 
     @property
     def sandbox_reachable_manager_url(self) -> str:
-        if self.manager_internal_url:
-            return self.manager_internal_url.rstrip("/")
+        """Unified east-west base URL for all container/Pod callbacks (plugins & built-in LLM Gateway).
+
+        Uses MANAGER_INTERNAL_URL when configured (Docker Compose / Kubernetes internal Service DNS),
+        and falls back cleanly to MANAGER_PUBLIC_URL (Traefik domain) when unset.
+        """
+        if self.manager_internal_url.strip():
+            return self.manager_internal_url.strip().rstrip("/")
         return self.manager_base_url
 
     @property

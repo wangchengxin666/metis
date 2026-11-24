@@ -33,7 +33,7 @@ from ..deps import (
     session_email,
     settings,
 )
-from ..models import OidcProvider, User
+from ..models import OidcProvider, Sandbox, User
 from ..oidc import build_provider_logout_url, is_email_domain_allowed
 from ..schemas import (
     AuthPolicyOut,
@@ -59,6 +59,13 @@ from ..services import (
     set_allow_local_user_login,
     touch_sandbox_activity,
     update_oidc_provider,
+)
+
+from ..services.teams import (
+    can_user_access_sandbox_frontstage,
+    can_user_open_sandbox_ide,
+    can_user_view_team_preview,
+    get_user_teams_summary,
 )
 
 router = APIRouter()
@@ -128,11 +135,15 @@ def auth_me(
         elif email:
             auth_method = "local"
     brand_cfg = get_branding_config(db)
+    is_team_lead, lead_team_ids, user_teams = get_user_teams_summary(db, email)
     return {
         "authenticated": bool(email),
         "email": email,
         "display_name": display_name,
         "admin": admin,
+        "is_team_lead": is_team_lead,
+        "lead_team_ids": lead_team_ids,
+        "teams": user_teams,
         "user_status": user_row.status if user_row else "active",
         "has_password": bool(user_row and user_row.password_hash),
         "auth_mode": settings.manager_auth_mode,
@@ -202,8 +213,43 @@ a.btn{{display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;p
         raise HTTPException(status_code=401, detail="请先登录平台后再访问工作区")
 
     owner_email = sandbox.user.email.lower()
-    if not is_preview_path and not is_admin and email != owner_email:
+    preview_mode = (getattr(sandbox, "preview_auth_mode", None) or "public").strip().lower()
+    if is_preview_path and preview_mode == "team" and not can_user_view_team_preview(db, sandbox, email, is_admin):
         if wants_html:
+            html = f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>403 仅限项目组成员访问 - Metis</title>
+<style>body{{margin:0;background:#09090b;color:#f4f4f5;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}}
+.card{{max-width:440px;padding:28px;border-radius:14px;background:#18181b;border:1px solid #3f3f46;box-shadow:0 20px 40px rgba(0,0,0,.5)}}
+h2{{margin:0 0 10px;font-size:18px;color:#fb7185}}p{{margin:0 0 20px;font-size:13px;color:#a1a1aa;line-height:1.6}}
+code{{background:#27272a;padding:2px 6px;border-radius:4px;color:#e4e4e7}}
+a.btn{{display:inline-block;background:#27272a;color:#f4f4f5;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid #3f3f46}}</style></head>
+<body><div class="card"><h2>403 仅限项目组成员访问</h2>
+<p>预览应用 <code>/s/{slug}/apps/</code> 已设置为仅归属人、所属项目组成员与管理员可见。当前账号 <code>{email}</code> 暂无权访问。</p>
+<a class="btn" href="/deliverables">返回交付广场</a></div></body></html>"""
+            return HTMLResponse(content=html, status_code=403)
+        raise HTTPException(
+            status_code=403,
+            detail=f"禁止访问：预览应用 /s/{slug}/apps/ 仅归属人、项目组成员或管理员可访问",
+        )
+
+    if not is_preview_path and not can_user_open_sandbox_ide(db, sandbox, email, is_admin):
+        is_shared_member = (
+            (getattr(sandbox, "ownership_mode", None) or "personal") == "shared"
+            and can_user_access_sandbox_frontstage(db, sandbox, email, is_admin)
+        )
+        if wants_html:
+            if is_shared_member:
+                html = f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>共享岗位数字员工 - 请通过前台派单 - Metis</title>
+<style>body{{margin:0;background:#09090b;color:#f4f4f5;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}}
+.card{{max-width:460px;padding:28px;border-radius:14px;background:#18181b;border:1px solid #3f3f46;box-shadow:0 20px 40px rgba(0,0,0,.5)}}
+h2{{margin:0 0 10px;font-size:18px;color:#fbbf24}}p{{margin:0 0 20px;font-size:13px;color:#a1a1aa;line-height:1.6}}
+code{{background:#27272a;padding:2px 6px;border-radius:4px;color:#e4e4e7}}
+a.btn{{display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500}}</style></head>
+<body><div class="card"><h2>共享岗位工位受控访问</h2>
+<p><code>@{slug}</code> 是团队共享岗位数字员工，完整 DSH 底层工位仅对维护者、团队负责人及管理员开放。请前往 Metis 业务前台直接向其派发任务并上传附件。</p>
+<a class="btn" href="/workforce">前往前台向其派单</a></div></body></html>"""
+                return HTMLResponse(content=html, status_code=403)
             html = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>403 禁止访问 - DSH Sandbox Cloud</title>
 <style>body{{margin:0;background:#09090b;color:#f4f4f5;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}}
@@ -217,7 +263,11 @@ a.btn{{display:inline-block;background:#27272a;color:#f4f4f5;text-decoration:non
             return HTMLResponse(content=html, status_code=403)
         raise HTTPException(
             status_code=403,
-            detail=f"禁止访问：工作区 /s/{slug} 仅归属人 ({owner_email}) 或管理员可访问",
+            detail=(
+                f"共享岗位 /s/{slug} 的底层工位仅维护者/Team Lead/管理员可进，请通过前台任务派单接口交互"
+                if is_shared_member
+                else f"禁止访问：工作区 /s/{slug} 仅归属人 ({owner_email}) 或管理员可访问"
+            ),
         )
 
     if not is_admin and sandbox.user.status != "active":
@@ -472,7 +522,7 @@ async def _complete_oidc_callback(
     next_url = safe_next(request.session.pop("next", "/admin"))
     if granted_admin:
         target = next_url
-    elif next_url.startswith(("/my", "/s/")):
+    elif next_url.startswith(("/my", "/s/", "/inbox", "/workforce", "/playbooks", "/deliverables", "/teams", "/finops", "/scorecard")):
         target = next_url
     else:
         target = "/my"

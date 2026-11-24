@@ -93,8 +93,9 @@ class TemplateCreate(BaseModel):
     description: str | None = None
     role_title: str | None = Field(default=None, max_length=128)
     role_description: str | None = Field(default=None, max_length=600)
-    role_sop: str | None = Field(default=None, max_length=2000)
+    role_sop: str | None = Field(default=None, max_length=8000)
     default_llm_profile_id: str | None = None
+    default_credential_profile_ids: list[str] = Field(default_factory=list)
     image_repo: str = "dsh-sandbox"
     image_tag: str = "latest"
     default_cpu_limit: float = Field(default=2.0, gt=0, le=64)
@@ -114,8 +115,9 @@ class TemplateUpdate(BaseModel):
     description: str | None = None
     role_title: str | None = Field(default=None, max_length=128)
     role_description: str | None = Field(default=None, max_length=600)
-    role_sop: str | None = Field(default=None, max_length=2000)
+    role_sop: str | None = Field(default=None, max_length=8000)
     default_llm_profile_id: str | None = None
+    default_credential_profile_ids: list[str] | None = None
     image_repo: str | None = None
     image_tag: str | None = None
     default_cpu_limit: float | None = Field(default=None, gt=0, le=64)
@@ -140,7 +142,9 @@ class TemplateOut(BaseModel):
     role_title: str | None = None
     role_description: str | None = None
     role_sop: str | None = None
+    sop_version: int = 1
     default_llm_profile_id: str | None = None
+    default_credential_profile_ids: list[str] = Field(default_factory=list)
     image_repo: str
     image_tag: str
     default_cpu_limit: float
@@ -151,6 +155,11 @@ class TemplateOut(BaseModel):
     is_builtin: bool
     created_at: datetime
     updated_at: datetime
+
+
+PREVIEW_AUTH_MODES = Literal["public", "authenticated", "team"]
+OWNERSHIP_MODES = Literal["personal", "shared"]
+BUDGET_ACTIONS = Literal["block", "downgrade", "warn"]
 
 
 class SandboxCreate(BaseModel):
@@ -168,11 +177,16 @@ class SandboxCreate(BaseModel):
     init_script: str | None = None
     auto_install_plugins: str | None = None
     llm_profile_id: str | None = None
+    credential_profile_ids: list[str] | None = None
     cpu_limit: float | None = Field(default=None, gt=0, le=64)
     memory_limit: str | None = None
     auto_sleep_exempt: bool = False
-    preview_auth_mode: Literal["public", "authenticated"] = "public"
+    preview_auth_mode: PREVIEW_AUTH_MODES = "public"
+    ownership_mode: OWNERSHIP_MODES = "personal"
+    maintainer_emails: list[str] = Field(default_factory=list)
+    team_ids: list[str] = Field(default_factory=list)
     daily_token_limit: int | None = Field(default=None, ge=1000, le=1_000_000_000)
+    budget_action: BUDGET_ACTIONS = "block"
 
     @field_validator("initial_password")
     @classmethod
@@ -186,18 +200,24 @@ class SandboxCreate(BaseModel):
 
 
 class SandboxPatch(BaseModel):
+    display_name: str | None = Field(default=None, max_length=255)
     image_repo: str | None = None
     image_tag: str | None = None
     llm_profile_id: str | None = None
+    credential_profile_ids: list[str] | None = None
     cpu_limit: float | None = Field(default=None, gt=0, le=64)
     memory_limit: str | None = None
     auto_sleep_exempt: bool | None = None
     role_title: str | None = Field(default=None, max_length=128)
     role_description: str | None = Field(default=None, max_length=600)
     role_sop: str | None = Field(default=None, max_length=2000)
-    preview_auth_mode: Literal["public", "authenticated"] | None = None
+    preview_auth_mode: PREVIEW_AUTH_MODES | None = None
+    ownership_mode: OWNERSHIP_MODES | None = None
+    maintainer_emails: list[str] | None = None
     daily_token_limit: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    budget_action: BUDGET_ACTIONS | None = None
     rotate_webhook_token: bool = False
+    rotate_gateway_key: bool = False
 
     @field_validator("memory_limit")
     @classmethod
@@ -224,16 +244,24 @@ class SandboxOut(BaseModel):
     auto_install_plugins: str | None = None
     llm_profile_id: str | None = None
     llm_profile_name: str | None = None
+    credential_profile_ids: list[str] = Field(default_factory=list)
     cpu_limit: float | None
     memory_limit: str | None
     auto_sleep_exempt: bool = False
     disk_usage_mb: float | None = None
     disk_updated_at: datetime | None = None
     preview_auth_mode: str = "public"
+    ownership_mode: str = "personal"
+    maintainer_emails: list[str] = Field(default_factory=list)
     has_webhook_token: bool = False
     webhook_url: str | None = None
+    has_gateway_api_key: bool = False
     daily_token_limit: int | None = None
+    budget_action: str = "block"
     project_team_name: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    team_names: list[str] = Field(default_factory=list)
+    can_open_ide: bool = True
     status: str
     url: str
     created_at: datetime
@@ -321,6 +349,10 @@ class LlmProfileCreate(BaseModel):
     supports_image: bool = False
     reasoning_effort: LLM_REASONING_EFFORTS | None = None
     thinking_format: LLM_THINKING_FORMATS | None = None
+    gateway_enabled: bool = False
+    input_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    output_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    fallback_llm_profile_id: str | None = None
 
 
 class LlmProfileUpdate(BaseModel):
@@ -335,6 +367,10 @@ class LlmProfileUpdate(BaseModel):
     supports_image: bool | None = None
     reasoning_effort: LLM_REASONING_EFFORTS | None = None
     thinking_format: LLM_THINKING_FORMATS | None = None
+    gateway_enabled: bool | None = None
+    input_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    output_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    fallback_llm_profile_id: str | None = None
 
 
 class LlmProfileOut(BaseModel):
@@ -351,6 +387,10 @@ class LlmProfileOut(BaseModel):
     reasoning_effort: str | None = None
     thinking_format: str | None = None
     has_api_key: bool = False
+    gateway_enabled: bool = False
+    input_price_per_1m: float | None = None
+    output_price_per_1m: float | None = None
+    fallback_llm_profile_id: str | None = None
 
 
 class LlmProfilePushRequest(BaseModel):
@@ -659,6 +699,13 @@ class ApprovalDecisionRequest(BaseModel):
     room_id: str | None = None
 
 
+class TaskStatusUpdateRequest(BaseModel):
+    status: Literal["todo", "in_progress", "in_review", "blocked", "done", "cancelled"]
+    summary: str = Field(default="", max_length=1000)
+    room_id: str | None = None
+    notify_moderator: bool = False
+
+
 class WebhookEventPayload(BaseModel):
     source: str = Field(default="webhook", max_length=64)
     event: str = Field(default="task", max_length=64)
@@ -710,6 +757,7 @@ class CredentialProfileOut(BaseModel):
 
 class CredentialProfilePushRequest(BaseModel):
     sandbox_ids: list[str] | None = None
+    template_keys: list[str] | None = None
 
 
 class ExposeAppRequest(BaseModel):
@@ -752,6 +800,267 @@ class SharedProjectSyncRequest(BaseModel):
     sandbox_ids: list[str] = Field(min_length=1)
     file_name: str = Field(default="PROJECT_BRIEF.md", min_length=1, max_length=128)
     content: str = Field(min_length=1, max_length=200000)
+
+
+NOTIFICATION_CHANNEL_TYPES = Literal["feishu", "wecom", "slack", "email", "webhook"]
+NOTIFICATION_EVENT_TYPES = Literal[
+    "approval.pending",
+    "task.blocked",
+    "task.done",
+    "sandbox.unhealthy",
+    "budget.warning",
+    "budget.exceeded",
+]
+
+
+class NotificationChannelCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    channel_type: NOTIFICATION_CHANNEL_TYPES
+    enabled: bool = True
+    webhook_url: str | None = Field(default=None, max_length=1024)
+    signing_secret: str | None = Field(default=None, max_length=512)
+    smtp_host: str | None = Field(default=None, max_length=255)
+    smtp_port: int | None = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = Field(default=None, max_length=255)
+    smtp_password: str | None = Field(default=None, max_length=512)
+    smtp_from: str | None = Field(default=None, max_length=255)
+    smtp_to: list[str] = Field(default_factory=list)
+    smtp_use_tls: bool = True
+    events: list[NOTIFICATION_EVENT_TYPES] = Field(
+        default_factory=lambda: [
+            "approval.pending",
+            "task.blocked",
+            "task.done",
+            "sandbox.unhealthy",
+        ]
+    )
+    scope_sandbox_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "webhook_url")
+
+    @model_validator(mode="after")
+    def validate_channel_config(self) -> NotificationChannelCreate:
+        if self.channel_type == "email":
+            if not (self.smtp_host or "").strip():
+                raise ValueError("smtp_host is required for email channels")
+            if not self.smtp_to:
+                raise ValueError("smtp_to requires at least one recipient email")
+        else:
+            if not self.webhook_url:
+                raise ValueError("webhook_url is required for webhook/IM channels")
+        return self
+
+
+class NotificationChannelUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    enabled: bool | None = None
+    webhook_url: str | None = Field(default=None, max_length=1024)
+    signing_secret: str | None = Field(default=None, max_length=512)
+    clear_signing_secret: bool = False
+    smtp_host: str | None = Field(default=None, max_length=255)
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    smtp_username: str | None = Field(default=None, max_length=255)
+    smtp_password: str | None = Field(default=None, max_length=512)
+    smtp_from: str | None = Field(default=None, max_length=255)
+    smtp_to: list[str] | None = None
+    smtp_use_tls: bool | None = None
+    events: list[NOTIFICATION_EVENT_TYPES] | None = None
+    scope_sandbox_ids: list[str] | None = None
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "webhook_url")
+
+
+class NotificationChannelOut(BaseModel):
+    id: str
+    name: str
+    channel_type: str
+    enabled: bool
+    target_hint: str | None = None
+    has_secret: bool = False
+    events: list[str] = Field(default_factory=list)
+    scope_sandbox_ids: list[str] = Field(default_factory=list)
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_from: str | None = None
+    smtp_to: list[str] = Field(default_factory=list)
+    smtp_use_tls: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class NotificationDeliveryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    channel_id: str
+    channel_name: str
+    channel_type: str
+    event_type: str
+    dedupe_key: str | None = None
+    sandbox_slug: str | None = None
+    title: str
+    status: str
+    response_code: int | None = None
+    error_detail: str | None = None
+    created_at: datetime
+
+
+class NotificationTestOut(BaseModel):
+    ok: bool
+    channel_id: str
+    channel_name: str
+    status_code: int | None = None
+    detail: str = ""
+
+
+class AuditLogItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    actor: str | None = None
+    action: str
+    category: str | None = None
+    sandbox_slug: str | None = None
+    target: str | None = None
+    detail: str | None = None
+    created_at: datetime
+
+
+class AuditLogPageOut(BaseModel):
+    items: list[AuditLogItemOut]
+    total: int
+    limit: int
+    offset: int
+    categories: list[str] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+
+
+class TeamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
+    description: str | None = Field(default=None, max_length=600)
+    department: str | None = Field(default=None, max_length=128)
+    daily_token_budget: int | None = Field(default=None, ge=0, le=10_000_000_000)
+    lead_emails: list[EmailStr] = Field(default_factory=list)
+    member_emails: list[EmailStr] = Field(default_factory=list)
+    sandbox_ids: list[str] = Field(default_factory=list)
+    moderator_sandbox_id: str | None = None
+
+
+class TeamUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=600)
+    department: str | None = Field(default=None, max_length=128)
+    status: Literal["active", "archived"] | None = None
+    daily_token_budget: int | None = Field(default=None, ge=0, le=10_000_000_000)
+
+
+class TeamMemberUpsert(BaseModel):
+    email: EmailStr
+    role: Literal["lead", "member"] = "member"
+
+
+class TeamSandboxAttach(BaseModel):
+    sandbox_id: str
+    is_moderator: bool = False
+
+
+class TeamSharedDocSyncRequest(BaseModel):
+    file_name: str = Field(default="PROJECT_BRIEF.md", min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=200000)
+
+
+class ProvisionRequestCreate(BaseModel):
+    template_key: str = Field(min_length=1, max_length=64)
+    team_id: str | None = None
+    ownership_mode: OWNERSHIP_MODES = "personal"
+    desired_slug: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
+    role_title: str | None = Field(default=None, max_length=128)
+    reason: str | None = Field(default=None, max_length=600)
+
+
+class ProvisionRequestDecision(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: str = Field(default="", max_length=512)
+    llm_profile_id: str | None = None
+
+
+PLAYBOOK_CATEGORIES = Literal["engineering", "analytics", "legal", "operations", "custom"]
+
+
+class PlaybookInputField(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=128)
+    type: Literal["text", "textarea", "select", "file"] = "text"
+    required: bool = True
+    placeholder: str = ""
+    options: list[str] = Field(default_factory=list)
+
+
+class PlaybookStageSpec(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    role_hint: str = ""
+    template_key_hint: str = ""
+    parallel_group: str | None = None
+    approval_required: bool = False
+    prompt_template: str = Field(min_length=1, max_length=6000)
+    deliverable_hint: str = ""
+
+
+class PlaybookCreate(BaseModel):
+    key: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
+    name: str = Field(min_length=1, max_length=128)
+    category: PLAYBOOK_CATEGORIES = "custom"
+    description: str | None = Field(default=None, max_length=600)
+    enabled: bool = True
+    estimated_manual_hours: float = Field(default=4.0, ge=0.25, le=500.0)
+    input_fields: list[PlaybookInputField] = Field(default_factory=list)
+    stages: list[PlaybookStageSpec] = Field(min_length=1, max_length=12)
+    deliverables_checklist: list[str] = Field(default_factory=list)
+
+
+class PlaybookUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    category: PLAYBOOK_CATEGORIES | None = None
+    description: str | None = Field(default=None, max_length=600)
+    enabled: bool | None = None
+    estimated_manual_hours: float | None = Field(default=None, ge=0.25, le=500.0)
+    input_fields: list[PlaybookInputField] | None = None
+    stages: list[PlaybookStageSpec] | None = None
+    deliverables_checklist: list[str] | None = None
+
+
+class PlaybookImportPayload(BaseModel):
+    content: str = Field(min_length=2, max_length=200000)
+    overwrite: bool = False
+
+
+class PlaybookStepDecisionRequest(BaseModel):
+    decision: Literal["approved", "revise", "rejected"]
+    note: str = Field(default="", max_length=1000)
+    output_summary: str | None = Field(default=None, max_length=4000)
+    artifacts: list[str] | None = None
+
+
+class MemoryPromoteRequest(BaseModel):
+    source_sandbox_id: str
+    memory_id: str = Field(min_length=1, max_length=64)
+    memory_title: str = Field(min_length=1, max_length=255)
+    memory_category: str = Field(default="workflow", max_length=32)
+    promoted_content: str = Field(min_length=1, max_length=16000)
+    target_type: Literal["template_sop", "team_shared_doc"] = "template_sop"
+    target_template_id: str | None = None
+    target_team_id: str | None = None
+    target_file_name: str = Field(default="TEAM_PLAYBOOK_SOP.md", max_length=128)
+    rollout_sandbox_ids: list[str] = Field(default_factory=list)
+
 
 
 

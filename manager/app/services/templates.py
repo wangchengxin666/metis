@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -323,6 +325,13 @@ def get_template_by_key(db: Session, key: str) -> SandboxTemplate | None:
     return db.scalar(select(SandboxTemplate).where(SandboxTemplate.key == key))
 
 
+def _serialize_cred_ids(ids: list[str] | None) -> str:
+    if not ids:
+        return "[]"
+    cleaned = list(dict.fromkeys(str(x).strip() for x in ids if str(x).strip()))
+    return json.dumps(cleaned)
+
+
 def create_template(db: Session, payload: TemplateCreate) -> SandboxTemplate:
     if get_template_by_key(db, payload.key):
         raise Conflict(f"模板标识 '{payload.key}' 已存在")
@@ -334,6 +343,9 @@ def create_template(db: Session, payload: TemplateCreate) -> SandboxTemplate:
         role_description=(payload.role_description or "").strip() or None,
         role_sop=(payload.role_sop or "").strip() or None,
         default_llm_profile_id=(payload.default_llm_profile_id or "").strip() or None,
+        default_credential_profile_ids_json=_serialize_cred_ids(
+            payload.default_credential_profile_ids
+        ),
         image_repo=payload.image_repo.strip(),
         image_tag=payload.image_tag.strip(),
         default_cpu_limit=payload.default_cpu_limit,
@@ -368,6 +380,10 @@ def update_template(
         tpl.role_sop = payload.role_sop.strip() or None
     if payload.default_llm_profile_id is not None:
         tpl.default_llm_profile_id = payload.default_llm_profile_id.strip() or None
+    if payload.default_credential_profile_ids is not None:
+        tpl.default_credential_profile_ids_json = _serialize_cred_ids(
+            payload.default_credential_profile_ids
+        )
     if payload.image_repo is not None:
         tpl.image_repo = payload.image_repo.strip()
     if payload.image_tag is not None:

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import base64
+import csv
 import hmac
+import io
+import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -21,6 +25,8 @@ from ..deps import (
 from ..docker_service import build_traefik_dynamic_config
 from ..models import AuditLog, Sandbox, SandboxTemplate, User
 from ..schemas import (
+    AuditLogItemOut,
+    AuditLogPageOut,
     BrandingOut,
     BrandingUpdate,
     HealthOut,
@@ -36,6 +42,7 @@ from ..services import (
     set_branding_config,
     set_idle_sleep_policy,
 )
+from ..services.common import extract_audit_slug, infer_audit_category, query_audit_logs
 
 router = APIRouter()
 
@@ -171,6 +178,8 @@ def api_overview(
                 "id": a.id,
                 "actor": a.actor,
                 "action": a.action,
+                "category": a.category or infer_audit_category(a.action),
+                "sandbox_slug": a.sandbox_slug or extract_audit_slug(a.detail),
                 "target": a.target,
                 "detail": a.detail,
                 "created_at": a.created_at.isoformat(),
@@ -178,6 +187,125 @@ def api_overview(
             for a in recent_audits
         ],
     }
+
+
+def _parse_iso_dt(raw: str | None) -> datetime | None:
+    if not raw or not raw.strip():
+        return None
+    cleaned = raw.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"无效的时间格式: {raw}") from exc
+
+
+@router.get("/api/audit-logs", response_model=AuditLogPageOut)
+def api_query_audit_logs(
+    q: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    actor: str | None = Query(default=None),
+    sandbox_slug: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    rows, total, categories, actions = query_audit_logs(
+        db,
+        q=q,
+        category=category,
+        action=action,
+        actor=actor,
+        sandbox_slug=sandbox_slug,
+        date_from=_parse_iso_dt(date_from),
+        date_to=_parse_iso_dt(date_to),
+        limit=limit,
+        offset=offset,
+    )
+    return AuditLogPageOut(
+        items=[AuditLogItemOut.model_validate(r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+        categories=categories,
+        actions=actions,
+    )
+
+
+@router.get("/api/audit-logs/export")
+def api_export_audit_logs(
+    format: str = Query(default="csv", pattern=r"^(csv|json)$"),
+    q: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    actor: str | None = Query(default=None),
+    sandbox_slug: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    rows, _total, _cats, _acts = query_audit_logs(
+        db,
+        q=q,
+        category=category,
+        action=action,
+        actor=actor,
+        sandbox_slug=sandbox_slug,
+        date_from=_parse_iso_dt(date_from),
+        date_to=_parse_iso_dt(date_to),
+        limit=limit,
+        offset=0,
+    )
+    if format == "json":
+        payload = [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "category": r.category or infer_audit_category(r.action),
+                "action": r.action,
+                "actor": r.actor,
+                "sandbox_slug": r.sandbox_slug,
+                "target": r.target,
+                "detail": r.detail,
+            }
+            for r in rows
+        ]
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(raw),
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="metis-audit-logs.json"'},
+        )
+
+    buf = io.StringIO()
+    buf.write("\ufeff")  # UTF-8 BOM for Excel compatibility
+    writer = csv.writer(buf)
+    writer.writerow(["created_at", "category", "action", "actor", "sandbox_slug", "target", "detail"])
+    for r in rows:
+        writer.writerow(
+            [
+                r.created_at.isoformat() if r.created_at else "",
+                r.category or infer_audit_category(r.action),
+                r.action,
+                r.actor or "",
+                r.sandbox_slug or "",
+                r.target or "",
+                r.detail or "",
+            ]
+        )
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue().encode("utf-8")),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="metis-audit-logs.csv"'},
+    )
 
 
 

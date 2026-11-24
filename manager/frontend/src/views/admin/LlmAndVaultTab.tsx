@@ -16,7 +16,12 @@ import {
 import { apiFetch } from '../../lib/client.ts'
 import { localizeStatus } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type { CredentialProfileItem, LlmProfileItem, SandboxItem } from '../../types'
+import type {
+  CredentialProfileItem,
+  LlmProfileItem,
+  SandboxItem,
+  TemplateItem,
+} from '../../types'
 import { CredentialVaultSection } from './CredentialVaultSection'
 
 const EMPTY_LLM_FORM = {
@@ -30,12 +35,17 @@ const EMPTY_LLM_FORM = {
   supports_image: false,
   reasoning_effort: '',
   thinking_format: '',
+  gateway_enabled: true,
+  input_price_per_1m: '',
+  output_price_per_1m: '',
+  fallback_llm_profile_id: '',
 }
 
 export interface LlmAndVaultTabProps {
   llmProfiles: LlmProfileItem[]
   credentialProfiles: CredentialProfileItem[]
   sandboxes: SandboxItem[]
+  templates?: TemplateItem[]
   onRefresh: () => Promise<void>
   notify: (msg: string, type?: 'success' | 'error') => void
 }
@@ -44,6 +54,7 @@ export function LlmAndVaultTab({
   llmProfiles,
   credentialProfiles,
   sandboxes,
+  templates = [],
   onRefresh,
   notify,
 }: LlmAndVaultTabProps) {
@@ -80,6 +91,10 @@ export function LlmAndVaultTab({
       supports_image: Boolean(p.supports_image),
       reasoning_effort: p.reasoning_effort || '',
       thinking_format: p.thinking_format || '',
+      gateway_enabled: Boolean(p.gateway_enabled),
+      input_price_per_1m: p.input_price_per_1m != null ? String(p.input_price_per_1m) : '',
+      output_price_per_1m: p.output_price_per_1m != null ? String(p.output_price_per_1m) : '',
+      fallback_llm_profile_id: p.fallback_llm_profile_id || '',
     })
     setLlmModalOpen(true)
   }
@@ -193,10 +208,40 @@ export function LlmAndVaultTab({
                         <Badge variant="secondary">
                           {p.has_api_key ? t('admin.llm.badgeKeySet') : t('admin.llm.badgeNoKey')}
                         </Badge>
+                        {p.gateway_enabled && (
+                          <Badge variant="outline" className="border-indigo-500/40 text-indigo-300">
+                            {t('admin.llm.badgeGateway')}
+                          </Badge>
+                        )}
+                        {(p.input_price_per_1m != null || p.output_price_per_1m != null) && (
+                          <Badge variant="outline" className="font-mono text-[11px]">
+                            {t('admin.llm.badgePrice', {
+                              in: p.input_price_per_1m ?? 0,
+                              out: p.output_price_per_1m ?? 0,
+                            })}
+                          </Badge>
+                        )}
                       </div>
                       <div className="font-mono text-xs text-zinc-400 truncate">
                         {p.model} · {p.base_url}
                       </div>
+                      {p.gateway_enabled && (
+                        <div className="flex items-center gap-1.5 font-mono text-[11px] text-indigo-300/90">
+                          <span className="truncate">
+                            Gateway: {`${window.location.origin}/api/llm-gateway/p/${p.id}`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const url = `${window.location.origin}/api/llm-gateway/p/${p.id}`
+                              void navigator.clipboard?.writeText(url).then(() => notify(t('common.copied')))
+                            }}
+                            className="shrink-0 rounded border border-indigo-500/35 px-1.5 py-0.5 text-[10px] hover:bg-indigo-500/15 cursor-pointer"
+                          >
+                            {t('common.copy')}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <Button
@@ -235,6 +280,7 @@ export function LlmAndVaultTab({
       <CredentialVaultSection
         credentialProfiles={credentialProfiles}
         sandboxes={sandboxes}
+        templates={templates}
         onRefresh={onRefresh}
         notify={notify}
       />
@@ -256,6 +302,12 @@ export function LlmAndVaultTab({
               const maxNum = llmForm.max_tokens.trim()
                 ? Number.parseInt(llmForm.max_tokens.trim(), 10)
                 : null
+              const inPrice = llmForm.input_price_per_1m.trim()
+                ? Number.parseFloat(llmForm.input_price_per_1m.trim())
+                : null
+              const outPrice = llmForm.output_price_per_1m.trim()
+                ? Number.parseFloat(llmForm.output_price_per_1m.trim())
+                : null
               const body: Record<string, unknown> = {
                 name: llmForm.name.trim(),
                 api_protocol: llmForm.api_protocol || 'openai-completions',
@@ -269,6 +321,10 @@ export function LlmAndVaultTab({
                   (llmForm.api_protocol || 'openai-completions') === 'openai-completions'
                     ? llmForm.thinking_format || null
                     : null,
+                gateway_enabled: Boolean(llmForm.gateway_enabled),
+                input_price_per_1m: Number.isFinite(inPrice as number) ? inPrice : null,
+                output_price_per_1m: Number.isFinite(outPrice as number) ? outPrice : null,
+                fallback_llm_profile_id: llmForm.fallback_llm_profile_id || null,
               }
               if (!editingLlmId || llmForm.api_key.trim()) {
                 body.api_key = llmForm.api_key.trim()
@@ -430,6 +486,64 @@ export function LlmAndVaultTab({
             />
             <span>{t('admin.llm.supportsImageLabel')}</span>
           </label>
+          <div className="rounded-[var(--brand-radius-md)] border border-indigo-500/30 bg-indigo-950/20 p-3.5 space-y-3">
+            <label className="flex items-start gap-2.5 text-zinc-100 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={llmForm.gateway_enabled}
+                onChange={(e) => setLlmForm({ ...llmForm, gateway_enabled: e.target.checked })}
+                className="h-4 w-4 mt-0.5 rounded border-zinc-600 accent-indigo-500"
+              />
+              <div>
+                <div className="font-medium text-sm">{t('admin.llm.gatewayEnabledLabel')}</div>
+                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
+                  {t('admin.llm.gatewayEnabledHint')}
+                </p>
+              </div>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">{t('admin.llm.inputPriceLabel')}</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  placeholder="0.50"
+                  value={llmForm.input_price_per_1m}
+                  onChange={(e) => setLlmForm({ ...llmForm, input_price_per_1m: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">{t('admin.llm.outputPriceLabel')}</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  placeholder="1.50"
+                  value={llmForm.output_price_per_1m}
+                  onChange={(e) => setLlmForm({ ...llmForm, output_price_per_1m: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">{t('admin.llm.fallbackLabel')}</Label>
+              <Select
+                value={llmForm.fallback_llm_profile_id}
+                onChange={(e) =>
+                  setLlmForm({ ...llmForm, fallback_llm_profile_id: e.target.value })
+                }
+              >
+                <option value="">{t('admin.llm.fallbackNone')}</option>
+                {llmProfiles
+                  .filter((p) => p.id !== editingLlmId)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.model})
+                    </option>
+                  ))}
+              </Select>
+            </div>
+          </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
             <Button type="button" variant="ghost" onClick={() => setLlmModalOpen(false)}>
               {t('common.cancel')}

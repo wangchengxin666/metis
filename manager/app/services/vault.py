@@ -173,12 +173,15 @@ def push_credential_profile(
     synced = sum(1 for r in results if r.get("ok"))
     skipped = sum(1 for r in results if r.get("skipped"))
     failed = len(results) - synced - skipped
+    target_slugs = ",".join(s.slug for s in sandboxes[:10])
+    if len(sandboxes) > 10:
+        target_slugs += f",+{len(sandboxes) - 10}"
     audit(
         db,
         "credential.push",
         target=profile.name,
         actor=actor,
-        detail=f"synced={synced}/{len(results)}",
+        detail=f"synced={synced}/{len(results)},targets={target_slugs}",
     )
     db.commit()
     return {
@@ -190,6 +193,38 @@ def push_credential_profile(
         "total": len(results),
         "results": results,
     }
+
+
+def sync_bound_credentials(
+    db: Session,
+    docker: BaseSandboxRuntime,
+    sandbox: Sandbox,
+    *,
+    actor: str | None = None,
+) -> list[dict[str, object]]:
+    """Sync only the credential profiles explicitly bound to a sandbox (least-privilege)."""
+    bound_ids = sandbox.credential_profile_ids
+    if not bound_ids:
+        return []
+    profiles_by_id = {
+        p.id: p
+        for p in db.scalars(
+            select(CredentialProfile).where(CredentialProfile.id.in_(bound_ids))
+        ).all()
+    }
+    results: list[dict[str, object]] = []
+    for pid in bound_ids:
+        profile = profiles_by_id.get(pid)
+        if profile is None:
+            continue
+        try:
+            res = push_credential_profile(
+                db, docker, profile, [sandbox], actor=actor
+            )
+            results.append(res)
+        except Exception:
+            continue
+    return results
 
 
 def list_workspace_snapshots(

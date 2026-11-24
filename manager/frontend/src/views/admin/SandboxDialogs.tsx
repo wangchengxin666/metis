@@ -1,10 +1,13 @@
 import React from 'react'
 import { Button, Dialog, Input, Label, Select, Textarea } from '../../components/ui'
+import { PluginMultiSelect } from '../../components/PluginMultiSelect'
 import { generatePassword } from '../../lib/format'
 import { useI18n } from '../../lib/i18nContext'
 import type {
+  CredentialProfileItem,
   LlmProfileItem,
   OverviewData,
+  PluginItem,
   RolePresetItem,
   SandboxItem,
   TemplateItem,
@@ -20,11 +23,15 @@ export interface ProvisionFormState {
   role_title: string
   role_description: string
   role_sop: string
+  ownership_mode: 'personal' | 'shared'
+  maintainer_emails: string
+  budget_action: 'block' | 'downgrade' | 'warn'
   image_repo: string
   image_tag: string
   cpu_limit: string
   memory_limit: string
   llm_profile_id: string
+  credential_profile_ids: string[]
   init_repo_url: string
   auto_install_plugins: string
   init_script: string
@@ -39,6 +46,7 @@ export interface TemplateFormState {
   role_description: string
   role_sop: string
   default_llm_profile_id: string
+  default_credential_profile_ids: string[]
   image_repo: string
   image_tag: string
   default_cpu_limit: string
@@ -49,17 +57,64 @@ export interface TemplateFormState {
 }
 
 export interface EditSandboxFormState {
+  display_name: string
   role_title: string
   role_description: string
   role_sop: string
+  ownership_mode: 'personal' | 'shared'
+  maintainer_emails: string
   cpu_limit: string
   memory_limit: string
   image_repo: string
   image_tag: string
   llm_profile_id: string
+  credential_profile_ids: string[]
   preview_auth_mode: string
   daily_token_limit: string
+  budget_action: 'block' | 'downgrade' | 'warn'
   auto_sleep_exempt: boolean
+}
+
+function CredentialProfileCheckboxes({
+  profiles,
+  selectedIds,
+  onChange,
+}: {
+  profiles: CredentialProfileItem[]
+  selectedIds: string[]
+  onChange: (next: string[]) => void
+}) {
+  const { t } = useI18n()
+  if (profiles.length === 0) {
+    return <p className="text-[11px] text-zinc-500">{t('admin.vault.noBundlesHint')}</p>
+  }
+  return (
+    <div className="max-h-32 overflow-y-auto rounded-[var(--brand-radius-sm)] border border-zinc-800 bg-zinc-950/60 p-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+      {profiles.map((p) => {
+        const checked = selectedIds.includes(p.id)
+        return (
+          <label
+            key={p.id}
+            className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-zinc-900/70 text-xs text-zinc-200 cursor-pointer truncate"
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? [...selectedIds, p.id]
+                    : selectedIds.filter((id) => id !== p.id),
+                )
+              }
+              className="rounded border-zinc-700 accent-indigo-500 shrink-0"
+            />
+            <span className="truncate">{p.name}</span>
+          </label>
+        )
+      })}
+    </div>
+  )
 }
 
 export function ProvisionSandboxDialog({
@@ -73,7 +128,9 @@ export function ProvisionSandboxDialog({
   users,
   templates,
   llmProfiles,
+  credentialProfiles = [],
   effectiveAllowLocalUser,
+  plugins = [],
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -85,7 +142,9 @@ export function ProvisionSandboxDialog({
   users: UserItem[]
   templates: TemplateItem[]
   llmProfiles: LlmProfileItem[]
+  credentialProfiles?: CredentialProfileItem[]
   effectiveAllowLocalUser: boolean
+  plugins?: PluginItem[]
 }) {
   const { t } = useI18n()
   return (
@@ -208,6 +267,52 @@ export function ProvisionSandboxDialog({
               />
             </div>
 
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.ownershipLabel')}</Label>
+              <Select
+                value={sbxForm.ownership_mode}
+                onChange={(e) =>
+                  setSbxForm({
+                    ...sbxForm,
+                    ownership_mode: e.target.value as 'personal' | 'shared',
+                  })
+                }
+              >
+                <option value="personal">{t('sandbox.ownershipPersonal')}</option>
+                <option value="shared">{t('sandbox.ownershipShared')}</option>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.budgetActionLabel')}</Label>
+              <Select
+                value={sbxForm.budget_action}
+                onChange={(e) =>
+                  setSbxForm({
+                    ...sbxForm,
+                    budget_action: e.target.value as 'block' | 'downgrade' | 'warn',
+                  })
+                }
+              >
+                <option value="block">{t('sandbox.budgetActionBlock')}</option>
+                <option value="downgrade">{t('sandbox.budgetActionDowngrade')}</option>
+                <option value="warn">{t('sandbox.budgetActionWarn')}</option>
+              </Select>
+            </div>
+
+            {sbxForm.ownership_mode === 'shared' && (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>{t('sandbox.maintainersLabel')}</Label>
+                <Input
+                  placeholder="lead@corp.com, ops@corp.com"
+                  value={sbxForm.maintainer_emails}
+                  onChange={(e) =>
+                    setSbxForm({ ...sbxForm, maintainer_emails: e.target.value })
+                  }
+                />
+              </div>
+            )}
+
             <details className="sm:col-span-2 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
               <summary className="cursor-pointer font-medium text-zinc-300 select-none">
                 {t('dialog.provision.advancedToggle')}
@@ -222,14 +327,12 @@ export function ProvisionSandboxDialog({
                   />
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 sm:col-span-2">
                   <Label>{t('dialog.provision.pluginsLabel')}</Label>
-                  <Input
-                    placeholder="file-manager"
+                  <PluginMultiSelect
+                    plugins={plugins}
                     value={sbxForm.auto_install_plugins}
-                    onChange={(e) =>
-                      setSbxForm({ ...sbxForm, auto_install_plugins: e.target.value })
-                    }
+                    onChange={(next) => setSbxForm({ ...sbxForm, auto_install_plugins: next })}
                   />
                 </div>
 
@@ -288,6 +391,15 @@ export function ProvisionSandboxDialog({
                   />
                 </div>
 
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>{t('admin.vault.boundTemplatesHint')}</Label>
+                  <CredentialProfileCheckboxes
+                    profiles={credentialProfiles}
+                    selectedIds={sbxForm.credential_profile_ids}
+                    onChange={(next) => setSbxForm({ ...sbxForm, credential_profile_ids: next })}
+                  />
+                </div>
+
                 <div className="sm:col-span-2">
                   <label className="flex items-center gap-2 text-zinc-300 cursor-pointer">
                     <input
@@ -329,6 +441,8 @@ export function TemplateEditorDialog({
   onSubmit: handleSaveTemplate,
   rolePresets,
   overview,
+  plugins = [],
+  credentialProfiles = [],
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -339,6 +453,8 @@ export function TemplateEditorDialog({
   onSubmit: (e: React.FormEvent) => void
   rolePresets: RolePresetItem[]
   overview: OverviewData | null
+  plugins?: PluginItem[]
+  credentialProfiles?: CredentialProfileItem[]
 }) {
   const { t } = useI18n()
   return (
@@ -507,10 +623,20 @@ export function TemplateEditorDialog({
 
             <div className="space-y-1.5 sm:col-span-2">
               <Label>{t('dialog.template.pluginsLabel')}</Label>
-              <Input
+              <PluginMultiSelect
+                plugins={plugins}
                 value={tplForm.auto_install_plugins}
-                onChange={(e) =>
-                  setTplForm({ ...tplForm, auto_install_plugins: e.target.value })
+                onChange={(next) => setTplForm({ ...tplForm, auto_install_plugins: next })}
+              />
+            </div>
+
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>{t('admin.vault.boundTemplatesHint')}</Label>
+              <CredentialProfileCheckboxes
+                profiles={credentialProfiles}
+                selectedIds={tplForm.default_credential_profile_ids}
+                onChange={(next) =>
+                  setTplForm({ ...tplForm, default_credential_profile_ids: next })
                 }
               />
             </div>
@@ -556,7 +682,9 @@ export function EditSandboxDialog({
   setForm: setEditSbxForm,
   saving: savingSbx,
   onSubmit: handleSaveSandboxSpec,
+  onRotateGatewayKey,
   llmProfiles,
+  credentialProfiles = [],
 }: {
   target: SandboxItem | null
   onClose: () => void
@@ -564,7 +692,9 @@ export function EditSandboxDialog({
   setForm: React.Dispatch<React.SetStateAction<EditSandboxFormState>>
   saving: boolean
   onSubmit: (e: React.FormEvent) => void
+  onRotateGatewayKey?: (sbx: SandboxItem) => Promise<void> | void
   llmProfiles: LlmProfileItem[]
+  credentialProfiles?: CredentialProfileItem[]
 }) {
   const { t } = useI18n()
   const setEditSbx = (_v: null) => onClose()
@@ -577,6 +707,16 @@ export function EditSandboxDialog({
       >
         <form onSubmit={handleSaveSandboxSpec} className="space-y-4 text-xs">
           <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5 col-span-2">
+              <Label>{t('dialog.provision.nameLabel')}</Label>
+              <Input
+                placeholder={editSbx?.slug || ''}
+                value={editSbxForm.display_name}
+                onChange={(e) =>
+                  setEditSbxForm({ ...editSbxForm, display_name: e.target.value })
+                }
+              />
+            </div>
             <div className="space-y-1.5">
               <Label>{t('dialog.provision.roleTitleLabel')}</Label>
               <Input
@@ -674,6 +814,7 @@ export function EditSandboxDialog({
                 <option value="authenticated">
                   {t('dialog.editSandbox.previewAuthAuthenticated')}
                 </option>
+                <option value="team">{t('dialog.editSandbox.previewAuthTeam')}</option>
               </Select>
             </div>
             <div className="space-y-1.5">
@@ -686,6 +827,77 @@ export function EditSandboxDialog({
                 value={editSbxForm.daily_token_limit}
                 onChange={(e) =>
                   setEditSbxForm({ ...editSbxForm, daily_token_limit: e.target.value })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.ownershipLabel')}</Label>
+              <Select
+                value={editSbxForm.ownership_mode}
+                onChange={(e) =>
+                  setEditSbxForm({
+                    ...editSbxForm,
+                    ownership_mode: e.target.value as 'personal' | 'shared',
+                  })
+                }
+              >
+                <option value="personal">{t('sandbox.ownershipPersonal')}</option>
+                <option value="shared">{t('sandbox.ownershipShared')}</option>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.budgetActionLabel')}</Label>
+              <Select
+                value={editSbxForm.budget_action}
+                onChange={(e) =>
+                  setEditSbxForm({
+                    ...editSbxForm,
+                    budget_action: e.target.value as 'block' | 'downgrade' | 'warn',
+                  })
+                }
+              >
+                <option value="block">{t('sandbox.budgetActionBlock')}</option>
+                <option value="downgrade">{t('sandbox.budgetActionDowngrade')}</option>
+                <option value="warn">{t('sandbox.budgetActionWarn')}</option>
+              </Select>
+            </div>
+            {editSbxForm.ownership_mode === 'shared' && (
+              <div className="space-y-1.5 col-span-2">
+                <Label>{t('sandbox.maintainersLabel')}</Label>
+                <Input
+                  placeholder="lead@corp.com, ops@corp.com"
+                  value={editSbxForm.maintainer_emails}
+                  onChange={(e) =>
+                    setEditSbxForm({ ...editSbxForm, maintainer_emails: e.target.value })
+                  }
+                />
+              </div>
+            )}
+            {editSbx && onRotateGatewayKey && (
+              <div className="col-span-2 flex items-center justify-between rounded-[var(--brand-radius-sm)] border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                <span className="text-zinc-400">
+                  Metis LLM Gateway Key:{' '}
+                  <code className="text-zinc-200">
+                    {editSbx.has_gateway_api_key ? 'sk-metis-••••' : 'auto'}
+                  </code>
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void onRotateGatewayKey(editSbx)}
+                >
+                  {t('sandbox.rotateGatewayKeyBtn')}
+                </Button>
+              </div>
+            )}
+            <div className="space-y-1.5 col-span-2">
+              <Label>{t('admin.vault.boundTemplatesHint')}</Label>
+              <CredentialProfileCheckboxes
+                profiles={credentialProfiles}
+                selectedIds={editSbxForm.credential_profile_ids}
+                onChange={(next) =>
+                  setEditSbxForm({ ...editSbxForm, credential_profile_ids: next })
                 }
               />
             </div>

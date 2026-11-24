@@ -181,6 +181,10 @@ def create_llm_profile(
     supports_image: bool = False,
     reasoning_effort: str | None = None,
     thinking_format: str | None = None,
+    gateway_enabled: bool = False,
+    input_price_per_1m: float | None = None,
+    output_price_per_1m: float | None = None,
+    fallback_llm_profile_id: str | None = None,
 ) -> LlmProfile:
     clean_protocol = (api_protocol or "openai-completions").strip()
     clean_reasoning = (reasoning_effort or "").strip() or None
@@ -200,6 +204,10 @@ def create_llm_profile(
         reasoning_effort=clean_reasoning,
         thinking_format=clean_thinking_fmt,
         api_key_ciphertext=ciphertext,
+        gateway_enabled=bool(gateway_enabled),
+        input_price_per_1m=input_price_per_1m,
+        output_price_per_1m=output_price_per_1m,
+        fallback_llm_profile_id=(fallback_llm_profile_id or "").strip() or None,
     )
     db.add(profile)
     db.commit()
@@ -222,6 +230,10 @@ def update_llm_profile(
     supports_image: bool | None = None,
     reasoning_effort: str | None = None,
     thinking_format: str | None = None,
+    gateway_enabled: bool | None = None,
+    input_price_per_1m: float | None = None,
+    output_price_per_1m: float | None = None,
+    fallback_llm_profile_id: str | None = None,
     fields_set: set[str] | None = None,
 ) -> LlmProfile:
     provided = fields_set or set()
@@ -249,6 +261,14 @@ def update_llm_profile(
         profile.thinking_format = (thinking_format or "").strip() or None
     if (profile.api_protocol or "openai-completions") != "openai-completions":
         profile.thinking_format = None
+    if gateway_enabled is not None:
+        profile.gateway_enabled = bool(gateway_enabled)
+    if "input_price_per_1m" in provided or input_price_per_1m is not None:
+        profile.input_price_per_1m = input_price_per_1m
+    if "output_price_per_1m" in provided or output_price_per_1m is not None:
+        profile.output_price_per_1m = output_price_per_1m
+    if "fallback_llm_profile_id" in provided or fallback_llm_profile_id is not None:
+        profile.fallback_llm_profile_id = (fallback_llm_profile_id or "").strip() or None
     db.commit()
     db.refresh(profile)
     return profile

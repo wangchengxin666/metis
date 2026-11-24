@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -231,10 +232,15 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
 
         if sandbox.llm_profile is not None:
             prof = sandbox.llm_profile
+            gw_key = (getattr(sandbox, "gateway_api_key", None) or "").strip()
+            use_gw = bool(getattr(prof, "gateway_enabled", False) and gw_key)
+            effective_base_url = (
+                f"{manager_url}/api/llm-gateway/p/{prof.id}" if use_gw else prof.base_url
+            )
             env["DSH_DEFAULT_LLM_PROVIDER"] = "openai-compatible"
             env["DSH_DEFAULT_LLM_DISPLAY_NAME"] = prof.name
             env["DSH_DEFAULT_LLM_API"] = prof.api_protocol or "openai-completions"
-            env["DSH_DEFAULT_LLM_BASE_URL"] = prof.base_url
+            env["DSH_DEFAULT_LLM_BASE_URL"] = effective_base_url
             env["DSH_DEFAULT_LLM_MODEL"] = prof.model
             if prof.context_window:
                 env["DSH_DEFAULT_LLM_CONTEXT_WINDOW"] = str(prof.context_window)
@@ -245,7 +251,9 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
                 env["DSH_DEFAULT_LLM_REASONING_EFFORT"] = prof.reasoning_effort
             if prof.thinking_format and (prof.api_protocol or "openai-completions") == "openai-completions":
                 env["DSH_DEFAULT_LLM_THINKING_FORMAT"] = prof.thinking_format
-            if prof.api_key_ciphertext:
+            if use_gw:
+                env["DSH_DEFAULT_LLM_API_KEY"] = gw_key
+            elif prof.api_key_ciphertext:
                 try:
                     api_key = decrypt_secret(prof.api_key_ciphertext)
                     if api_key:
@@ -291,13 +299,36 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
     def status(self, sandbox: Sandbox) -> str:
         """Return normalized runtime status ('running', 'exited'/'stopped', 'starting', 'missing', 'unknown')."""
 
+    def statuses(
+        self, sandboxes: list[Sandbox], max_workers: int = 16
+    ) -> dict[str, str]:
+        """Batch-resolve runtime statuses for many sandboxes concurrently."""
+        if not sandboxes:
+            return {}
+
+        def _probe(sbx: Sandbox) -> tuple[str, str]:
+            try:
+                return sbx.id, self.status(sbx)
+            except Exception:
+                return sbx.id, "unknown"
+
+        if len(sandboxes) == 1:
+            sid, st = _probe(sandboxes[0])
+            return {sid: st}
+
+        workers = max(1, min(max_workers, len(sandboxes)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return dict(pool.map(_probe, sandboxes))
+
     @abstractmethod
     def logs(self, sandbox: Sandbox, tail: int = 200) -> str:
         """Return ANSI-stripped recent sandbox logs."""
 
     @abstractmethod
-    def stats(self, sandbox: Sandbox) -> dict[str, float | int | str | None]:
-        """Return live CPU %, memory usage, and workspace disk stats for a running sandbox."""
+    def stats(
+        self, sandbox: Sandbox, *, include_disk: bool = True
+    ) -> dict[str, float | int | str | None]:
+        """Return live CPU %, memory usage, and optional workspace disk stats for a running sandbox."""
 
     @abstractmethod
     def exec_command(
@@ -379,7 +410,9 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
             workload.reload()
         return str(getattr(workload, "status", "unknown"))
 
-    def workspace_disk_usage(self, sandbox: Sandbox) -> dict[str, float | int | None]:
+    def workspace_disk_usage(
+        self, sandbox: Sandbox, *, assume_running: bool = False
+    ) -> dict[str, float | int | None]:
         """Measure /home/workspace disk footprint and filesystem capacity inside a running sandbox."""
         empty: dict[str, float | int | None] = {
             "disk_usage_bytes": None,
@@ -389,7 +422,7 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
             "disk_fs_used_percent": None,
         }
         try:
-            if self._workload_status(sandbox) != "running":
+            if not assume_running and self._workload_status(sandbox) != "running":
                 return empty
             ec, out = self.exec_command(
                 sandbox,

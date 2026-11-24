@@ -97,9 +97,10 @@ export function SandboxesTab({
                       </div>
                     </td>
 
-                    <td className="py-4 px-5">
+                    <td className="py-4 px-5 whitespace-nowrap">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
+                          className="whitespace-nowrap shrink-0"
                           variant={
                             isRunning
                               ? 'success'
@@ -110,7 +111,7 @@ export function SandboxesTab({
                         >
                           <span
                             className={cn(
-                              'h-2 w-2 rounded-full',
+                              'h-2 w-2 rounded-full shrink-0',
                               isRunning ? 'bg-emerald-400' : 'bg-rose-400',
                             )}
                           />

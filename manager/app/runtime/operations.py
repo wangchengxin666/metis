@@ -185,7 +185,7 @@ class WorkforceOperationsMixin:
         schedule: str,
         command: str,
     ) -> dict[str, Any]:
-        """Append a persistent cron entry via sandbox-cron add."""
+        """Append a persistent cron entry via sandbox-cron add (with root crontab -u workspace fallback under no-new-privileges)."""
         st = self._workload_status(sandbox)
         if st != "running":
             raise SandboxRuntimeError(f"sandbox {sandbox.slug} is not running")
@@ -197,6 +197,21 @@ class WorkforceOperationsMixin:
             environment={"HOME": "/home/workspace"},
         )
         detail = out.decode("utf-8", errors="replace").strip() if out else ""
+        if ec != 0 and "Permission denied" in detail:
+            # Under --security-opt=no-new-privileges, SGID /usr/bin/crontab cannot write to /var/spool/cron/crontabs
+            # as user=workspace even though ~/.dsh-sandbox/crontab was already appended; reload it as root.
+            ec_sync, out_sync = self.exec_command(
+                sandbox,
+                ["crontab", "-u", "workspace", "/home/workspace/.dsh-sandbox/crontab"],
+                user="root",
+                environment={"HOME": "/root"},
+            )
+            if ec_sync == 0:
+                ec = 0
+                detail = f"added cron entry: {line}"
+            else:
+                sync_txt = out_sync.decode("utf-8", errors="replace").strip() if out_sync else ""
+                detail = sync_txt or detail
         return {"ok": ec == 0, "line": line, "detail": detail[-300:]}
 
     def remove_cron_job(
@@ -226,6 +241,21 @@ console.log('CRON_REMOVED_OK');
             user="workspace",
             environment={"HOME": "/home/workspace", "CRON_TARGET_LINE": raw_line},
         )
+        if ec == 0:
+            # Ensure system crontab for workspace is reloaded even when SGID crontab is blocked by no-new-privileges
+            try:
+                self.exec_command(
+                    sandbox,
+                    [
+                        "sh",
+                        "-c",
+                        "if [ -s /home/workspace/.dsh-sandbox/crontab ]; then crontab -u workspace /home/workspace/.dsh-sandbox/crontab; else crontab -u workspace -r 2>/dev/null || true; fi",
+                    ],
+                    user="root",
+                    environment={"HOME": "/root"},
+                )
+            except Exception:
+                pass
         detail = out.decode("utf-8", errors="replace").strip() if out else ""
         return {"ok": ec == 0, "detail": detail[-200:]}
 
@@ -237,11 +267,14 @@ console.log('CRON_REMOVED_OK');
         description: str = "",
         priority: str = "normal",
         room_id: str | None = None,
+        room_name: str | None = None,
+        new_topic: bool = False,
         approval_required: bool = False,
         source: str = "portal",
         actor: str = "User",
     ) -> dict[str, Any]:
-        """Dispatch a task and inbox message into a digital employee's sandbox-mesh.json."""
+        """Dispatch a task into a digital employee via live @metis/sandbox-mesh /local/cli (waking the Agent),
+        with disk fallback only if the live mesh HTTP listener is unavailable."""
         st = self._workload_status(sandbox)
         if st != "running":
             raise SandboxRuntimeError(f"sandbox {sandbox.slug} is not running")
@@ -256,6 +289,8 @@ console.log('CRON_REMOVED_OK');
             "description": description.strip(),
             "priority": priority,
             "roomId": (room_id or "").strip(),
+            "roomName": (room_name or "").strip()[:80],
+            "newTopic": bool(new_topic),
             "approvalRequired": bool(approval_required),
             "source": source,
             "actor": actor,
@@ -264,81 +299,192 @@ console.log('CRON_REMOVED_OK');
         node_script = """
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+
 const cfg = JSON.parse(process.env.TASK_DISPATCH_PAYLOAD || '{}');
 const dshHome = '/home/workspace/.dsh';
 const meshPath = path.join(dshHome, 'sandbox-mesh.json');
-fs.mkdirSync(dshHome, { recursive: true });
-let state = { version: 1, self: { slug: cfg.selfSlug }, peers: {}, rooms: {}, messages: {}, tasks: {}, outbox: [] };
-if (fs.existsSync(meshPath)) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(meshPath, 'utf8'));
-    if (raw && typeof raw === 'object') state = { ...state, ...raw };
-  } catch {}
-}
-state.rooms = (state.rooms && typeof state.rooms === 'object') ? state.rooms : {};
-state.tasks = (state.tasks && typeof state.tasks === 'object') ? state.tasks : {};
-state.messages = (state.messages && typeof state.messages === 'object') ? state.messages : {};
+const tokenPath = path.join(dshHome, 'sandbox-mesh.local-token');
+const meshPort = Number(process.env.SANDBOX_MESH_PORT || 4090) || 4090;
 
-let roomId = cfg.roomId;
-if (!roomId || !state.rooms[roomId]) {
-  const groupRoom = Object.values(state.rooms).find((r) => r && r.type === 'group' && !r.unpaired);
-  if (groupRoom && groupRoom.id) {
-    roomId = groupRoom.id;
-  } else {
-    roomId = 'inbox:portal';
-    if (!state.rooms[roomId]) {
-      state.rooms[roomId] = {
-        id: roomId,
-        type: 'group',
-        name: 'Portal & Webhook Task Inbox',
-        peerSlug: '',
-        groupSecret: '',
-        createdBy: cfg.selfSlug,
-        moderatorSlug: cfg.selfSlug,
-        activeThreadId: 'thr_inbox',
-        unpaired: false,
-        members: [{ slug: cfg.selfSlug, ownerName: cfg.selfSlug }],
-        createdAt: cfg.nowMs,
-        updatedAt: cfg.nowMs,
-        unreadCount: 0,
-      };
+function callLocalCli(token, bodyObj) {
+  return new Promise((resolve) => {
+    const raw = JSON.stringify(bodyObj);
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: meshPort,
+        path: '/local/cli',
+        method: 'POST',
+        timeout: 8000,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(raw),
+          authorization: 'Bearer ' + token,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300 && parsed.ok !== false, status: res.statusCode, data: parsed });
+          } catch (err) {
+            resolve({ ok: false, status: res.statusCode || 500, error: String(err) });
+          }
+        });
+      },
+    );
+    req.on('error', (err) => resolve({ ok: false, status: 0, error: err && err.message ? err.message : String(err) }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, status: 0, error: 'timeout' }); });
+    req.write(raw);
+    req.end();
+  });
+}
+
+(async () => {
+  // 1. Preferred path: live @metis/sandbox-mesh HTTP /local/cli so maybeDispatchAgentWake wakes the real DSH Agent.
+  if (fs.existsSync(tokenPath)) {
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (token) {
+      const roomsRes = await callLocalCli(token, { action: 'rooms' });
+      if (roomsRes.ok && Array.isArray(roomsRes.data.rooms)) {
+        const rooms = roomsRes.data.rooms;
+        const selfSlug = String(cfg.selfSlug || '').trim();
+        let targetRoom = null;
+        if (cfg.roomId) {
+          targetRoom = rooms.find((r) => r && r.id === cfg.roomId && !r.unpaired) || null;
+        }
+        const desiredName = cfg.roomName || (cfg.source && cfg.source.startsWith('playbook:') ? 'Playbook Tasks' : 'Portal & Webhook Task Inbox');
+        if (!targetRoom) {
+          targetRoom = rooms.find((r) => r && r.type === 'group' && !r.unpaired && r.name === desiredName && Array.isArray(r.members) && r.members.length === 1) || null;
+        }
+        if (!targetRoom) {
+          const created = await callLocalCli(token, {
+            action: 'group-create',
+            name: desiredName,
+            memberSlugs: [],
+          });
+          if (created.ok && created.data && created.data.room) {
+            targetRoom = created.data.room;
+          }
+        }
+        if (!targetRoom) {
+          targetRoom = rooms.find((r) => r && !r.unpaired) || null;
+        }
+
+        if (targetRoom && targetRoom.id) {
+          let threadId = targetRoom.activeThreadId || '';
+          if (cfg.newTopic) {
+            const topicRes = await callLocalCli(token, { action: 'new-topic', roomId: targetRoom.id });
+            if (topicRes.ok && topicRes.data && topicRes.data.threadId) {
+              threadId = topicRes.data.threadId;
+            }
+          }
+          const prefix = selfSlug ? ('@' + selfSlug + ' ') : '';
+          const header = prefix + '[' + (cfg.source || 'portal') + '] ' + (cfg.title || 'New Task');
+          const fullText = cfg.description ? (header + '\\n\\n' + cfg.description) : header;
+          const sendRes = await callLocalCli(token, {
+            action: 'send',
+            roomId: targetRoom.id,
+            threadId,
+            actor: 'human',
+            kind: 'task',
+            text: fullText,
+          });
+          if (sendRes.ok && sendRes.data && sendRes.data.message) {
+            const msg = sendRes.data.message;
+            console.log(JSON.stringify({
+              ok: true,
+              task_id: msg.id,
+              message_id: msg.id,
+              room_id: targetRoom.id,
+              thread_id: msg.threadId || threadId || '',
+              woke_agent: true,
+              via: 'mesh_local_cli',
+            }));
+            process.exit(0);
+          }
+        }
+      }
     }
   }
-}
 
-if (!Array.isArray(state.tasks[roomId])) state.tasks[roomId] = [];
-const taskObj = {
-  id: cfg.taskId,
-  roomId,
-  title: cfg.title,
-  description: cfg.description,
-  status: 'open',
-  priority: cfg.priority || 'normal',
-  assigneeSlug: cfg.selfSlug,
-  creatorSlug: cfg.actor || 'portal',
-  approvalRequired: Boolean(cfg.approvalRequired),
-  approvalStatus: cfg.approvalRequired ? 'pending' : 'none',
-  createdAt: cfg.nowMs,
-  updatedAt: cfg.nowMs,
-};
-state.tasks[roomId].unshift(taskObj);
+  // 2. Fallback path: direct sandbox-mesh.json write when mesh server is unavailable.
+  fs.mkdirSync(dshHome, { recursive: true });
+  let state = { version: 1, self: { slug: cfg.selfSlug }, peers: {}, rooms: {}, messages: {}, tasks: {}, outbox: [] };
+  if (fs.existsSync(meshPath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(meshPath, 'utf8'));
+      if (raw && typeof raw === 'object') state = { ...state, ...raw };
+    } catch {}
+  }
+  state.rooms = (state.rooms && typeof state.rooms === 'object') ? state.rooms : {};
+  state.tasks = (state.tasks && typeof state.tasks === 'object') ? state.tasks : {};
+  state.messages = (state.messages && typeof state.messages === 'object') ? state.messages : {};
 
-if (!Array.isArray(state.messages[roomId])) state.messages[roomId] = [];
-state.messages[roomId].push({
-  id: cfg.msgId,
-  roomId,
-  threadId: (state.rooms[roomId] && state.rooms[roomId].activeThreadId) || 'thr_inbox',
-  sender: { slug: cfg.source || 'portal', ownerName: cfg.actor || 'Portal', actor: 'human' },
-  kind: 'text',
-  text: '[Task Dispatched via ' + cfg.source + '] #' + cfg.taskId + ' ' + cfg.title + (cfg.description ? '\\n' + cfg.description : ''),
-  createdAt: cfg.nowMs,
-  ackedByAgent: false,
-});
+  let roomId = cfg.roomId;
+  if (!roomId || !state.rooms[roomId]) {
+    const groupRoom = Object.values(state.rooms).find((r) => r && r.type === 'group' && !r.unpaired);
+    if (groupRoom && groupRoom.id) {
+      roomId = groupRoom.id;
+    } else {
+      roomId = 'inbox:portal';
+      if (!state.rooms[roomId]) {
+        state.rooms[roomId] = {
+          id: roomId,
+          type: 'group',
+          name: cfg.roomName || 'Portal & Webhook Task Inbox',
+          peerSlug: '',
+          groupSecret: '',
+          createdBy: cfg.selfSlug,
+          moderatorSlug: cfg.selfSlug,
+          activeThreadId: 'thr_inbox',
+          unpaired: false,
+          members: [{ slug: cfg.selfSlug, ownerName: cfg.selfSlug }],
+          createdAt: cfg.nowMs,
+          updatedAt: cfg.nowMs,
+          unreadCount: 0,
+        };
+      }
+    }
+  }
 
-const tmp = meshPath + '.tmp.' + process.pid;
-fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\\n', { encoding: 'utf8', mode: 0o600 });
-fs.renameSync(tmp, meshPath);
-console.log(JSON.stringify({ ok: true, task_id: cfg.taskId, room_id: roomId }));
+  if (!Array.isArray(state.tasks[roomId])) state.tasks[roomId] = [];
+  const taskObj = {
+    id: cfg.taskId,
+    roomId,
+    title: cfg.title,
+    description: cfg.description,
+    status: 'open',
+    priority: cfg.priority || 'normal',
+    assigneeSlug: cfg.selfSlug,
+    creatorSlug: cfg.actor || 'portal',
+    approvalRequired: Boolean(cfg.approvalRequired),
+    approvalStatus: cfg.approvalRequired ? 'pending' : 'none',
+    createdAt: cfg.nowMs,
+    updatedAt: cfg.nowMs,
+  };
+  state.tasks[roomId].unshift(taskObj);
+
+  if (!Array.isArray(state.messages[roomId])) state.messages[roomId] = [];
+  state.messages[roomId].push({
+    id: cfg.msgId,
+    roomId,
+    threadId: (state.rooms[roomId] && state.rooms[roomId].activeThreadId) || 'thr_inbox',
+    sender: { slug: cfg.source || 'portal', ownerName: cfg.actor || 'Portal', actor: 'human' },
+    kind: 'task',
+    text: '@' + cfg.selfSlug + ' [' + cfg.source + '] #' + cfg.taskId + ' ' + cfg.title + (cfg.description ? '\\n' + cfg.description : ''),
+    createdAt: cfg.nowMs,
+    ackedByAgent: false,
+  });
+
+  const tmp = meshPath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\\n', { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, meshPath);
+  console.log(JSON.stringify({ ok: true, task_id: cfg.taskId, room_id: roomId, woke_agent: false, via: 'disk_fallback' }));
+})();
 """
         ec, out = self.exec_command(
             sandbox,
@@ -357,6 +503,198 @@ console.log(JSON.stringify({ ok: true, task_id: cfg.taskId, room_id: roomId }));
                 pass
         return {"ok": ec == 0, "task_id": task_id, "room_id": room_id or "inbox:portal", "detail": text[-200:]}
 
+    def inspect_mesh_room_progress(
+        self,
+        sandbox: Sandbox,
+        room_id: str,
+        *,
+        since_message_id: str = "",
+        thread_id: str = "",
+    ) -> dict[str, Any]:
+        """Inspect live @metis/sandbox-mesh room messages and tasks to detect real Agent completion replies."""
+        if not room_id:
+            return {"ok": False, "completed": False, "failed": False}
+        st = self._workload_status(sandbox)
+        if st != "running":
+            return {"ok": False, "completed": False, "failed": False, "detail": "sandbox not running"}
+        payload = {
+            "selfSlug": sandbox.slug,
+            "roomId": room_id.strip(),
+            "sinceMessageId": (since_message_id or "").strip(),
+            "threadId": (thread_id or "").strip(),
+        }
+        node_script = """
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+
+const cfg = JSON.parse(process.env.MESH_INSPECT_PAYLOAD || '{}');
+const dshHome = '/home/workspace/.dsh';
+const meshPath = path.join(dshHome, 'sandbox-mesh.json');
+const tokenPath = path.join(dshHome, 'sandbox-mesh.local-token');
+const meshPort = Number(process.env.SANDBOX_MESH_PORT || 4090) || 4090;
+
+function callLocalCli(token, bodyObj) {
+  return new Promise((resolve) => {
+    const raw = JSON.stringify(bodyObj);
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: meshPort,
+        path: '/local/cli',
+        method: 'POST',
+        timeout: 6000,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(raw),
+          authorization: 'Bearer ' + token,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300 && parsed.ok !== false, data: parsed });
+          } catch {
+            resolve({ ok: false, data: {} });
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve({ ok: false, data: {} }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, data: {} }); });
+    req.write(raw);
+    req.end();
+  });
+}
+
+function extractArtifacts(text, msgs) {
+  const found = [];
+  const add = (v) => {
+    const clean = String(v || '').trim().replace(/[),.;:!?]+$/, '');
+    if (clean && !found.includes(clean)) found.push(clean);
+  };
+  for (const m of msgs) {
+    if (m && m.attachment && (m.attachment.savedPath || m.attachment.fileName)) {
+      add(m.attachment.savedPath || m.attachment.fileName);
+    }
+  }
+  const urlRe = /https?:\\/\\/[^\\s<>'"`\\)]+/g;
+  for (const match of (text || '').match(urlRe) || []) add(match);
+  const appRe = /\\/s\\/[a-z0-9-]+\\/apps\\/[a-zA-Z0-9._\\/-]+/g;
+  for (const match of (text || '').match(appRe) || []) add(match);
+  const pathRe = /`(\\/home\\/workspace\\/[^`\\s]+)`/g;
+  let pm;
+  while ((pm = pathRe.exec(text || '')) !== null) add(pm[1]);
+  return found.slice(0, 12);
+}
+
+(async () => {
+  let messages = [];
+  let tasks = [];
+  let via = 'disk';
+
+  if (fs.existsSync(tokenPath)) {
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (token) {
+      const mRes = await callLocalCli(token, { action: 'messages', roomId: cfg.roomId });
+      if (mRes.ok && Array.isArray(mRes.data.messages)) {
+        messages = mRes.data.messages;
+        via = 'mesh_local_cli';
+      }
+      const tRes = await callLocalCli(token, { action: 'tasks', roomId: cfg.roomId });
+      if (tRes.ok && Array.isArray(tRes.data.tasks)) {
+        tasks = tRes.data.tasks;
+      }
+    }
+  }
+
+  if (via !== 'mesh_local_cli' && fs.existsSync(meshPath)) {
+    try {
+      const state = JSON.parse(fs.readFileSync(meshPath, 'utf8'));
+      messages = (state.messages && Array.isArray(state.messages[cfg.roomId])) ? state.messages[cfg.roomId] : [];
+      tasks = (state.tasks && Array.isArray(state.tasks[cfg.roomId])) ? state.tasks[cfg.roomId] : [];
+    } catch {}
+  }
+
+  let startIdx = 0;
+  if (cfg.sinceMessageId) {
+    const idx = messages.findIndex((m) => m && m.id === cfg.sinceMessageId);
+    if (idx >= 0) {
+      startIdx = idx + 1;
+    } else {
+      // Dispatch message not found in this room yet; don't match older messages
+      startIdx = messages.length;
+    }
+  }
+
+  const afterMsgs = messages.slice(startIdx).filter((m) => {
+    if (!m) return false;
+    if (cfg.threadId && m.threadId && m.threadId !== cfg.threadId) return false;
+    return true;
+  });
+
+  const agentReplies = afterMsgs.filter((m) =>
+    m.sender && m.sender.actor === 'agent' && (!cfg.selfSlug || m.sender.slug === cfg.selfSlug)
+  );
+  const errorMsgs = afterMsgs.filter((m) =>
+    m.sender && m.sender.actor === 'system' && typeof m.text === 'string' && m.text.trim().startsWith('⚠️')
+  );
+
+  const matchedTask = cfg.sinceMessageId
+    ? tasks.find((t) => t && t.id === cfg.sinceMessageId)
+    : null;
+  const taskDone = Boolean(matchedTask && (matchedTask.status === 'done' || matchedTask.status === 'in_review'));
+
+  const replyText = agentReplies
+    .map((m) => String(m.text || '').trim())
+    .filter(Boolean)
+    .join('\\n\\n')
+    || (taskDone ? String((matchedTask && (matchedTask.summary || matchedTask.description)) || '').trim() : '');
+
+  const errorText = errorMsgs.length ? String(errorMsgs[errorMsgs.length - 1].text || '').trim() : '';
+  const artifacts = extractArtifacts(replyText, agentReplies);
+  if (matchedTask && Array.isArray(matchedTask.artifacts)) {
+    for (const a of matchedTask.artifacts) {
+      if (a && !artifacts.includes(String(a))) artifacts.push(String(a));
+    }
+  }
+
+  const completed = agentReplies.length > 0 || taskDone;
+  const failed = !completed && errorMsgs.length > 0;
+
+  console.log(JSON.stringify({
+    ok: true,
+    via,
+    room_id: cfg.roomId,
+    completed,
+    failed,
+    reply_text: replyText.slice(0, 4000),
+    error_text: errorText.slice(0, 1000),
+    artifacts,
+    message_count_after: afterMsgs.length,
+  }));
+})();
+"""
+        ec, out = self.exec_command(
+            sandbox,
+            ["node", "-e", node_script],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "MESH_INSPECT_PAYLOAD": json.dumps(payload),
+            },
+        )
+        text = out.decode("utf-8", errors="replace").strip() if out else ""
+        if ec == 0 and text:
+            try:
+                return json.loads(text.splitlines()[-1])
+            except Exception:
+                pass
+        return {"ok": False, "completed": False, "failed": False, "detail": text[-200:]}
+
     def decide_mesh_approval(
         self,
         sandbox: Sandbox,
@@ -367,12 +705,13 @@ console.log(JSON.stringify({ ok: true, task_id: cfg.taskId, room_id: roomId }));
         room_id: str | None = None,
         actor: str = "User",
     ) -> dict[str, Any]:
-        """Approve or reject a pending human approval task inside sandbox-mesh.json."""
+        """Deliver an approval/rejection decision into the live @metis/sandbox-mesh room (with disk fallback)."""
         st = self._workload_status(sandbox)
         if st != "running":
             raise SandboxRuntimeError(f"sandbox {sandbox.slug} is not running")
         now_ms = int(time.time() * 1000)
         payload = {
+            "selfSlug": sandbox.slug,
             "taskId": task_id,
             "decision": decision,
             "note": note.strip(),
@@ -383,57 +722,122 @@ console.log(JSON.stringify({ ok: true, task_id: cfg.taskId, room_id: roomId }));
         node_script = """
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const cfg = JSON.parse(process.env.APPROVAL_DECISION_PAYLOAD || '{}');
-const meshPath = '/home/workspace/.dsh/sandbox-mesh.json';
-if (!fs.existsSync(meshPath)) {
-  console.log(JSON.stringify({ ok: false, detail: 'sandbox-mesh.json not found' }));
-  process.exit(0);
+const dshHome = '/home/workspace/.dsh';
+const meshPath = path.join(dshHome, 'sandbox-mesh.json');
+const tokenPath = path.join(dshHome, 'sandbox-mesh.local-token');
+const meshPort = Number(process.env.SANDBOX_MESH_PORT || 4090) || 4090;
+
+function callLocalCli(token, bodyObj) {
+  return new Promise((resolve) => {
+    const raw = JSON.stringify(bodyObj);
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: meshPort,
+        path: '/local/cli',
+        method: 'POST',
+        timeout: 6000,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(raw),
+          authorization: 'Bearer ' + token,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300 && parsed.ok !== false, data: parsed });
+          } catch {
+            resolve({ ok: false, data: {} });
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve({ ok: false, data: {} }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, data: {} }); });
+    req.write(raw);
+    req.end();
+  });
 }
-const state = JSON.parse(fs.readFileSync(meshPath, 'utf8'));
-let found = null;
-let foundRoomId = '';
-for (const [rId, list] of Object.entries(state.tasks || {})) {
-  if (cfg.roomId && rId !== cfg.roomId) continue;
-  if (!Array.isArray(list)) continue;
-  for (const t of list) {
-    if (t && t.id === cfg.taskId) {
-      found = t;
-      foundRoomId = rId;
-      break;
+
+(async () => {
+  // 1. Live mesh room notification if roomId exists in live server
+  if (cfg.roomId && fs.existsSync(tokenPath)) {
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (token) {
+      const prefix = cfg.decision === 'revise' && cfg.selfSlug ? ('@' + cfg.selfSlug + ' ') : '';
+      const label = cfg.decision === 'approved' ? 'APPROVED' : (cfg.decision === 'revise' ? 'REVISION REQUESTED' : 'REJECTED');
+      const text = prefix + '[Human Approval ' + label + '] by ' + (cfg.actor || 'User') + (cfg.note ? ': ' + cfg.note : '');
+      const sendRes = await callLocalCli(token, {
+        action: 'send',
+        roomId: cfg.roomId,
+        actor: 'human',
+        kind: 'approval',
+        text,
+      });
+      if (sendRes.ok && sendRes.data && sendRes.data.message) {
+        console.log(JSON.stringify({ ok: true, task_id: sendRes.data.message.id, room_id: cfg.roomId, decision: cfg.decision, via: 'mesh_local_cli' }));
+        process.exit(0);
+      }
     }
   }
-  if (found) break;
-}
-if (!found) {
-  console.log(JSON.stringify({ ok: false, detail: 'task not found' }));
-  process.exit(0);
-}
-found.approvalStatus = cfg.decision;
-found.approvalNote = cfg.note || '';
-found.approvedBy = cfg.actor;
-found.approvedAt = cfg.nowMs;
-found.updatedAt = cfg.nowMs;
-if (cfg.decision === 'approved' && found.status === 'blocked') {
-  found.status = 'in_progress';
-} else if (cfg.decision === 'rejected') {
-  found.status = 'blocked';
-}
-state.messages = state.messages || {};
-if (!Array.isArray(state.messages[foundRoomId])) state.messages[foundRoomId] = [];
-state.messages[foundRoomId].push({
-  id: 'msg_' + cfg.nowMs.toString(16),
-  roomId: foundRoomId,
-  threadId: (state.rooms && state.rooms[foundRoomId] && state.rooms[foundRoomId].activeThreadId) || 'thr_inbox',
-  sender: { slug: 'portal', ownerName: cfg.actor, actor: 'human' },
-  kind: 'system',
-  text: '[Human Approval ' + cfg.decision.toUpperCase() + '] Task #' + found.id + ' (' + (found.title || '') + ')' + (cfg.note ? ': ' + cfg.note : ''),
-  createdAt: cfg.nowMs,
-  ackedByAgent: false,
-});
-const tmp = meshPath + '.tmp.' + process.pid;
-fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\\n', { encoding: 'utf8', mode: 0o600 });
-fs.renameSync(tmp, meshPath);
-console.log(JSON.stringify({ ok: true, task_id: found.id, room_id: foundRoomId, decision: cfg.decision }));
+
+  // 2. Fallback: update legacy task entry in sandbox-mesh.json
+  if (!fs.existsSync(meshPath)) {
+    console.log(JSON.stringify({ ok: false, detail: 'sandbox-mesh.json not found' }));
+    process.exit(0);
+  }
+  const state = JSON.parse(fs.readFileSync(meshPath, 'utf8'));
+  let found = null;
+  let foundRoomId = '';
+  for (const [rId, list] of Object.entries(state.tasks || {})) {
+    if (cfg.roomId && rId !== cfg.roomId) continue;
+    if (!Array.isArray(list)) continue;
+    for (const t of list) {
+      if (t && t.id === cfg.taskId) {
+        found = t;
+        foundRoomId = rId;
+        break;
+      }
+    }
+    if (found) break;
+  }
+  if (!found) {
+    console.log(JSON.stringify({ ok: false, detail: 'task not found' }));
+    process.exit(0);
+  }
+  found.approvalStatus = cfg.decision;
+  found.approvalNote = cfg.note || '';
+  found.approvedBy = cfg.actor;
+  found.approvedAt = cfg.nowMs;
+  found.updatedAt = cfg.nowMs;
+  if (cfg.decision === 'approved' && found.status === 'blocked') {
+    found.status = 'in_progress';
+  } else if (cfg.decision === 'rejected') {
+    found.status = 'blocked';
+  }
+  state.messages = state.messages || {};
+  if (!Array.isArray(state.messages[foundRoomId])) state.messages[foundRoomId] = [];
+  state.messages[foundRoomId].push({
+    id: 'msg_' + cfg.nowMs.toString(16),
+    roomId: foundRoomId,
+    threadId: (state.rooms && state.rooms[foundRoomId] && state.rooms[foundRoomId].activeThreadId) || 'thr_inbox',
+    sender: { slug: 'portal', ownerName: cfg.actor, actor: 'human' },
+    kind: 'system',
+    text: '[Human Approval ' + cfg.decision.toUpperCase() + '] Task #' + found.id + ' (' + (found.title || '') + ')' + (cfg.note ? ': ' + cfg.note : ''),
+    createdAt: cfg.nowMs,
+    ackedByAgent: false,
+  });
+  const tmp = meshPath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\\n', { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, meshPath);
+  console.log(JSON.stringify({ ok: true, task_id: found.id, room_id: foundRoomId, decision: cfg.decision }));
+})();
 """
         ec, out = self.exec_command(
             sandbox,
@@ -451,6 +855,189 @@ console.log(JSON.stringify({ ok: true, task_id: found.id, room_id: foundRoomId, 
             except Exception:
                 pass
         return {"ok": ec == 0, "task_id": task_id, "decision": decision, "detail": text[-200:]}
+
+    def update_mesh_task_status(
+        self,
+        sandbox: Sandbox,
+        task_id: str,
+        *,
+        status: str,
+        summary: str = "",
+        room_id: str | None = None,
+        actor: str = "User",
+        notify_moderator: bool = False,
+    ) -> dict[str, Any]:
+        """Update a mesh task's status via live @metis/sandbox-mesh /local/cli (syncing to all group peers), with disk fallback."""
+        st = self._workload_status(sandbox)
+        if st != "running":
+            raise SandboxRuntimeError(f"sandbox {sandbox.slug} is not running")
+        now_ms = int(time.time() * 1000)
+        payload = {
+            "selfSlug": sandbox.slug,
+            "taskId": (task_id or "").strip(),
+            "status": (status or "").strip().lower(),
+            "summary": (summary or "").strip(),
+            "roomId": (room_id or "").strip(),
+            "actor": actor or "User",
+            "notifyModerator": bool(notify_moderator),
+            "nowMs": now_ms,
+        }
+        node_script = """
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+const cfg = JSON.parse(process.env.TASK_UPDATE_PAYLOAD || '{}');
+const dshHome = '/home/workspace/.dsh';
+const meshPath = path.join(dshHome, 'sandbox-mesh.json');
+const tokenPath = path.join(dshHome, 'sandbox-mesh.local-token');
+const meshPort = Number(process.env.SANDBOX_MESH_PORT || 4090) || 4090;
+
+function callLocalCli(token, bodyObj) {
+  return new Promise((resolve) => {
+    const raw = JSON.stringify(bodyObj);
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: meshPort,
+        path: '/local/cli',
+        method: 'POST',
+        timeout: 8000,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(raw),
+          authorization: 'Bearer ' + token,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300 && parsed.ok !== false, status: res.statusCode, data: parsed });
+          } catch (err) {
+            resolve({ ok: false, status: res.statusCode || 500, data: { error: String(err) } });
+          }
+        });
+      },
+    );
+    req.on('error', (err) => resolve({ ok: false, status: 0, data: { error: err && err.message ? err.message : String(err) } }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, status: 0, data: { error: 'timeout' } }); });
+    req.write(raw);
+    req.end();
+  });
+}
+
+(async () => {
+  // 1. Preferred live path: @metis/sandbox-mesh /local/cli task-update (auto-broadcasts /mesh/task-sync to peers)
+  if (fs.existsSync(tokenPath)) {
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (token) {
+      let targetRoomId = cfg.roomId;
+      if (!targetRoomId) {
+        const roomsRes = await callLocalCli(token, { action: 'rooms' });
+        const rooms = (roomsRes.ok && Array.isArray(roomsRes.data.rooms)) ? roomsRes.data.rooms : [];
+        for (const rm of rooms) {
+          if (!rm || !rm.id) continue;
+          const tRes = await callLocalCli(token, { action: 'tasks', roomId: rm.id });
+          const list = (tRes.ok && Array.isArray(tRes.data.tasks)) ? tRes.data.tasks : [];
+          if (list.some((t) => t && t.id === cfg.taskId)) {
+            targetRoomId = rm.id;
+            break;
+          }
+        }
+      }
+      if (targetRoomId) {
+        const body = {
+          action: 'task-update',
+          roomId: targetRoomId,
+          taskId: cfg.taskId,
+          status: cfg.status,
+          actor: 'human',
+          notifyModerator: Boolean(cfg.notifyModerator),
+        };
+        if (cfg.summary) body.summary = cfg.summary;
+        const updRes = await callLocalCli(token, body);
+        if (updRes.ok && updRes.data && updRes.data.task) {
+          console.log(JSON.stringify({
+            ok: true,
+            task_id: updRes.data.task.id,
+            room_id: targetRoomId,
+            status: updRes.data.task.status || cfg.status,
+            summary: updRes.data.task.summary || '',
+            auto_released_count: Array.isArray(updRes.data.autoReleasedBlockedTasks) ? updRes.data.autoReleasedBlockedTasks.length : 0,
+            via: 'mesh_local_cli',
+          }));
+          process.exit(0);
+        }
+        if (updRes.status === 404) {
+          console.log(JSON.stringify({ ok: false, detail: (updRes.data && updRes.data.error) || 'task not found' }));
+          process.exit(0);
+        }
+      }
+    }
+  }
+
+  // 2. Fallback: update sandbox-mesh.json atomically on disk
+  if (!fs.existsSync(meshPath)) {
+    console.log(JSON.stringify({ ok: false, detail: 'sandbox-mesh.json not found' }));
+    process.exit(0);
+  }
+  const state = JSON.parse(fs.readFileSync(meshPath, 'utf8'));
+  let found = null;
+  let foundRoomId = '';
+  for (const [rId, list] of Object.entries(state.tasks || {})) {
+    if (cfg.roomId && rId !== cfg.roomId) continue;
+    if (!Array.isArray(list)) continue;
+    for (const t of list) {
+      if (t && t.id === cfg.taskId) {
+        found = t;
+        foundRoomId = rId;
+        break;
+      }
+    }
+    if (found) break;
+  }
+  if (!found) {
+    console.log(JSON.stringify({ ok: false, detail: 'task not found' }));
+    process.exit(0);
+  }
+  found.status = cfg.status;
+  if (cfg.summary) {
+    found.summary = cfg.summary;
+  }
+  found.updatedAt = cfg.nowMs;
+  found.version = (Number(found.version) || 1) + 1;
+  const tmp = meshPath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\\n', { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, meshPath);
+  console.log(JSON.stringify({
+    ok: true,
+    task_id: found.id,
+    room_id: foundRoomId,
+    status: found.status,
+    summary: found.summary || '',
+    auto_released_count: 0,
+    via: 'disk_fallback',
+  }));
+})();
+"""
+        ec, out = self.exec_command(
+            sandbox,
+            ["node", "-e", node_script],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "TASK_UPDATE_PAYLOAD": json.dumps(payload, ensure_ascii=False),
+            },
+        )
+        text = out.decode("utf-8", errors="replace").strip() if out else ""
+        if ec == 0 and text:
+            try:
+                return json.loads(text.splitlines()[-1])
+            except Exception:
+                pass
+        return {"ok": False, "task_id": task_id, "status": status, "detail": text[-200:] or f"exit {ec}"}
 
     def sync_credential_profile(
         self,
@@ -555,13 +1142,16 @@ console.log('CRED_SYNC_OK');
         team_name: str,
         file_name: str,
         content: str,
+        project_slug: str | None = None,
     ) -> dict[str, Any]:
-        """Synchronize a shared project document (e.g., PRD, API spec) into /home/workspace/shared/<file_name> across team members."""
+        """Synchronize a shared project document into /home/workspace/shared/<project_slug>/<file_name> (or /home/workspace/shared/<file_name>)."""
         safe_name = posixpath.basename(file_name.strip() or "PROJECT_BRIEF.md")
+        clean_proj = re.sub(r"[^a-z0-9_-]+", "-", (project_slug or "").strip().lower()).strip("-")[:64]
+        shared_dir = f"/home/workspace/shared/{clean_proj}" if clean_proj else "/home/workspace/shared"
         node_script = """
 const fs = require('fs');
 const path = require('path');
-const sharedDir = '/home/workspace/shared';
+const sharedDir = process.env.SHARED_DIR || '/home/workspace/shared';
 fs.mkdirSync(sharedDir, { recursive: true });
 const target = path.join(sharedDir, process.env.SHARED_FILE_NAME || 'PROJECT_BRIEF.md');
 fs.writeFileSync(target, process.env.SHARED_FILE_CONTENT || '', 'utf8');
@@ -582,6 +1172,7 @@ console.log('SHARED_SYNC_OK:' + target);
                 user="workspace",
                 environment={
                     "HOME": "/home/workspace",
+                    "SHARED_DIR": shared_dir,
                     "SHARED_FILE_NAME": safe_name,
                     "SHARED_FILE_CONTENT": content,
                 },
@@ -592,8 +1183,97 @@ console.log('SHARED_SYNC_OK:' + target);
         return {
             "ok": synced > 0,
             "team_name": team_name,
+            "project_slug": clean_proj or None,
+            "path": f"{shared_dir}/{safe_name}",
             "file_name": safe_name,
             "synced": synced,
             "total": len(sandboxes),
             "results": results,
         }
+
+    def write_intake_files(
+        self,
+        sandbox: Sandbox,
+        intake_id: str,
+        files: list[tuple[str, bytes]],
+    ) -> list[str]:
+        """Write uploaded intake attachments into /home/workspace/shared-intake/<intake_id>/ safely in chunks."""
+        import base64
+
+        st = self._workload_status(sandbox)
+        if st != "running":
+            raise SandboxRuntimeError(f"sandbox {sandbox.slug} is not running")
+
+        safe_intake = re.sub(r"[^a-zA-Z0-9_-]", "", intake_id)[:48] or "intake"
+        target_dir = f"/home/workspace/shared-intake/{safe_intake}"
+        self.exec_command(
+            sandbox,
+            ["mkdir", "-p", target_dir, f"{target_dir}/output"],
+            user="workspace",
+            environment={"HOME": "/home/workspace"},
+        )
+
+        written: list[str] = []
+        used_names: set[str] = set()
+        chunk_size = 36 * 1024  # 36KB raw -> ~48KB base64, safely below ARG_MAX
+
+        write_chunk_js = """
+const fs = require('fs');
+const target = process.env.INTAKE_TARGET_PATH;
+const buf = Buffer.from(process.env.INTAKE_B64 || '', 'base64');
+if (process.env.INTAKE_APPEND === '1') {
+  fs.appendFileSync(target, buf);
+} else {
+  fs.writeFileSync(target, buf, { mode: 0o644 });
+}
+"""
+        for idx, (orig_name, content) in enumerate(files):
+            base = posixpath.basename((orig_name or "").replace("\\", "/")).strip()
+            clean = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", base).strip("._")[:100]
+            if not clean:
+                clean = f"attachment-{idx + 1}.bin"
+            candidate = clean
+            suffix = 1
+            while candidate in used_names:
+                stem, dot, ext = clean.rpartition(".")
+                candidate = f"{stem}_{suffix}.{ext}" if dot else f"{clean}_{suffix}"
+                suffix += 1
+            used_names.add(candidate)
+
+            target_path = f"{target_dir}/{candidate}"
+            if not content:
+                ec, _ = self.exec_command(
+                    sandbox,
+                    ["node", "-e", write_chunk_js],
+                    user="workspace",
+                    environment={
+                        "HOME": "/home/workspace",
+                        "INTAKE_TARGET_PATH": target_path,
+                        "INTAKE_B64": "",
+                        "INTAKE_APPEND": "0",
+                    },
+                )
+                if ec == 0:
+                    written.append(target_path)
+                continue
+
+            ok_all = True
+            for offset in range(0, len(content), chunk_size):
+                part = content[offset : offset + chunk_size]
+                ec, _ = self.exec_command(
+                    sandbox,
+                    ["node", "-e", write_chunk_js],
+                    user="workspace",
+                    environment={
+                        "HOME": "/home/workspace",
+                        "INTAKE_TARGET_PATH": target_path,
+                        "INTAKE_B64": base64.b64encode(part).decode("ascii"),
+                        "INTAKE_APPEND": "1" if offset > 0 else "0",
+                    },
+                )
+                if ec != 0:
+                    ok_all = False
+                    break
+            if ok_all:
+                written.append(target_path)
+        return written

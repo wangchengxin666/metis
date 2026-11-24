@@ -10,7 +10,7 @@ import {
   Square,
   Trash2,
 } from 'lucide-react'
-import { Badge, Button, cn } from '../ui'
+import { Badge, Button, Select, cn } from '../ui'
 import { apiFetch } from '../../lib/client.ts'
 import { localizeAction } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
@@ -58,10 +58,8 @@ export function WorkforceAppsCard({
     }
   }
 
-  const handleTogglePreviewAuth = async () => {
+  const handlePreviewAuthChange = async (next: string) => {
     if (!isAdmin) return
-    const current = data.preview_auth_mode || sandbox.preview_auth_mode || 'public'
-    const next = current === 'authenticated' ? 'public' : 'authenticated'
     setTogglingPreviewAuth(true)
     try {
       await apiFetch<SandboxItem>(`/api/sandboxes/${sandbox.id}`, {
@@ -79,6 +77,12 @@ export function WorkforceAppsCard({
   }
 
   const effectivePreviewAuth = data.preview_auth_mode || sandbox.preview_auth_mode || 'public'
+  const previewAuthLabel =
+    effectivePreviewAuth === 'team'
+      ? t('dialog.workforce.previewTeamOnly')
+      : effectivePreviewAuth === 'authenticated'
+        ? t('dialog.workforce.previewAuthOnly')
+        : t('dialog.workforce.previewPublic')
   const q = searchQuery.trim().toLowerCase()
   const filteredApps = (data.exposed_apps || []).filter(
     (app) => !q || `${app.name} ${app.mount_path || ''} ${app.target || ''}`.toLowerCase().includes(q),
@@ -94,29 +98,30 @@ export function WorkforceAppsCard({
           <Badge variant="outline">{filteredApps.length}</Badge>
         </span>
         {isAdmin ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={togglingPreviewAuth}
-            onClick={handleTogglePreviewAuth}
-          >
+          <div className="flex items-center gap-1.5">
             <ShieldCheck
               className={cn(
-                'h-3.5 w-3.5',
-                effectivePreviewAuth === 'authenticated' ? 'text-amber-400' : 'text-emerald-400',
+                'h-4 w-4 shrink-0',
+                effectivePreviewAuth === 'team'
+                  ? 'text-violet-400'
+                  : effectivePreviewAuth === 'authenticated'
+                    ? 'text-amber-400'
+                    : 'text-emerald-400',
               )}
             />
-            {effectivePreviewAuth === 'authenticated'
-              ? t('dialog.workforce.previewAuthOnly')
-              : t('dialog.workforce.previewPublic')}
-          </Button>
+            <Select
+              className="h-8 text-xs w-auto min-w-[180px]"
+              disabled={togglingPreviewAuth}
+              value={effectivePreviewAuth}
+              onChange={(e) => void handlePreviewAuthChange(e.target.value)}
+            >
+              <option value="public">{t('dialog.workforce.previewPublic')}</option>
+              <option value="authenticated">{t('dialog.workforce.previewAuthOnly')}</option>
+              <option value="team">{t('dialog.workforce.previewTeamOnly')}</option>
+            </Select>
+          </div>
         ) : (
-          <Badge variant="outline">
-            {effectivePreviewAuth === 'authenticated'
-              ? t('dialog.workforce.previewAuthOnly')
-              : t('dialog.workforce.previewPublic')}
-          </Badge>
+          <Badge variant="outline">{previewAuthLabel}</Badge>
         )}
       </div>
 

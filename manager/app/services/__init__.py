@@ -52,6 +52,7 @@ from .sandboxes import (
     load_sandbox,
     load_sandbox_by_slug,
     refresh_status,
+    refresh_statuses,
     restart_sandbox,
     start_sandbox,
     stop_sandbox,
@@ -77,7 +78,26 @@ from .vault import (
     list_workspace_snapshots,
     push_credential_profile,
     restore_workspace_snapshot,
+    sync_bound_credentials,
     update_credential_profile,
+)
+from .notifications import (
+    NotificationEvent,
+    channel_to_out,
+    create_notification_channel,
+    delete_notification_channel,
+    dispatch_notification_event,
+    list_notification_channels,
+    list_notification_deliveries,
+    test_notification_channel,
+    update_notification_channel,
+)
+from .workspace_hub import (
+    build_workspace_deliverables,
+    build_workspace_inbox,
+    refresh_sandbox_snapshot,
+    refresh_sandboxes_snapshots,
+    upsert_sandbox_runtime_snapshot,
 )
 
 __all__ = [
@@ -125,6 +145,7 @@ __all__ = [
     "normalize_plugin_index_source",
     "push_credential_profile",
     "refresh_status",
+    "refresh_statuses",
     "restart_sandbox",
     "restore_workspace_snapshot",
     "sanitize_brand_favicon",

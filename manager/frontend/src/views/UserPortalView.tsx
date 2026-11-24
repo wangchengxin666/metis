@@ -8,26 +8,49 @@ import {
   FileText,
   KeyRound,
   Lock,
+  Paperclip,
   Play,
   RefreshCw,
   RotateCw,
+  Send,
+  Sparkles,
   Square,
 } from 'lucide-react'
-import { ActionMenu, Badge, Button, Card, CardContent, Dialog, Input, Label, cn } from '../components/ui'
+import {
+  ActionMenu,
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  Dialog,
+  Input,
+  Label,
+  Select,
+  Textarea,
+  cn,
+} from '../components/ui'
 import { BackupRestoreDialog } from '../components/BackupRestoreDialog'
 import { WorkforceInspectorDialog } from '../components/WorkforceInspectorDialog'
-import { apiFetch } from '../lib/client.ts'
-import { copyTextToClipboard, fetchRunningStats, formatDiskSize } from '../lib/format'
+import { apiFetch, parseApiErrorDetail } from '../lib/client.ts'
+import { copyTextToClipboard, fetchRunningStats, formatDiskSize, mergeStatsMap } from '../lib/format'
 import { localizeAction, localizeStatus } from '../lib/i18n.ts'
 import { useI18n } from '../lib/i18nContext'
-import type { AuthMe, SandboxItem, SandboxStats } from '../types'
+import type {
+  AuthMe,
+  SandboxItem,
+  SandboxStats,
+  WorkspaceInboxData,
+  WorkspaceSandboxBadge,
+} from '../types'
 
 export function UserPortalView({
   auth,
   notify,
+  onOpenHiring,
 }: {
   auth: AuthMe | null
   notify: (msg: string, type?: 'success' | 'error') => void
+  onOpenHiring?: () => void
 }) {
   const { locale, t } = useI18n()
   const tRef = useRef(t)
@@ -35,13 +58,24 @@ export function UserPortalView({
 
   const [sandboxes, setSandboxes] = useState<SandboxItem[]>([])
   const [statsMap, setStatsMap] = useState<Record<string, SandboxStats>>({})
+  const [badgesMap, setBadgesMap] = useState<Record<string, WorkspaceSandboxBadge>>({})
   const [loading, setLoading] = useState(true)
   const refreshingRef = useRef(false)
+  const statsInFlightRef = useRef(false)
   const [logsTarget, setLogsTarget] = useState<SandboxItem | null>(null)
   const [logsText, setLogsText] = useState('')
   const [loadingLogs, setLoadingLogs] = useState(false)
   const [backupTarget, setBackupTarget] = useState<SandboxItem | null>(null)
   const [workforceTarget, setWorkforceTarget] = useState<SandboxItem | null>(null)
+  const [intakeTarget, setIntakeTarget] = useState<SandboxItem | null>(null)
+  const [intakeForm, setIntakeForm] = useState({
+    title: '',
+    description: '',
+    priority: 'normal',
+    approval_required: false,
+  })
+  const [intakeFiles, setIntakeFiles] = useState<File[]>([])
+  const [submittingIntake, setSubmittingIntake] = useState(false)
   const [pwModalOpen, setPwModalOpen] = useState(false)
   const [pwForm, setPwForm] = useState({
     current_password: '',
@@ -49,6 +83,8 @@ export function UserPortalView({
     confirm_password: '',
   })
   const [savingPw, setSavingPw] = useState(false)
+
+  const apiBase = auth?.admin ? '/api/sandboxes' : '/api/my/sandboxes'
 
   const openLogsModal = async (sbx: SandboxItem) => {
     setLogsTarget(sbx)
@@ -74,21 +110,37 @@ export function UserPortalView({
     if (!silent) setLoading(true)
     try {
       const params = new URLSearchParams(window.location.search)
-      const qEmail = params.get('email') || auth?.email || ''
-      const res = await apiFetch<{ items: SandboxItem[] }>(
-        `/api/my/sandboxes?refresh=true${qEmail ? `&email=${encodeURIComponent(qEmail)}` : ''}`,
-      )
+      const qEmail = params.get('email') || ''
+      const listUrl = auth?.admin && !qEmail
+        ? '/api/sandboxes?refresh=true'
+        : `/api/my/sandboxes?refresh=true${(qEmail || auth?.email) ? `&email=${encodeURIComponent(qEmail || auth?.email || '')}` : ''}`
+      const [res, inboxRes] = await Promise.all([
+        apiFetch<{ items: SandboxItem[] }>(listUrl),
+        apiFetch<WorkspaceInboxData>('/api/workspace/inbox').catch(() => null),
+      ])
       setSandboxes(res.items)
-      const nextStats = await fetchRunningStats(res.items, '/api/my/sandboxes')
-      setStatsMap(nextStats)
-      if (Object.keys(nextStats).length > 0) {
-        setSandboxes((prev) =>
-          prev.map((item) =>
-            nextStats[item.id]?.disk_usage_mb != null
-              ? { ...item, disk_usage_mb: nextStats[item.id].disk_usage_mb }
-              : item,
-          ),
-        )
+      if (inboxRes?.sandbox_badges) {
+        setBadgesMap(inboxRes.sandbox_badges)
+      }
+      if (!statsInFlightRef.current) {
+        statsInFlightRef.current = true
+        void fetchRunningStats(res.items, apiBase, { includeDisk: !silent })
+          .then((nextStats) => {
+            setStatsMap((prev) => mergeStatsMap(prev, nextStats))
+            if (Object.keys(nextStats).length > 0) {
+              setSandboxes((prev) =>
+                prev.map((item) =>
+                  nextStats[item.id]?.disk_usage_mb != null
+                    ? { ...item, disk_usage_mb: nextStats[item.id].disk_usage_mb }
+                    : item,
+                ),
+              )
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            statsInFlightRef.current = false
+          })
       }
     } catch (err: any) {
       if (!silent) {
@@ -98,7 +150,7 @@ export function UserPortalView({
       refreshingRef.current = false
       if (!silent) setLoading(false)
     }
-  }, [auth, notify])
+  }, [auth, apiBase, notify])
 
   useEffect(() => {
     void loadMySandboxes()
@@ -125,11 +177,54 @@ export function UserPortalView({
   const handleAction = async (sbx: SandboxItem, action: 'start' | 'stop' | 'restart') => {
     try {
       notify(t('portal.actionRunning', { action: localizeAction(locale, action) }))
-      await apiFetch(`/api/my/sandboxes/${sbx.id}/${action}`, { method: 'POST' })
+      await apiFetch(`${apiBase}/${sbx.id}/${action}`, { method: 'POST' })
       notify(t('portal.actionSuccess'))
       await loadMySandboxes()
     } catch (err: any) {
       notify(err.message, 'error')
+    }
+  }
+
+  const openIntakeModal = (sbx: SandboxItem) => {
+    setIntakeTarget(sbx)
+    setIntakeForm({ title: '', description: '', priority: 'normal', approval_required: false })
+    setIntakeFiles([])
+  }
+
+  const handleSubmitIntake = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!intakeTarget || !intakeForm.title.trim()) return
+    setSubmittingIntake(true)
+    try {
+      const fd = new FormData()
+      fd.append('title', intakeForm.title.trim())
+      fd.append('description', intakeForm.description)
+      fd.append('priority', intakeForm.priority)
+      fd.append('approval_required', intakeForm.approval_required ? 'true' : 'false')
+      for (const f of intakeFiles.slice(0, 5)) {
+        fd.append('files', f, f.name)
+      }
+      const res = await fetch(`/api/workspace/sandboxes/${intakeTarget.id}/intake`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd,
+      })
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try {
+          msg = parseApiErrorDetail(await res.json(), res.status)
+        } catch {
+          // ignore
+        }
+        throw new Error(msg)
+      }
+      notify(t('intake.submitted', { slug: intakeTarget.slug }))
+      setIntakeTarget(null)
+      await loadMySandboxes()
+    } catch (err: any) {
+      notify(err.message || 'Submit failed', 'error')
+    } finally {
+      setSubmittingIntake(false)
     }
   }
 
@@ -146,6 +241,12 @@ export function UserPortalView({
           </p>
         </div>
         <div className="flex items-center gap-2.5">
+          {onOpenHiring && (
+            <Button variant="outline" size="sm" onClick={onOpenHiring}>
+              <Sparkles className="h-4 w-4 text-indigo-400" />
+              {t('intake.hireShortcut')}
+            </Button>
+          )}
           {!auth?.admin &&
             (auth?.allow_local_user_login ?? auth?.auth_mode !== 'oidc') &&
             (auth?.auth_method !== 'oidc' || auth?.has_password) && (
@@ -175,13 +276,24 @@ export function UserPortalView({
               <code className="text-zinc-200">{auth?.default_admin_email || 'admin@example.com'}</code>
               {t('portal.emptyAfter')}
             </p>
+            {onOpenHiring && (
+              <div className="pt-2">
+                <Button size="sm" onClick={onOpenHiring}>
+                  <Sparkles className="h-4 w-4" />
+                  {t('intake.hireShortcut')}
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-5">
           {sandboxes.map((sbx) => {
             const st = statsMap[sbx.id]
+            const badge = badgesMap[sbx.id]
             const isRunning = sbx.status === 'running'
+            const canOpenIde = sbx.can_open_ide !== false
+            const isShared = sbx.ownership_mode === 'shared'
             return (
               <Card key={sbx.id} className="border-zinc-800 flex flex-col justify-between">
                 <CardContent className="p-6 space-y-5 flex-1 flex flex-col justify-between">
@@ -201,15 +313,44 @@ export function UserPortalView({
                           </h2>
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
+                          {isShared && (
+                            <Badge variant="outline" className="border-sky-500/40 text-sky-300">
+                              {t('sandbox.badgeShared')}
+                            </Badge>
+                          )}
                           {sbx.role_title && (
                             <Badge variant="secondary">
                               <Briefcase className="h-3 w-3 mr-0.5" />
                               {sbx.role_title}
                             </Badge>
                           )}
-                          {sbx.project_team_name && (
-                            <Badge variant="outline" className="border-violet-500/40 text-violet-300">
-                              {sbx.project_team_name}
+                          {(sbx.team_names && sbx.team_names.length > 0
+                            ? sbx.team_names
+                            : sbx.project_team_name
+                              ? [sbx.project_team_name]
+                              : []
+                          ).map((tName) => (
+                            <Badge
+                              key={tName}
+                              variant="outline"
+                              className="border-violet-500/40 text-violet-300"
+                            >
+                              {tName}
+                            </Badge>
+                          ))}
+                          {badge && badge.pending_approvals > 0 && (
+                            <Badge variant="warning">
+                              {t('inbox.filterPending')} {badge.pending_approvals}
+                            </Badge>
+                          )}
+                          {badge && badge.blocked_tasks > 0 && (
+                            <Badge variant="destructive">
+                              {t('inbox.filterBlocked')} {badge.blocked_tasks}
+                            </Badge>
+                          )}
+                          {badge && badge.exposed_apps > 0 && (
+                            <Badge variant="outline" className="border-sky-500/40 text-sky-300">
+                              {t('inbox.kpiApps')} {badge.exposed_apps}
                             </Badge>
                           )}
                         </div>
@@ -239,33 +380,44 @@ export function UserPortalView({
                           </div>
                         }
                         items={[
-                          isRunning
-                            ? {
-                                label: t('portal.stopBtn'),
-                                icon: <Square className="h-4 w-4 text-amber-400" />,
-                                onClick: () => handleAction(sbx, 'stop'),
-                              }
-                            : {
-                                label: t('portal.startBtn'),
-                                icon: <Play className="h-4 w-4 text-emerald-400" />,
-                                onClick: () => handleAction(sbx, 'start'),
-                              },
                           {
-                            label: t('portal.restartBtn'),
-                            icon: <RotateCw className="h-4 w-4" />,
-                            onClick: () => handleAction(sbx, 'restart'),
+                            label: t('intake.openBtn'),
+                            icon: <Send className="h-4 w-4 text-indigo-400" />,
+                            onClick: () => openIntakeModal(sbx),
                           },
-                          {
-                            label: t('portal.backupBtn'),
-                            icon: <Download className="h-4 w-4" />,
-                            onClick: () => setBackupTarget(sbx),
-                            dividerBefore: true,
-                          },
-                          {
-                            label: t('portal.logsBtn'),
-                            icon: <FileText className="h-4 w-4" />,
-                            onClick: () => openLogsModal(sbx),
-                          },
+                          ...(canOpenIde
+                            ? [
+                                isRunning
+                                  ? {
+                                      label: t('portal.stopBtn'),
+                                      icon: <Square className="h-4 w-4 text-amber-400" />,
+                                      onClick: () => handleAction(sbx, 'stop'),
+                                      dividerBefore: true,
+                                    }
+                                  : {
+                                      label: t('portal.startBtn'),
+                                      icon: <Play className="h-4 w-4 text-emerald-400" />,
+                                      onClick: () => handleAction(sbx, 'start'),
+                                      dividerBefore: true,
+                                    },
+                                {
+                                  label: t('portal.restartBtn'),
+                                  icon: <RotateCw className="h-4 w-4" />,
+                                  onClick: () => handleAction(sbx, 'restart'),
+                                },
+                                {
+                                  label: t('portal.backupBtn'),
+                                  icon: <Download className="h-4 w-4" />,
+                                  onClick: () => setBackupTarget(sbx),
+                                  dividerBefore: true,
+                                },
+                                {
+                                  label: t('portal.logsBtn'),
+                                  icon: <FileText className="h-4 w-4" />,
+                                  onClick: () => openLogsModal(sbx),
+                                },
+                              ]
+                            : []),
                         ]}
                       />
                     </div>
@@ -278,14 +430,25 @@ export function UserPortalView({
                   </div>
 
                   <div className="pt-4 border-t border-zinc-800/70 flex items-center gap-2.5">
-                    <Button
-                      variant="default"
-                      className="flex-1"
-                      onClick={() => window.open(`/sandboxes/${sbx.id}/open`, '_blank')}
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      {t('portal.openBtn')}
-                    </Button>
+                    {canOpenIde ? (
+                      <Button
+                        variant="default"
+                        className="flex-1"
+                        onClick={() => window.open(`/sandboxes/${sbx.id}/open`, '_blank')}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {t('portal.openBtn')}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="default"
+                        className="flex-1"
+                        onClick={() => openIntakeModal(sbx)}
+                      >
+                        <Send className="h-4 w-4" />
+                        {t('intake.openBtn')}
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       className="flex-1"
@@ -302,13 +465,108 @@ export function UserPortalView({
         </div>
       )}
 
+      {/* Structured Task Intake Modal with File Attachments */}
+      <Dialog
+        open={!!intakeTarget}
+        onOpenChange={(o) => !o && !submittingIntake && setIntakeTarget(null)}
+        title={t('intake.dialogTitle', {
+          name: intakeTarget?.display_name || intakeTarget?.slug || '',
+        })}
+        description={t('intake.dialogDesc')}
+        maxWidth="max-w-lg"
+      >
+        <form onSubmit={handleSubmitIntake} className="space-y-4 text-sm">
+          <div className="space-y-1.5">
+            <Label>{t('intake.titleLabel')}</Label>
+            <Input
+              required
+              placeholder={t('intake.titlePlaceholder')}
+              value={intakeForm.title}
+              onChange={(e) => setIntakeForm({ ...intakeForm, title: e.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>{t('intake.descLabel')}</Label>
+            <Textarea
+              rows={4}
+              placeholder={t('intake.descPlaceholder')}
+              value={intakeForm.description}
+              onChange={(e) => setIntakeForm({ ...intakeForm, description: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+            <div className="space-y-1.5">
+              <Label>{t('intake.priorityLabel')}</Label>
+              <Select
+                value={intakeForm.priority}
+                onChange={(e) => setIntakeForm({ ...intakeForm, priority: e.target.value })}
+              >
+                <option value="low">Low</option>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </Select>
+            </div>
+            <label className="flex items-center gap-2 rounded-[var(--brand-radius-sm)] border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={intakeForm.approval_required}
+                onChange={(e) =>
+                  setIntakeForm({ ...intakeForm, approval_required: e.target.checked })
+                }
+                className="rounded border-zinc-700 accent-indigo-500"
+              />
+              <span>{t('intake.approvalLabel')}</span>
+            </label>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5">
+              <Paperclip className="h-3.5 w-3.5 text-zinc-400" />
+              <span>{t('intake.filesLabel')}</span>
+            </Label>
+            <input
+              type="file"
+              multiple
+              onChange={(e) => setIntakeFiles(Array.from(e.target.files || []).slice(0, 5))}
+              className="block w-full text-xs text-zinc-300 file:mr-3 file:rounded-md file:border file:border-zinc-700 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-xs file:text-zinc-200 hover:file:bg-zinc-800"
+            />
+            {intakeFiles.length > 0 && (
+              <div className="text-xs text-zinc-400 space-y-0.5 pt-1">
+                <div>{t('intake.filesHint', { count: intakeFiles.length })}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {intakeFiles.map((f) => (
+                    <Badge key={f.name} variant="secondary" className="font-mono text-[11px]">
+                      {f.name} ({Math.max(1, Math.round(f.size / 1024))} KB)
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={submittingIntake}
+              onClick={() => setIntakeTarget(null)}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit" disabled={submittingIntake}>
+              <Send className="h-4 w-4" />
+              {submittingIntake ? t('intake.submitting') : t('intake.submitBtn')}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
       <WorkforceInspectorDialog
         sandbox={
           workforceTarget
             ? sandboxes.find((s) => s.id === workforceTarget.id) ?? workforceTarget
             : null
         }
-        isAdmin={false}
+        isAdmin={Boolean(auth?.admin)}
         onClose={() => setWorkforceTarget(null)}
         notify={notify}
         onSandboxUpdated={loadMySandboxes}
@@ -316,7 +574,7 @@ export function UserPortalView({
 
       <BackupRestoreDialog
         sandbox={backupTarget}
-        isAdmin={false}
+        isAdmin={Boolean(auth?.admin)}
         onClose={() => setBackupTarget(null)}
         notify={notify}
         onRestored={loadMySandboxes}

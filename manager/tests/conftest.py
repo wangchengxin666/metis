@@ -119,6 +119,8 @@ class FakeDockerService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.containers: dict[str, dict[str, Any]] = {}
+        self.mesh_progress: dict[tuple[str, str], dict[str, Any]] = {}
+        self._dispatch_seq = 0
         self.fail_on_create: Exception | None = None
         self.fail_on_health: Exception | None = None
         self.client = MagicMock()
@@ -184,6 +186,12 @@ class FakeDockerService:
             return "missing"
         return "running" if item["status"] == "running" else "stopped"
 
+    def statuses(
+        self, sandboxes: list[Sandbox], max_workers: int = 16
+    ) -> dict[str, str]:
+        self.calls.append(("statuses", [s.slug for s in sandboxes]))
+        return {sbx.id: self.status(sbx) for sbx in sandboxes}
+
     def get(self, sandbox: Sandbox):
         from types import SimpleNamespace
         from app.docker_service import SandboxRuntimeError
@@ -213,13 +221,26 @@ class FakeDockerService:
         self.calls.append(("launch_token_url", sandbox.slug))
         return None
 
-    def stats(self, sandbox: Sandbox) -> dict[str, Any]:
-        self.calls.append(("stats", sandbox.slug))
+    def stats(
+        self, sandbox: Sandbox, *, include_disk: bool = True
+    ) -> dict[str, Any]:
+        self.calls.append(("stats", (sandbox.slug, include_disk)))
+        disk = (
+            self.workspace_disk_usage(sandbox)
+            if include_disk
+            else {
+                "disk_usage_bytes": None,
+                "disk_usage_mb": None,
+                "disk_fs_total_mb": None,
+                "disk_fs_avail_mb": None,
+                "disk_fs_used_percent": None,
+            }
+        )
         return {
             "cpu_percent": 12.5,
             "memory_usage_mb": 256.0,
             "memory_limit_mb": 4096.0,
-            **self.workspace_disk_usage(sandbox),
+            **disk,
         }
 
     def export_workspace_tar(self, sandbox: Sandbox, exclude_caches: bool = False):
@@ -317,13 +338,21 @@ class FakeDockerService:
         sandboxes: list[Sandbox],
         team_name: str,
         moderator_slug: str | None = None,
+        *,
+        project_slug: str | None = None,
+        existing_room_id: str | None = None,
     ) -> dict[str, Any]:
         slugs = [s.slug for s in sandboxes]
         eff_mod = moderator_slug if moderator_slug in slugs else slugs[0]
-        self.calls.append(("assemble_mesh_team", (team_name, slugs, eff_mod)))
+        room_id = (existing_room_id or "").strip() or f"grp_test_{project_slug or '123'}"
+        self.calls.append(
+            ("assemble_mesh_team", (team_name, slugs, eff_mod, project_slug, existing_room_id))
+        )
         return {
             "ok": True,
-            "room_id": "grp_test_123",
+            "via": "mesh_local_cli",
+            "room_id": room_id,
+            "shared_dir": f"/home/workspace/shared/{project_slug}" if project_slug else "/home/workspace/shared",
             "team_name": team_name,
             "room_name": team_name,
             "moderator_slug": eff_mod,
@@ -334,8 +363,18 @@ class FakeDockerService:
             "results": [{"slug": s, "ok": True, "skipped": False, "detail": "assembled"} for s in slugs],
         }
 
+    def remove_mesh_group_member(
+        self,
+        sandboxes: list[Sandbox],
+        room_id: str,
+        member_slug: str,
+    ) -> dict[str, Any]:
+        self.calls.append(("remove_mesh_group_member", (room_id, member_slug)))
+        return {"ok": True, "room_id": room_id, "removed": member_slug}
+
     def inspect_workforce_runtime(self, sandbox: Sandbox) -> dict[str, Any]:
         self.calls.append(("inspect_workforce_runtime", sandbox.slug))
+        task1_status = getattr(self, "task_status_overrides", {}).get((sandbox.slug, "task_1"), "blocked")
         return {
             "online": True,
             "slug": sandbox.slug,
@@ -383,15 +422,15 @@ class FakeDockerService:
                         "room_id": "grp_test_123",
                         "title": "Approve v1.0 release",
                         "description": "Verify canary metrics before production promotion",
-                        "status": "blocked",
+                        "status": task1_status,
                         "priority": "high",
                         "assignee_slug": sandbox.slug,
                         "approval_required": True,
                         "approval_status": "pending",
                     }
                 ],
-                "active_tasks_count": 2,
-                "done_tasks_count": 5,
+                "active_tasks_count": 0 if task1_status in {"done", "cancelled"} else 2,
+                "done_tasks_count": 6 if task1_status == "done" else 5,
                 "pending_approvals": [
                     {"id": "task_1", "room_id": "grp_test_123", "title": "Approve v1.0 release", "assignee_slug": sandbox.slug}
                 ],
@@ -450,12 +489,42 @@ class FakeDockerService:
         description: str = "",
         priority: str = "normal",
         room_id: str | None = None,
+        room_name: str | None = None,
+        new_topic: bool = False,
         approval_required: bool = False,
         source: str = "portal",
         actor: str = "User",
     ) -> dict[str, Any]:
-        self.calls.append(("dispatch_mesh_task", (sandbox.slug, title, priority, source)))
-        return {"ok": True, "task_id": "tsk_fake_1", "room_id": room_id or "inbox:portal"}
+        self._dispatch_seq += 1
+        msg_id = f"msg_fake_{self._dispatch_seq}"
+        eff_room = (room_id or "").strip() or f"grp_fake_{sandbox.slug}"
+        self.calls.append(
+            ("dispatch_mesh_task", (sandbox.slug, title, priority, source, eff_room, description))
+        )
+        return {
+            "ok": True,
+            "task_id": msg_id,
+            "message_id": msg_id,
+            "room_id": eff_room,
+            "woke_agent": True,
+            "via": "mesh_local_cli",
+        }
+
+    def inspect_mesh_room_progress(
+        self,
+        sandbox: Sandbox,
+        room_id: str,
+        *,
+        since_message_id: str = "",
+        thread_id: str = "",
+    ) -> dict[str, Any]:
+        self.calls.append(("inspect_mesh_room_progress", (sandbox.slug, room_id, since_message_id)))
+        hit = self.mesh_progress.get((sandbox.slug, since_message_id)) or self.mesh_progress.get(
+            (sandbox.slug, room_id)
+        )
+        if hit:
+            return {"ok": True, "room_id": room_id, **hit}
+        return {"ok": True, "room_id": room_id, "completed": False, "failed": False, "reply_text": "", "artifacts": []}
 
     def decide_mesh_approval(
         self,
@@ -469,6 +538,31 @@ class FakeDockerService:
     ) -> dict[str, Any]:
         self.calls.append(("decide_mesh_approval", (sandbox.slug, task_id, decision, note)))
         return {"ok": True, "task_id": task_id, "room_id": room_id or "grp_test_123", "decision": decision}
+
+    def update_mesh_task_status(
+        self,
+        sandbox: Sandbox,
+        task_id: str,
+        *,
+        status: str,
+        summary: str = "",
+        room_id: str | None = None,
+        actor: str = "User",
+        notify_moderator: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self, "task_status_overrides"):
+            self.task_status_overrides = {}
+        self.task_status_overrides[(sandbox.slug, task_id)] = status
+        self.calls.append(("update_mesh_task_status", (sandbox.slug, task_id, status, summary, room_id)))
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "room_id": room_id or "grp_test_123",
+            "status": status,
+            "summary": summary,
+            "auto_released_count": 0,
+            "via": "mesh_local_cli",
+        }
 
     def sync_credential_profile(
         self,
@@ -495,16 +589,66 @@ class FakeDockerService:
         team_name: str,
         file_name: str,
         content: str,
+        project_slug: str | None = None,
     ) -> dict[str, Any]:
         slugs = [s.slug for s in sandboxes]
-        self.calls.append(("sync_shared_project_file", (team_name, file_name, slugs)))
+        shared_dir = f"/home/workspace/shared/{project_slug}" if project_slug else "/home/workspace/shared"
+        self.calls.append(("sync_shared_project_file", (team_name, file_name, slugs, project_slug)))
         return {
             "ok": True,
             "team_name": team_name,
+            "project_slug": project_slug,
+            "path": f"{shared_dir}/{file_name}",
             "file_name": file_name,
             "synced": len(slugs),
             "total": len(slugs),
             "results": [{"slug": s, "ok": True, "skipped": False, "detail": "SHARED_SYNC_OK"} for s in slugs],
+        }
+
+    def write_intake_files(
+        self,
+        sandbox: Sandbox,
+        intake_id: str,
+        files: list[tuple[str, bytes]],
+    ) -> list[str]:
+        self.calls.append(
+            ("write_intake_files", (sandbox.slug, intake_id, [(n, len(b)) for n, b in files]))
+        )
+        return [f"/home/workspace/shared-intake/{intake_id}/{name}" for name, _ in files]
+
+    def inspect_sandbox_memories(self, sandbox: Sandbox) -> dict[str, Any]:
+        self.calls.append(("inspect_sandbox_memories", sandbox.slug))
+        return {
+            "ok": True,
+            "online": True,
+            "slug": sandbox.slug,
+            "status": "running",
+            "memories": [
+                {
+                    "id": "mem_a1b2c3",
+                    "title": "Always run yarn typecheck before PR",
+                    "category": "workflow",
+                    "source": "agent",
+                    "summary": "Prevents broken TypeScript imports in CI",
+                    "content": "Run `corepack yarn typecheck && corepack yarn test` before submitting PRs in monorepo.",
+                    "tags": ["ci", "typescript"],
+                    "pinned": True,
+                    "enabled": True,
+                    "updated_at": 1760000000000,
+                },
+                {
+                    "id": "mem_d4e5f6",
+                    "title": "PostgreSQL pool_pre_ping requirement",
+                    "category": "pitfall",
+                    "source": "auto",
+                    "summary": "Avoid stale connection errors after DB failover",
+                    "content": "Enable pool_pre_ping=True on SQLAlchemy engines targeting managed RDS instances.",
+                    "tags": ["postgres", "db"],
+                    "pinned": False,
+                    "enabled": True,
+                    "updated_at": 1759900000000,
+                },
+            ],
         }
 
 
@@ -518,8 +662,36 @@ def reset_database() -> None:
     init_db()
     main_mod.oidc_registry.clear()
     with SessionLocal() as db:
-        from app.models import CredentialProfile, WorkspaceSnapshot
+        from app.models import (
+            CredentialProfile,
+            LlmUsageLedger,
+            MemoryPromotion,
+            NotificationChannel,
+            NotificationDelivery,
+            Playbook,
+            PlaybookRun,
+            PlaybookStepRun,
+            ProvisionRequest,
+            SandboxRuntimeSnapshot,
+            Team,
+            TeamMember,
+            TeamSandbox,
+            WorkspaceSnapshot,
+        )
+        from app.services.playbooks import ensure_default_playbooks
 
+        db.query(MemoryPromotion).delete()
+        db.query(PlaybookStepRun).delete()
+        db.query(PlaybookRun).delete()
+        db.query(Playbook).delete()
+        db.query(LlmUsageLedger).delete()
+        db.query(ProvisionRequest).delete()
+        db.query(TeamMember).delete()
+        db.query(TeamSandbox).delete()
+        db.query(Team).delete()
+        db.query(NotificationDelivery).delete()
+        db.query(NotificationChannel).delete()
+        db.query(SandboxRuntimeSnapshot).delete()
         db.query(WorkspaceSnapshot).delete()
         db.query(CredentialProfile).delete()
         db.query(AuditLog).delete()
@@ -534,6 +706,7 @@ def reset_database() -> None:
         settings = get_settings()
         ensure_bootstrap_admin(db, settings.manager_admin_email)
         ensure_default_templates(db, settings)
+        ensure_default_playbooks(db)
 
 
 @pytest.fixture()

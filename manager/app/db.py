@@ -104,6 +104,10 @@ def migrate_schema(target_engine: Engine) -> None:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN cpu_limit FLOAT"
                 )
+            if "display_name" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN display_name VARCHAR(255)"
+                )
             if "memory_limit" not in columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN memory_limit VARCHAR(32)"
@@ -172,6 +176,26 @@ def migrate_schema(target_engine: Engine) -> None:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN project_team_name VARCHAR(128)"
                 )
+            if "credential_profile_ids_json" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN credential_profile_ids_json TEXT"
+                )
+            if "budget_action" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN budget_action VARCHAR(32) NOT NULL DEFAULT 'block'"
+                )
+            if "gateway_api_key" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN gateway_api_key VARCHAR(128)"
+                )
+            if "ownership_mode" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN ownership_mode VARCHAR(32) NOT NULL DEFAULT 'personal'"
+                )
+            if "maintainer_emails_json" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN maintainer_emails_json TEXT"
+                )
             if "port" in columns:
                 if backend in {"sqlite", "postgresql"}:
                     connection.exec_driver_sql("DROP INDEX IF EXISTS ix_sandboxes_port")
@@ -196,6 +220,27 @@ def migrate_schema(target_engine: Engine) -> None:
             if "default_llm_profile_id" not in tpl_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandbox_templates ADD COLUMN default_llm_profile_id VARCHAR(36)"
+                )
+            if "default_credential_profile_ids_json" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN default_credential_profile_ids_json TEXT"
+                )
+            if "sop_version" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN sop_version INTEGER NOT NULL DEFAULT 1"
+                )
+
+        if "audit_log" in table_names:
+            audit_columns = {
+                col["name"] for col in inspector.get_columns("audit_log")
+            }
+            if "category" not in audit_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE audit_log ADD COLUMN category VARCHAR(32)"
+                )
+            if "sandbox_slug" not in audit_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE audit_log ADD COLUMN sandbox_slug VARCHAR(64)"
                 )
 
         if "users" in table_names:
@@ -234,6 +279,44 @@ def migrate_schema(target_engine: Engine) -> None:
             if "thinking_format" not in llm_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE llm_profiles ADD COLUMN thinking_format VARCHAR(64)"
+                )
+            if "gateway_enabled" not in llm_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE llm_profiles ADD COLUMN gateway_enabled BOOLEAN NOT NULL DEFAULT {bool_false}"
+                )
+            if "input_price_per_1m" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN input_price_per_1m FLOAT"
+                )
+            if "output_price_per_1m" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN output_price_per_1m FLOAT"
+                )
+            if "fallback_llm_profile_id" not in llm_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE llm_profiles ADD COLUMN fallback_llm_profile_id VARCHAR(36)"
+                )
+
+        if "teams" in table_names:
+            team_columns = {
+                col["name"] for col in inspector.get_columns("teams")
+            }
+            if "status" not in team_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE teams ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'active'"
+                )
+            if "mesh_room_id" not in team_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE teams ADD COLUMN mesh_room_id VARCHAR(128)"
+                )
+
+        if "playbook_runs" in table_names:
+            pb_run_columns = {
+                col["name"] for col in inspector.get_columns("playbook_runs")
+            }
+            if "execution_mode" not in pb_run_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE playbook_runs ADD COLUMN execution_mode VARCHAR(32) NOT NULL DEFAULT 'isolated'"
                 )
 
 

@@ -102,17 +102,24 @@ def oidc_provider_out(provider: OidcProvider) -> OidcProviderOut:
 
 
 
-def sandbox_out(sandbox: Sandbox) -> SandboxOut:
+def sandbox_out(
+    sandbox: Sandbox,
+    *,
+    team_ids: list[str] | None = None,
+    team_names: list[str] | None = None,
+    can_open_ide: bool = True,
+) -> SandboxOut:
     wh_tok = getattr(sandbox, "webhook_token", None)
     wh_url = (
         f"{settings.manager_base_url}/api/webhooks/sandboxes/{sandbox.slug}?token={wh_tok}"
         if wh_tok
         else None
     )
+    gw_key = getattr(sandbox, "gateway_api_key", None)
     return SandboxOut(
         id=sandbox.id,
         email=sandbox.user.email,
-        display_name=sandbox.user.display_name,
+        display_name=sandbox.effective_display_name,
         slug=sandbox.slug,
         container_id=sandbox.container_id,
         volume_name=sandbox.volume_name,
@@ -126,6 +133,7 @@ def sandbox_out(sandbox: Sandbox) -> SandboxOut:
         auto_install_plugins=sandbox.auto_install_plugins,
         llm_profile_id=sandbox.llm_profile_id,
         llm_profile_name=sandbox.llm_profile.name if sandbox.llm_profile else None,
+        credential_profile_ids=sandbox.credential_profile_ids,
         cpu_limit=(
             sandbox.cpu_limit
             if sandbox.cpu_limit is not None
@@ -136,10 +144,17 @@ def sandbox_out(sandbox: Sandbox) -> SandboxOut:
         disk_usage_mb=sandbox.disk_usage_mb,
         disk_updated_at=sandbox.disk_updated_at,
         preview_auth_mode=getattr(sandbox, "preview_auth_mode", None) or "public",
+        ownership_mode=getattr(sandbox, "ownership_mode", None) or "personal",
+        maintainer_emails=sandbox.maintainer_emails,
         has_webhook_token=bool(wh_tok),
         webhook_url=wh_url,
+        has_gateway_api_key=bool(gw_key),
         daily_token_limit=getattr(sandbox, "daily_token_limit", None),
+        budget_action=getattr(sandbox, "budget_action", None) or "block",
         project_team_name=getattr(sandbox, "project_team_name", None),
+        team_ids=team_ids or [],
+        team_names=team_names or [],
+        can_open_ide=can_open_ide,
         status=sandbox.status,
         url=settings.sandbox_url(sandbox.slug),
         created_at=sandbox.created_at,
@@ -390,15 +405,28 @@ def _require_sandbox_owner_or_admin(
     request: Request,
     db: Session,
     forbidden_detail: str,
+    *,
+    allow_shared_member: bool = False,
 ) -> str:
+    from .services.teams import (
+        can_user_access_sandbox_frontstage,
+        can_user_open_sandbox_ide,
+    )
+
     email = session_email(request)
     if _is_authenticated_admin(request, db):
         return email or settings.manager_admin_email.lower()
     if not email:
         raise HTTPException(status_code=401, detail="请先登录")
-    if sandbox.user.email.lower() != email:
+    _ensure_active_user(db, email)
+    allowed = (
+        can_user_access_sandbox_frontstage(db, sandbox, email, False)
+        if allow_shared_member
+        else can_user_open_sandbox_ide(db, sandbox, email, False)
+    )
+    if not allowed:
         raise HTTPException(status_code=403, detail=forbidden_detail)
-    if sandbox.user.status != "active":
+    if sandbox.user.email.lower() == email and sandbox.user.status != "active":
         raise HTTPException(status_code=403, detail="该账号已被管理员禁用")
     return email
 

@@ -2,25 +2,23 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Box,
   Cpu,
-  KeyRound,
   Layers,
   Package,
   Plus,
   RefreshCw,
-  ShieldCheck,
   Sparkles,
-  Terminal,
-  Users,
 } from 'lucide-react'
 import { Button, cn } from '../../components/ui'
 import { BackupRestoreDialog } from '../../components/BackupRestoreDialog'
 import { WorkforceInspectorDialog } from '../../components/WorkforceInspectorDialog'
-import { apiFetch } from '../../lib/client.ts'
-import { copyTextToClipboard, fetchRunningStats } from '../../lib/format'
+import { type AdminSection, apiFetch } from '../../lib/client.ts'
+import { copyTextToClipboard, fetchRunningStats, mergeStatsMap } from '../../lib/format'
+import { DEFAULT_CORE_AUTO_INSTALL_PLUGINS } from '../../lib/plugins.ts'
 import { localizeAction } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
 import type {
   AdminItem,
+  AuthMe,
   CredentialProfileItem,
   LlmProfileItem,
   OidcProviderItem,
@@ -31,14 +29,15 @@ import type {
   TemplateItem,
   UserItem,
 } from '../../types'
+import { PlaybooksView } from '../workspace/PlaybooksView'
+import { AuditCenterTab } from './AuditCenterTab'
 import { LlmAndVaultTab } from './LlmAndVaultTab'
+import { NotificationsTab } from './NotificationsTab'
 import {
-  AssembleTeamDialog,
   CloneEmployeeDialog,
   CloneFormState,
   ContainerLogsDialog,
   DestroySandboxDialog,
-  TeamFormState,
 } from './OperationsDialogs'
 import { PluginsRegistryData, PluginsTab } from './PluginsTab'
 import {
@@ -55,11 +54,17 @@ import { TemplatesTab } from './TemplatesTab'
 import { UsersTab } from './UsersTab'
 
 export function AdminConsoleView({
+  auth,
   publicUrl,
+  activeSection,
+  onSelectSection,
   notify,
   onBrandingUpdated,
 }: {
+  auth: AuthMe
   publicUrl: string
+  activeSection: AdminSection
+  onSelectSection: (section: AdminSection) => void
   notify: (msg: string, type?: 'success' | 'error') => void
   onBrandingUpdated?: () => Promise<void> | void
 }) {
@@ -69,9 +74,11 @@ export function AdminConsoleView({
   const formatAction = (action: 'start' | 'stop' | 'restart' | 'recreate') =>
     localizeAction(locale, action)
 
-  const [activeTab, setActiveTab] = useState<
-    'sandboxes' | 'templates' | 'plugins' | 'llm' | 'users' | 'sso'
-  >('sandboxes')
+  const activeTab = activeSection
+  const setActiveTab = onSelectSection
+  const [workforceSubTab, setWorkforceSubTab] = useState<'sandboxes' | 'templates' | 'playbooks'>('sandboxes')
+  const [accessSubTab, setAccessSubTab] = useState<'users' | 'sso'>('users')
+  const [opsSubTab, setOpsSubTab] = useState<'plugins' | 'notifications' | 'audit'>('plugins')
 
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [sandboxes, setSandboxes] = useState<SandboxItem[]>([])
@@ -99,13 +106,17 @@ export function AdminConsoleView({
     role_title: '',
     role_description: '',
     role_sop: '',
+    ownership_mode: 'personal',
+    maintainer_emails: '',
+    budget_action: 'block',
     image_repo: 'dsh-sandbox',
     image_tag: 'latest',
     cpu_limit: '2.0',
     memory_limit: '4g',
     llm_profile_id: '',
+    credential_profile_ids: [],
     init_repo_url: '',
-    auto_install_plugins: 'file-manager',
+    auto_install_plugins: DEFAULT_CORE_AUTO_INSTALL_PLUGINS,
     init_script: '',
     auto_sleep_exempt: false,
   })
@@ -114,30 +125,27 @@ export function AdminConsoleView({
   // Edit Sandbox Modal
   const [editSbx, setEditSbx] = useState<SandboxItem | null>(null)
   const [editSbxForm, setEditSbxForm] = useState<EditSandboxFormState>({
+    display_name: '',
     role_title: '',
     role_description: '',
     role_sop: '',
+    ownership_mode: 'personal',
+    maintainer_emails: '',
     cpu_limit: '2.0',
     memory_limit: '4g',
     image_repo: 'dsh-sandbox',
     image_tag: 'latest',
     llm_profile_id: '',
+    credential_profile_ids: [],
     preview_auth_mode: 'public',
     daily_token_limit: '',
+    budget_action: 'block',
     auto_sleep_exempt: false,
   })
   const [savingSbx, setSavingSbx] = useState(false)
 
-  // Workforce Inspector, Team Assembly, Clone, Backup, Logs & Delete Modals
+  // Workforce Inspector, Clone, Backup, Logs & Delete Modals
   const [workforceTarget, setWorkforceTarget] = useState<SandboxItem | null>(null)
-  const [teamModalOpen, setTeamModalOpen] = useState(false)
-  const [teamForm, setTeamForm] = useState<TeamFormState>({
-    name: '',
-    description: '',
-    member_ids: [],
-    moderator_id: '',
-  })
-  const [assemblingTeam, setAssemblingTeam] = useState(false)
   const [cloneTarget, setCloneTarget] = useState<SandboxItem | null>(null)
   const [cloneForm, setCloneForm] = useState<CloneFormState>({
     email: '',
@@ -164,11 +172,12 @@ export function AdminConsoleView({
     role_description: '',
     role_sop: '',
     default_llm_profile_id: '',
+    default_credential_profile_ids: [],
     image_repo: 'dsh-sandbox',
     image_tag: 'latest',
     default_cpu_limit: '2.0',
     default_memory_limit: '4g',
-    auto_install_plugins: 'file-manager',
+    auto_install_plugins: DEFAULT_CORE_AUTO_INSTALL_PLUGINS,
     init_script: '',
     default_env_json: '{}',
   })
@@ -186,6 +195,23 @@ export function AdminConsoleView({
   }
 
   const refreshingLiveRef = useRef(false)
+  const statsInFlightRef = useRef(false)
+
+  const loadRunningStats = useCallback(
+    (items: SandboxItem[], opts?: { includeDisk?: boolean }) => {
+      if (statsInFlightRef.current) return
+      statsInFlightRef.current = true
+      void fetchRunningStats(items, '/api/sandboxes', opts)
+        .then((nextStats) => {
+          setStatsMap((prev) => mergeStatsMap(prev, nextStats))
+        })
+        .catch(() => {})
+        .finally(() => {
+          statsInFlightRef.current = false
+        })
+    },
+    [],
+  )
 
   const refreshLiveStatus = useCallback(async () => {
     if (refreshingLiveRef.current) return
@@ -197,21 +223,29 @@ export function AdminConsoleView({
       ])
       setOverview(ov)
       setSandboxes(sbxRes.items)
-      const nextStats = await fetchRunningStats(sbxRes.items, '/api/sandboxes')
-      setStatsMap(nextStats)
+      loadRunningStats(sbxRes.items, { includeDisk: false })
     } catch {
       // Background polling errors stay silent
     } finally {
       refreshingLiveRef.current = false
     }
-  }, [])
+  }, [loadRunningStats])
 
   const refreshAll = useCallback(async () => {
+    // Paint the employee list as soon as it arrives instead of waiting for every
+    // admin resource; live CPU/memory/disk stats are loaded in the background.
+    const sandboxesReq = apiFetch<{ items: SandboxItem[] }>('/api/sandboxes?refresh=true').then(
+      (res) => {
+        setSandboxes(res.items)
+        loadRunningStats(res.items, { includeDisk: true })
+        return res
+      },
+    )
     try {
-      const [ov, sbxRes, tplRes, presetsRes, llmRes, credRes, plgRes, usrRes, admRes, oidcRes] =
+      const [ov, , tplRes, presetsRes, llmRes, credRes, plgRes, usrRes, admRes, oidcRes] =
         await Promise.all([
           apiFetch<OverviewData>('/api/overview'),
-          apiFetch<{ items: SandboxItem[] }>('/api/sandboxes?refresh=true'),
+          sandboxesReq,
           apiFetch<TemplateItem[]>('/api/templates'),
           apiFetch<{ items: RolePresetItem[] }>('/api/templates/presets').catch(() => ({
             items: [] as RolePresetItem[],
@@ -226,7 +260,6 @@ export function AdminConsoleView({
           apiFetch<OidcProviderItem[]>('/api/oidc-providers'),
         ])
       setOverview(ov)
-      setSandboxes(sbxRes.items)
       setTemplates(tplRes)
       setRolePresets(presetsRes.items || [])
       setLlmProfiles(llmRes)
@@ -235,15 +268,12 @@ export function AdminConsoleView({
       setUsers(usrRes)
       setAdmins(admRes)
       setOidcProviders(oidcRes)
-
-      const nextStats = await fetchRunningStats(sbxRes.items, '/api/sandboxes')
-      setStatsMap(nextStats)
     } catch (err: any) {
       notify(err.message || tRef.current('admin.loadFailed'), 'error')
     } finally {
       setLoading(false)
     }
-  }, [notify])
+  }, [notify, loadRunningStats])
 
   useEffect(() => {
     void refreshAll()
@@ -273,6 +303,7 @@ export function AdminConsoleView({
         role_description: found.role_description || found.description || '',
         role_sop: found.role_sop || '',
         llm_profile_id: found.default_llm_profile_id || prev.llm_profile_id,
+        credential_profile_ids: [...(found.default_credential_profile_ids || [])],
         image_repo: found.image_repo,
         image_tag: found.image_tag,
         cpu_limit: String(found.default_cpu_limit),
@@ -305,11 +336,18 @@ export function AdminConsoleView({
           role_title: sbxForm.role_title.trim() || null,
           role_description: sbxForm.role_description.trim() || null,
           role_sop: sbxForm.role_sop.trim() || null,
+          ownership_mode: sbxForm.ownership_mode,
+          maintainer_emails: sbxForm.maintainer_emails
+            .split(/[\s,;]+/)
+            .map((x) => x.trim().toLowerCase())
+            .filter(Boolean),
+          budget_action: sbxForm.budget_action,
           image_repo: sbxForm.image_repo.trim() || null,
           image_tag: sbxForm.image_tag.trim() || null,
           cpu_limit: parseFloat(sbxForm.cpu_limit) || 2.0,
           memory_limit: sbxForm.memory_limit.trim() || '4g',
           llm_profile_id: sbxForm.llm_profile_id || null,
+          credential_profile_ids: sbxForm.credential_profile_ids,
           init_repo_url: sbxForm.init_repo_url.trim() || null,
           auto_install_plugins: sbxForm.auto_install_plugins.trim(),
           init_script: sbxForm.init_script,
@@ -351,18 +389,36 @@ export function AdminConsoleView({
   const openEditSandboxModal = (sbx: SandboxItem) => {
     setEditSbx(sbx)
     setEditSbxForm({
+      display_name: sbx.display_name || '',
       role_title: sbx.role_title || '',
       role_description: sbx.role_description || '',
       role_sop: sbx.role_sop || '',
+      ownership_mode: sbx.ownership_mode || 'personal',
+      maintainer_emails: (sbx.maintainer_emails || []).join(', '),
       cpu_limit: String(sbx.cpu_limit),
       memory_limit: sbx.memory_limit,
       image_repo: sbx.image_repo || 'dsh-sandbox',
       image_tag: sbx.image_tag,
       llm_profile_id: sbx.llm_profile_id || '',
+      credential_profile_ids: [...(sbx.credential_profile_ids || [])],
       preview_auth_mode: sbx.preview_auth_mode || 'public',
       daily_token_limit: sbx.daily_token_limit ? String(sbx.daily_token_limit) : '',
+      budget_action: sbx.budget_action || 'block',
       auto_sleep_exempt: Boolean(sbx.auto_sleep_exempt),
     })
+  }
+
+  const handleRotateGatewayKey = async (sbx: SandboxItem) => {
+    try {
+      await apiFetch(`/api/sandboxes/${sbx.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ rotate_gateway_key: true }),
+      })
+      notify(t('sandbox.rotateGatewayKeyOk'))
+      await refreshAll()
+    } catch (err: any) {
+      notify(err.message, 'error')
+    }
   }
 
   const handleSaveSandboxSpec = async (e: React.FormEvent) => {
@@ -376,16 +432,24 @@ export function AdminConsoleView({
       await apiFetch(`/api/sandboxes/${editSbx.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
+          display_name: editSbxForm.display_name.trim(),
           role_title: editSbxForm.role_title.trim(),
           role_description: editSbxForm.role_description.trim(),
           role_sop: editSbxForm.role_sop,
+          ownership_mode: editSbxForm.ownership_mode,
+          maintainer_emails: editSbxForm.maintainer_emails
+            .split(/[\s,;]+/)
+            .map((x) => x.trim().toLowerCase())
+            .filter(Boolean),
           cpu_limit: parseFloat(editSbxForm.cpu_limit) || editSbx.cpu_limit,
           memory_limit: editSbxForm.memory_limit.trim() || editSbx.memory_limit,
           image_repo: editSbxForm.image_repo.trim(),
           image_tag: editSbxForm.image_tag.trim(),
           llm_profile_id: editSbxForm.llm_profile_id,
+          credential_profile_ids: editSbxForm.credential_profile_ids,
           preview_auth_mode: editSbxForm.preview_auth_mode,
           daily_token_limit: tokenLimitNum,
+          budget_action: editSbxForm.budget_action,
           auto_sleep_exempt: editSbxForm.auto_sleep_exempt,
         }),
       })
@@ -409,68 +473,6 @@ export function AdminConsoleView({
       notify(err.message || 'Seed failed', 'error')
     } finally {
       setSeedingPresets(false)
-    }
-  }
-
-  const openAssembleTeamModal = () => {
-    const runningIds = sandboxes.filter((s) => s.status === 'running').map((s) => s.id)
-    setTeamForm({
-      name: '',
-      description: '',
-      member_ids: runningIds,
-      moderator_id: runningIds[0] || '',
-    })
-    setTeamModalOpen(true)
-  }
-
-  const handleAssembleTeam = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (teamForm.member_ids.length < 2) return
-    setAssemblingTeam(true)
-    try {
-      const teamName = teamForm.name.trim()
-      const res = await apiFetch<{
-        ok: boolean
-        room_name?: string
-        team_name?: string
-        paired_members?: number
-        synced?: number
-      }>('/api/teams/assemble', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: teamName,
-          description: teamForm.description.trim() || null,
-          member_ids: teamForm.member_ids,
-          moderator_id: teamForm.moderator_id || null,
-        }),
-      })
-      if (teamForm.description.trim()) {
-        try {
-          await apiFetch('/api/teams/sync-shared', {
-            method: 'POST',
-            body: JSON.stringify({
-              team_name: teamName,
-              sandbox_ids: teamForm.member_ids,
-              file_name: 'PROJECT_BRIEF.md',
-              content: `# ${teamName}\n\n${teamForm.description.trim()}\n`,
-            }),
-          })
-        } catch {
-          // Non-fatal: TEAM_README.md is already written during assemble
-        }
-      }
-      notify(
-        t('dialog.team.success', {
-          name: res.room_name || res.team_name || teamName,
-          paired: res.paired_members ?? res.synced ?? teamForm.member_ids.length,
-        }),
-      )
-      setTeamModalOpen(false)
-      await refreshAll()
-    } catch (err: any) {
-      notify(err.message || 'Team assembly failed', 'error')
-    } finally {
-      setAssemblingTeam(false)
     }
   }
 
@@ -551,11 +553,12 @@ export function AdminConsoleView({
       role_description: '',
       role_sop: '',
       default_llm_profile_id: '',
+      default_credential_profile_ids: [],
       image_repo: overview?.default_image_repo || 'dsh-sandbox',
       image_tag: overview?.default_image_tag || 'latest',
       default_cpu_limit: '2.0',
       default_memory_limit: '4g',
-      auto_install_plugins: 'file-manager',
+      auto_install_plugins: pluginsData?.auto_install_default || DEFAULT_CORE_AUTO_INSTALL_PLUGINS,
       init_script: '',
       default_env_json: '{}',
     })
@@ -572,6 +575,7 @@ export function AdminConsoleView({
       role_description: tpl.role_description || '',
       role_sop: tpl.role_sop || '',
       default_llm_profile_id: tpl.default_llm_profile_id || '',
+      default_credential_profile_ids: [...(tpl.default_credential_profile_ids || [])],
       image_repo: tpl.image_repo,
       image_tag: tpl.image_tag,
       default_cpu_limit: String(tpl.default_cpu_limit),
@@ -594,6 +598,7 @@ export function AdminConsoleView({
         role_description: tplForm.role_description.trim() || null,
         role_sop: tplForm.role_sop.trim() || null,
         default_llm_profile_id: tplForm.default_llm_profile_id || null,
+        default_credential_profile_ids: tplForm.default_credential_profile_ids,
         image_repo: tplForm.image_repo.trim(),
         image_tag: tplForm.image_tag.trim(),
         default_cpu_limit: parseFloat(tplForm.default_cpu_limit) || 2.0,
@@ -663,7 +668,10 @@ export function AdminConsoleView({
           <span className="text-zinc-700 hidden sm:inline">·</span>
           <button
             type="button"
-            onClick={() => setActiveTab('templates')}
+            onClick={() => {
+              setActiveTab('workforce')
+              setWorkforceSubTab('templates')
+            }}
             className="hidden sm:inline-flex items-center gap-1.5 hover:text-zinc-200 transition-colors cursor-pointer"
           >
             <Layers className="h-4 w-4 text-amber-400" />
@@ -673,7 +681,10 @@ export function AdminConsoleView({
           <span className="text-zinc-700 hidden md:inline">·</span>
           <button
             type="button"
-            onClick={() => setActiveTab('plugins')}
+            onClick={() => {
+              setActiveTab('ops')
+              setOpsSubTab('plugins')
+            }}
             className="hidden md:inline-flex items-center gap-1.5 hover:text-zinc-200 transition-colors cursor-pointer"
           >
             <Package className="h-4 w-4 text-violet-400" />
@@ -689,7 +700,7 @@ export function AdminConsoleView({
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
             {t('common.refresh')}
           </Button>
-          {activeTab === 'templates' ? (
+          {activeTab === 'workforce' && workforceSubTab === 'templates' ? (
             <>
               <Button variant="outline" size="sm" disabled={seedingPresets} onClick={handleSeedRolePresets}>
                 <Sparkles className={cn('h-4 w-4 text-indigo-400', seedingPresets && 'animate-spin')} />
@@ -701,132 +712,189 @@ export function AdminConsoleView({
               </Button>
             </>
           ) : (
-            <>
-              <Button variant="outline" size="sm" disabled={sandboxes.length < 2} onClick={openAssembleTeamModal}>
-                <Users className="h-4 w-4 text-indigo-400" />
-                {t('admin.assembleTeamBtn')}
-              </Button>
-              <Button size="sm" onClick={() => openProvisionModalWithTemplate('agent-os')}>
-                <Plus className="h-4 w-4" />
-                {t('admin.provisionSandboxBtn')}
-              </Button>
-            </>
+            <Button size="sm" onClick={() => openProvisionModalWithTemplate('agent-os')}>
+              <Plus className="h-4 w-4" />
+              {t('admin.provisionSandboxBtn')}
+            </Button>
           )}
         </div>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-1 border-b border-zinc-800 pb-3">
-        {[
-          { id: 'sandboxes', label: t('admin.tabs.sandboxes'), icon: Terminal, count: sandboxes.length },
-          { id: 'templates', label: t('admin.tabs.templates'), icon: Layers, count: templates.length },
-          { id: 'plugins', label: t('admin.tabs.plugins'), icon: Package, count: pluginsData?.items.length ?? 0 },
-          { id: 'llm', label: t('admin.tabs.llm'), icon: KeyRound, count: llmProfiles.length },
-          { id: 'users', label: t('admin.tabs.users'), icon: Users, count: users.length },
-          { id: 'sso', label: t('admin.tabs.sso'), icon: ShieldCheck, count: enabledOidcCount },
-        ].map((tab) => {
-          const Icon = tab.icon
-          const active = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={cn(
-                'flex items-center gap-2 rounded-[var(--brand-radius-sm)] px-4 py-2 text-sm font-medium transition-all cursor-pointer',
-                active
-                  ? 'brand-tab-active shadow-xs'
-                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              <span>{tab.label}</span>
-              <span
+      {/* Consolidated Admin Section 1: Workforce & Templates */}
+      {activeTab === 'workforce' && (
+        <div className="space-y-4">
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
+            {(
+              [
+                ['sandboxes', t('admin.subtab.sandboxes')],
+                ['templates', t('admin.subtab.templates')],
+                ['playbooks', t('admin.subtab.playbooks')],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setWorkforceSubTab(k)}
                 className={cn(
-                  'rounded-full px-2 py-0.5 text-xs',
-                  active ? 'bg-black/20' : 'bg-zinc-800 text-zinc-400',
+                  'rounded-[var(--brand-radius-sm)] px-3.5 py-1.5 text-sm font-medium transition-colors cursor-pointer',
+                  workforceSubTab === k
+                    ? 'brand-tab-active'
+                    : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
                 )}
               >
-                {tab.count}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+                {label}
+              </button>
+            ))}
+          </div>
 
-      {/* Active Tab Panel */}
-      {activeTab === 'sandboxes' && (
-        <SandboxesTab
-          sandboxes={sandboxes}
-          statsMap={statsMap}
-          overview={overview}
-          onRefresh={refreshAll}
-          notify={notify}
-          onWorkforce={setWorkforceTarget}
-          onSandboxAction={handleSandboxAction}
-          onLogs={openLogsModal}
-          onEdit={openEditSandboxModal}
-          onClone={openCloneModal}
-          onBackup={setBackupTarget}
-          onDestroy={(sbx) => {
-            setDeleteSbxTarget(sbx)
-            setPurgeVolume(false)
-          }}
-        />
+          {workforceSubTab === 'sandboxes' && (
+            <SandboxesTab
+              sandboxes={sandboxes}
+              statsMap={statsMap}
+              overview={overview}
+              onRefresh={refreshAll}
+              notify={notify}
+              onWorkforce={setWorkforceTarget}
+              onSandboxAction={handleSandboxAction}
+              onLogs={openLogsModal}
+              onEdit={openEditSandboxModal}
+              onClone={openCloneModal}
+              onBackup={setBackupTarget}
+              onDestroy={(sbx) => {
+                setDeleteSbxTarget(sbx)
+                setPurgeVolume(false)
+              }}
+            />
+          )}
+
+          {workforceSubTab === 'templates' && (
+            <TemplatesTab
+              templates={templates}
+              overview={overview}
+              onProvisionWithTemplate={openProvisionModalWithTemplate}
+              onEditTemplate={openEditTemplateModal}
+              onDeleteTemplate={handleDeleteTemplate}
+            />
+          )}
+
+          {workforceSubTab === 'playbooks' && (
+            <PlaybooksView auth={auth} notify={notify} mode="admin-catalog" />
+          )}
+        </div>
       )}
 
-      {activeTab === 'templates' && (
-        <TemplatesTab
-          templates={templates}
-          overview={overview}
-          onProvisionWithTemplate={openProvisionModalWithTemplate}
-          onEditTemplate={openEditTemplateModal}
-          onDeleteTemplate={handleDeleteTemplate}
-        />
-      )}
-
-      {activeTab === 'plugins' && pluginsData && (
-        <PluginsTab
-          pluginsData={pluginsData}
-          copiedKey={copiedKey}
-          onCopy={copyText}
-          onRefresh={refreshAll}
-          notify={notify}
-        />
-      )}
-
+      {/* Consolidated Admin Section 2: LLM Gateway & Credential Vault */}
       {activeTab === 'llm' && (
         <LlmAndVaultTab
           llmProfiles={llmProfiles}
           credentialProfiles={credentialProfiles}
           sandboxes={sandboxes}
+          templates={templates}
           onRefresh={refreshAll}
           notify={notify}
         />
       )}
 
-      {activeTab === 'users' && (
-        <UsersTab
-          users={users}
-          admins={admins}
-          overview={overview}
-          enabledOidcCount={enabledOidcCount}
-          effectiveAllowLocalUser={effectiveAllowLocalUser}
-          onRefresh={refreshAll}
-          notify={notify}
-        />
+      {/* Consolidated Admin Section 3: Users, Admins & SSO/Branding */}
+      {activeTab === 'access' && (
+        <div className="space-y-4">
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
+            {(
+              [
+                ['users', t('admin.subtab.users')],
+                ['sso', t('admin.subtab.sso')],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setAccessSubTab(k)}
+                className={cn(
+                  'rounded-[var(--brand-radius-sm)] px-3.5 py-1.5 text-sm font-medium transition-colors cursor-pointer',
+                  accessSubTab === k
+                    ? 'brand-tab-active'
+                    : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {accessSubTab === 'users' && (
+            <UsersTab
+              users={users}
+              admins={admins}
+              overview={overview}
+              enabledOidcCount={enabledOidcCount}
+              effectiveAllowLocalUser={effectiveAllowLocalUser}
+              onRefresh={refreshAll}
+              onOpenAuditCenter={() => {
+                setActiveTab('ops')
+                setOpsSubTab('audit')
+              }}
+              notify={notify}
+            />
+          )}
+
+          {accessSubTab === 'sso' && (
+            <SsoAndBrandingTab
+              publicUrl={publicUrl}
+              overview={overview}
+              oidcProviders={oidcProviders}
+              copiedKey={copiedKey}
+              onCopy={copyText}
+              onRefresh={refreshAll}
+              onBrandingUpdated={onBrandingUpdated}
+              notify={notify}
+            />
+          )}
+        </div>
       )}
 
-      {activeTab === 'sso' && (
-        <SsoAndBrandingTab
-          publicUrl={publicUrl}
-          overview={overview}
-          oidcProviders={oidcProviders}
-          copiedKey={copiedKey}
-          onCopy={copyText}
-          onRefresh={refreshAll}
-          onBrandingUpdated={onBrandingUpdated}
-          notify={notify}
-        />
+      {/* Consolidated Admin Section 4: Platform Operations (Plugins, Notifications, Audit) */}
+      {activeTab === 'ops' && (
+        <div className="space-y-4">
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
+            {(
+              [
+                ['plugins', t('admin.subtab.plugins')],
+                ['notifications', t('admin.subtab.notifications')],
+                ['audit', t('admin.subtab.audit')],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setOpsSubTab(k)}
+                className={cn(
+                  'rounded-[var(--brand-radius-sm)] px-3.5 py-1.5 text-sm font-medium transition-colors cursor-pointer',
+                  opsSubTab === k
+                    ? 'brand-tab-active'
+                    : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {opsSubTab === 'plugins' && pluginsData && (
+            <PluginsTab
+              pluginsData={pluginsData}
+              copiedKey={copiedKey}
+              onCopy={copyText}
+              onRefresh={refreshAll}
+              notify={notify}
+            />
+          )}
+
+          {opsSubTab === 'notifications' && (
+            <NotificationsTab sandboxes={sandboxes} notify={notify} />
+          )}
+
+          {opsSubTab === 'audit' && <AuditCenterTab notify={notify} />}
+        </div>
       )}
 
       {/* Modals */}
@@ -841,7 +909,9 @@ export function AdminConsoleView({
         users={users}
         templates={templates}
         llmProfiles={llmProfiles}
+        credentialProfiles={credentialProfiles}
         effectiveAllowLocalUser={effectiveAllowLocalUser}
+        plugins={pluginsData?.items ?? []}
       />
 
       <TemplateEditorDialog
@@ -854,6 +924,8 @@ export function AdminConsoleView({
         onSubmit={handleSaveTemplate}
         rolePresets={rolePresets}
         overview={overview}
+        plugins={pluginsData?.items ?? []}
+        credentialProfiles={credentialProfiles}
       />
 
       <EditSandboxDialog
@@ -863,7 +935,9 @@ export function AdminConsoleView({
         setForm={setEditSbxForm}
         saving={savingSbx}
         onSubmit={handleSaveSandboxSpec}
+        onRotateGatewayKey={handleRotateGatewayKey}
         llmProfiles={llmProfiles}
+        credentialProfiles={credentialProfiles}
       />
 
       <WorkforceInspectorDialog
@@ -876,16 +950,6 @@ export function AdminConsoleView({
         onClose={() => setWorkforceTarget(null)}
         notify={notify}
         onSandboxUpdated={refreshAll}
-      />
-
-      <AssembleTeamDialog
-        open={teamModalOpen}
-        onOpenChange={setTeamModalOpen}
-        form={teamForm}
-        setForm={setTeamForm}
-        submitting={assemblingTeam}
-        onSubmit={handleAssembleTeam}
-        sandboxes={sandboxes}
       />
 
       <CloneEmployeeDialog

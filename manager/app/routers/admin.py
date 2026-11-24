@@ -36,6 +36,7 @@ from ..schemas import (
     UserUpdate,
 )
 from ..security import encrypt_secret, hash_password
+from ..services.llm_gateway import generate_sandbox_gateway_key
 from ..services import (
     ROLE_TEMPLATE_PRESETS,
     NotFoundError,
@@ -299,6 +300,10 @@ def create_profile(
         supports_image=payload.supports_image,
         reasoning_effort=payload.reasoning_effort,
         thinking_format=payload.thinking_format,
+        gateway_enabled=payload.gateway_enabled,
+        input_price_per_1m=payload.input_price_per_1m,
+        output_price_per_1m=payload.output_price_per_1m,
+        fallback_llm_profile_id=payload.fallback_llm_profile_id,
     )
     return profile
 
@@ -315,7 +320,8 @@ def patch_profile(
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
     raw_key = payload.api_key.strip() if isinstance(payload.api_key, str) else None
     ciphertext = encrypt_secret(raw_key) if raw_key else None
-    return update_llm_profile(
+    fields_set = set(payload.model_fields_set)
+    updated = update_llm_profile(
         db,
         profile,
         name=payload.name,
@@ -329,8 +335,40 @@ def patch_profile(
         supports_image=payload.supports_image,
         reasoning_effort=payload.reasoning_effort,
         thinking_format=payload.thinking_format,
-        fields_set=set(payload.model_fields_set),
+        gateway_enabled=payload.gateway_enabled,
+        input_price_per_1m=payload.input_price_per_1m,
+        output_price_per_1m=payload.output_price_per_1m,
+        fallback_llm_profile_id=payload.fallback_llm_profile_id,
+        fields_set=fields_set,
     )
+    if fields_set.intersection(
+        {"gateway_enabled", "base_url", "model", "api_protocol", "api_key", "clear_api_key"}
+    ):
+        bound_sandboxes = list(
+            db.scalars(
+                select(Sandbox).where(
+                    Sandbox.deleted_at.is_(None),
+                    Sandbox.llm_profile_id == updated.id,
+                )
+            ).all()
+        )
+        if bound_sandboxes:
+            docker_svc = resolve_docker()
+            need_commit = False
+            for sbx in bound_sandboxes:
+                if updated.gateway_enabled and not getattr(sbx, "gateway_api_key", None):
+                    sbx.gateway_api_key = generate_sandbox_gateway_key()
+                    need_commit = True
+                try:
+                    if sbx.status == "running" and hasattr(docker_svc, "sync_llm_profile"):
+                        docker_svc.sync_llm_profile(
+                            sbx, updated, set_as_default=True, replace_managed=False
+                        )
+                except Exception:
+                    pass
+            if need_commit:
+                db.commit()
+    return updated
 
 
 @router.get("/api/llm-profiles", response_model=list[LlmProfileOut])
@@ -380,6 +418,9 @@ def push_llm_profile_to_sandboxes(
     docker_svc = resolve_docker()
     results = []
     for sbx in sandboxes:
+        if getattr(profile, "gateway_enabled", False) and not getattr(sbx, "gateway_api_key", None):
+            sbx.gateway_api_key = generate_sandbox_gateway_key()
+            db.flush()
         try:
             res = docker_svc.sync_llm_profile(
                 sbx,
@@ -508,6 +549,12 @@ def api_push_credential_profile(
     query = select(Sandbox).where(Sandbox.deleted_at.is_(None))
     if req.sandbox_ids:
         query = query.where(Sandbox.id.in_(req.sandbox_ids))
+    elif req.template_keys:
+        clean_tpls = [k.strip() for k in req.template_keys if k.strip()]
+        query = query.where(
+            Sandbox.template.in_(clean_tpls),
+            Sandbox.status == "running",
+        )
     else:
         query = query.where(Sandbox.status == "running")
     targets = list(db.scalars(query.order_by(Sandbox.created_at)).all())

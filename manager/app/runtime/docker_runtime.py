@@ -319,6 +319,37 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
         except APIError:
             return "unknown"
 
+    def statuses(
+        self, sandboxes: list[Sandbox], max_workers: int = 16
+    ) -> dict[str, str]:
+        """Fetch status for all sandboxes in one Docker containers.list(all=True) call."""
+        if not sandboxes:
+            return {}
+        try:
+            containers = self.client.containers.list(all=True)
+        except Exception:
+            return super().statuses(sandboxes, max_workers=max_workers)
+
+        by_id: dict[str, str] = {}
+        by_name: dict[str, str] = {}
+        for c in containers:
+            cid = getattr(c, "id", None)
+            cname = getattr(c, "name", None)
+            cst = str(getattr(c, "status", None) or "unknown")
+            if isinstance(cid, str) and cid:
+                by_id[cid] = cst
+            if isinstance(cname, str) and cname:
+                by_name[cname.lstrip("/")] = cst
+
+        out: dict[str, str] = {}
+        for sbx in sandboxes:
+            if sbx.container_id and sbx.container_id in by_id:
+                out[sbx.id] = by_id[sbx.container_id]
+            else:
+                cname = self.container_name(sbx)
+                out[sbx.id] = by_name.get(cname, "missing")
+        return out
+
     def logs(self, sandbox: Sandbox, tail: int = 200) -> str:
         container = self.get(sandbox)
         raw = container.logs(tail=tail, timestamps=True)
@@ -340,8 +371,10 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
         ec, out = container.exec_run(cmd, **kwargs)
         return int(ec), (out or b"")
 
-    def stats(self, sandbox: Sandbox) -> dict[str, float | int | str | None]:
-        """Return live CPU %, memory usage, and workspace disk stats for a running sandbox."""
+    def stats(
+        self, sandbox: Sandbox, *, include_disk: bool = True
+    ) -> dict[str, float | int | str | None]:
+        """Return live CPU %, memory usage, and optional workspace disk stats for a running sandbox."""
         container = self.get(sandbox)
         raw = container.stats(stream=False)
         mem_stats = raw.get("memory_stats") or {}
@@ -361,7 +394,17 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
         if system_delta > 0 and cpu_delta > 0:
             cpu_percent = round((cpu_delta / system_delta) * online_cpus * 100.0, 2)
 
-        disk = self.workspace_disk_usage(sandbox)
+        disk = (
+            self.workspace_disk_usage(sandbox, assume_running=True)
+            if include_disk
+            else {
+                "disk_usage_bytes": None,
+                "disk_usage_mb": None,
+                "disk_fs_total_mb": None,
+                "disk_fs_avail_mb": None,
+                "disk_fs_used_percent": None,
+            }
+        )
         return {
             "cpu_percent": cpu_percent,
             "memory_usage_bytes": mem_usage,

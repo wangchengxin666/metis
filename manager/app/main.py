@@ -24,7 +24,22 @@ from .deps import (
     settings,
 )
 from .oidc import probe_oidc_discovery
-from .routers import admin, auth, plugins, sandboxes, system, workforce
+from .routers import (
+    admin,
+    auth,
+    integrations,
+    llm_gateway,
+    memory_hub,
+    notifications,
+    playbooks,
+    plugins,
+    sandboxes,
+    scorecard,
+    system,
+    teams,
+    workforce,
+    workspace,
+)
 from .scheduler import BackgroundWorker
 from .services import (
     ensure_bootstrap_admin,
@@ -32,6 +47,8 @@ from .services import (
     ensure_default_templates,
     list_oidc_providers,
 )
+from .services.llm_gateway import ensure_sandbox_gateway_keys
+from .services.playbooks import ensure_default_playbooks
 
 # Backwards-compatible factory references (also monkeypatched in pytest suites)
 get_docker = _default_get_docker
@@ -56,6 +73,8 @@ async def lifespan(_app: FastAPI):
     with SessionLocal() as db:
         ensure_bootstrap_admin(db, settings.manager_admin_email)
         ensure_default_templates(db, settings)
+        ensure_default_playbooks(db)
+        ensure_sandbox_gateway_keys(db)
         ensure_bootstrap_oidc_provider(db, settings)
         if settings.manager_auth_mode == "oidc":
             enabled_providers = list_oidc_providers(db, enabled_only=True)
@@ -104,6 +123,14 @@ app.include_router(system.router)
 app.include_router(plugins.router)
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(notifications.router)
+app.include_router(llm_gateway.router)
+app.include_router(teams.router)
+app.include_router(playbooks.router)
+app.include_router(scorecard.router)
+app.include_router(memory_hub.router)
+app.include_router(integrations.router)
+app.include_router(workspace.router)
 app.include_router(workforce.router)
 app.include_router(sandboxes.router)
 
@@ -121,9 +148,14 @@ def _serve_spa():
 @app.get("/", include_in_schema=False)
 @app.get("/login", include_in_schema=False)
 @app.get("/auth/login", include_in_schema=False)
+@app.get("/projects", include_in_schema=False)
+@app.get("/projects/{subpath:path}", include_in_schema=False)
+@app.get("/inbox", include_in_schema=False)
+@app.get("/workforce", include_in_schema=False)
+@app.get("/analytics", include_in_schema=False)
 @app.get("/admin", include_in_schema=False)
-@app.get("/my", include_in_schema=False)
-def spa_routes():
+@app.get("/admin/{subpath:path}", include_in_schema=False)
+def spa_routes(subpath: str | None = None):
     return _serve_spa()
 
 

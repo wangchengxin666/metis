@@ -70,6 +70,9 @@ export interface AuthMe {
   brand_favicon?: string
   brand_theme?: BrandThemeTokens
   sandbox_runtime?: string
+  is_team_lead?: boolean
+  lead_team_ids?: string[]
+  teams?: Array<{ id: string; slug: string; name: string; role: string }>
 }
 
 export interface SandboxItem {
@@ -89,6 +92,7 @@ export interface SandboxItem {
   auto_install_plugins: string | null
   llm_profile_id: string | null
   llm_profile_name: string | null
+  credential_profile_ids?: string[]
   cpu_limit: number
   memory_limit: string
   auto_sleep_exempt?: boolean
@@ -98,6 +102,13 @@ export interface SandboxItem {
   has_webhook_token?: boolean
   webhook_url?: string | null
   daily_token_limit?: number | null
+  budget_action?: 'block' | 'downgrade' | 'warn'
+  has_gateway_api_key?: boolean
+  ownership_mode?: 'personal' | 'shared'
+  maintainer_emails?: string[]
+  team_ids?: string[]
+  team_names?: string[]
+  can_open_ide?: boolean
   project_team_name?: string | null
   status: string
   url: string
@@ -124,7 +135,9 @@ export interface TemplateItem {
   role_title?: string | null
   role_description?: string | null
   role_sop?: string | null
+  sop_version?: number
   default_llm_profile_id?: string | null
+  default_credential_profile_ids?: string[]
   image_repo: string
   image_tag: string
   default_cpu_limit: number
@@ -264,6 +277,10 @@ export interface LlmProfileItem {
   reasoning_effort?: string | null
   thinking_format?: string | null
   has_api_key?: boolean
+  gateway_enabled?: boolean
+  input_price_per_1m?: number | null
+  output_price_per_1m?: number | null
+  fallback_llm_profile_id?: string | null
 }
 
 export interface PluginIndexSource {
@@ -351,4 +368,496 @@ export interface AdminItem {
   display_name: string | null
   active: boolean
   created_at: string
+}
+
+export interface WorkspaceInboxTask {
+  id: string
+  room_id: string
+  room_name: string
+  thread_id?: string
+  thread_title?: string
+  title: string
+  description: string
+  summary: string
+  status: string
+  priority: string
+  assignee_slug: string
+  approval_required: boolean
+  approval_status: string
+  approval_decided_by?: string
+  approval_note?: string
+  artifacts: string[]
+  created_at?: number | string | null
+  updated_at?: number | string | null
+  sandbox_id: string
+  sandbox_slug: string
+  sandbox_display_name: string | null
+  role_title?: string | null
+  project_team_id?: string | null
+  project_team_name?: string | null
+  sandbox_status: string
+  sandbox_online: boolean
+}
+
+export interface WorkspacePlaybookApproval {
+  id: string
+  run_id: string
+  run_title: string
+  playbook_name: string
+  stage_index: number
+  stage_name: string
+  role_hint: string
+  sandbox_id: string | null
+  sandbox_slug: string
+  team_id: string | null
+  project_team_name?: string | null
+  output_summary: string
+  deliverable_hint: string
+  artifacts: string[]
+  started_at?: string | null
+  updated_at?: string | null
+}
+
+export interface WorkspaceTaskGroup {
+  key: string
+  room_id: string
+  room_name: string
+  thread_id: string
+  title: string
+  project_team_id?: string | null
+  project_team_name?: string | null
+  status: 'blocked' | 'pending_approval' | 'active' | 'done' | 'cancelled'
+  counts: {
+    total: number
+    done: number
+    active: number
+    blocked: number
+    cancelled: number
+    pending_approvals: number
+  }
+  participants: Array<{
+    sandbox_id: string
+    sandbox_slug: string
+    role_title?: string | null
+  }>
+  updated_at?: number | null
+  tasks: WorkspaceInboxTask[]
+}
+
+export interface WorkspaceSandboxBadge {
+  pending_approvals: number
+  active_tasks: number
+  blocked_tasks: number
+  exposed_apps: number
+  online: boolean
+}
+
+export interface WorkspaceInboxData {
+  summary: {
+    pending_approvals_count: number
+    mesh_approvals_count?: number
+    playbook_approvals_count?: number
+    blocked_tasks_count: number
+    action_required_count?: number
+    active_tasks_count: number
+    done_tasks_count: number
+    active_groups_count?: number
+    done_groups_count?: number
+    running_sandboxes: number
+    total_sandboxes: number
+    exposed_apps_count: number
+    last_synced_at: string | null
+  }
+  pending_approvals: WorkspaceInboxTask[]
+  playbook_approvals?: WorkspacePlaybookApproval[]
+  blocked_tasks: WorkspaceInboxTask[]
+  task_groups?: WorkspaceTaskGroup[]
+  tasks: WorkspaceInboxTask[]
+  sandbox_badges: Record<string, WorkspaceSandboxBadge>
+}
+
+export interface WorkspaceDeliverableApp {
+  name: string
+  url: string
+  mount_path: string
+  target: string
+  sandbox_id: string
+  sandbox_slug: string
+  sandbox_display_name: string | null
+  role_title?: string | null
+  project_team_name?: string | null
+  preview_auth_mode: string
+  sandbox_status: string
+  online: boolean
+}
+
+export interface WorkspaceDeliverableArtifact {
+  id: string
+  value: string
+  kind: 'url' | 'pr' | 'branch' | 'file'
+  task_id: string
+  task_title: string
+  task_status: string
+  room_name: string
+  sandbox_id: string
+  sandbox_slug: string
+  sandbox_display_name: string | null
+  role_title?: string | null
+  project_team_name?: string | null
+  updated_at?: number | string | null
+}
+
+export interface WorkspaceDeliverablesData {
+  apps: WorkspaceDeliverableApp[]
+  artifacts: WorkspaceDeliverableArtifact[]
+  total_apps: number
+  total_artifacts: number
+  last_synced_at: string | null
+}
+
+export type NotificationChannelType = 'feishu' | 'wecom' | 'slack' | 'email' | 'webhook'
+export type NotificationEventType =
+  | 'approval.pending'
+  | 'task.blocked'
+  | 'task.done'
+  | 'sandbox.unhealthy'
+  | 'budget.warning'
+  | 'budget.exceeded'
+
+export interface NotificationChannelItem {
+  id: string
+  name: string
+  channel_type: NotificationChannelType
+  enabled: boolean
+  target_hint?: string | null
+  has_secret: boolean
+  events: NotificationEventType[]
+  scope_sandbox_ids: string[]
+  smtp_host?: string | null
+  smtp_port?: number | null
+  smtp_from?: string | null
+  smtp_to: string[]
+  smtp_use_tls: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface NotificationDeliveryItem {
+  id: string
+  channel_id: string
+  channel_name: string
+  channel_type: string
+  event_type: string
+  dedupe_key?: string | null
+  sandbox_slug?: string | null
+  title: string
+  status: 'sent' | 'failed'
+  response_code?: number | null
+  error_detail?: string | null
+  created_at: string
+}
+
+export interface AuditLogItem {
+  id: string
+  actor: string | null
+  action: string
+  category?: string | null
+  sandbox_slug?: string | null
+  target: string | null
+  detail: string | null
+  created_at: string
+}
+
+export interface AuditLogPageData {
+  items: AuditLogItem[]
+  total: number
+  limit: number
+  offset: number
+  categories: string[]
+  actions: string[]
+}
+
+export interface TeamMemberItem {
+  email: string
+  role: 'lead' | 'member'
+  created_at?: string | null
+}
+
+export interface TeamSandboxItem {
+  id: string
+  slug: string
+  display_name: string | null
+  owner_email: string
+  role_title?: string | null
+  ownership_mode: 'personal' | 'shared'
+  status: string
+  is_moderator: boolean
+}
+
+export interface TeamItem {
+  id: string
+  slug: string
+  name: string
+  description?: string | null
+  department?: string | null
+  daily_token_budget?: number | null
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  status?: 'active' | 'archived'
+  mesh_room_id?: string | null
+  my_role?: string | null
+  can_manage: boolean
+  active_runs_count?: number
+  total_runs_count?: number
+  pending_approvals_count?: number
+  period_cost_usd?: number
+  members: TeamMemberItem[]
+  sandboxes: TeamSandboxItem[]
+}
+
+export interface ProvisionRequestItem {
+  id: string
+  requester_email: string
+  team_id?: string | null
+  team_name?: string | null
+  template_key: string
+  template_name: string
+  ownership_mode: 'personal' | 'shared'
+  desired_slug?: string | null
+  role_title?: string | null
+  reason?: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  reviewed_by?: string | null
+  review_note?: string | null
+  provisioned_sandbox_id?: string | null
+  provisioned_slug?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface FinOpsSummaryData {
+  today: {
+    tokens: number
+    cost: number
+    requests: number
+  }
+  period: {
+    days: number
+    tokens: number
+    input_tokens: number
+    output_tokens: number
+    cache_read_tokens: number
+    cost: number
+    requests: number
+    fallback_requests: number
+  }
+  daily_series: Array<{
+    date: string
+    tokens: number
+    cost: number
+    requests: number
+  }>
+  by_sandbox: Array<{
+    sandbox_id: string
+    slug: string
+    display_name: string | null
+    role_title?: string | null
+    ownership_mode: string
+    today_tokens: number
+    today_cost: number
+    daily_limit?: number | null
+    budget_percent?: number | null
+    budget_action: string
+    period_tokens: number
+    period_cost: number
+    requests: number
+  }>
+  by_team: Array<{
+    team_id: string
+    team_name: string
+    department?: string | null
+    today_tokens: number
+    daily_budget?: number | null
+    period_tokens: number
+    period_cost: number
+    requests: number
+  }>
+  by_model: Array<{
+    model: string
+    api_protocol: string
+    tokens: number
+    cost: number
+    requests: number
+  }>
+}
+
+export interface PlaybookInputField {
+  key: string
+  label: string
+  type: 'text' | 'textarea' | 'select' | 'file'
+  required?: boolean
+  placeholder?: string
+  options?: string[]
+}
+
+export interface PlaybookStageSpec {
+  id: string
+  name: string
+  role_hint?: string
+  template_key_hint?: string
+  parallel_group?: string | null
+  approval_required?: boolean
+  prompt_template: string
+  deliverable_hint?: string
+}
+
+export interface PlaybookItem {
+  id: string
+  key: string
+  name: string
+  category: 'engineering' | 'analytics' | 'legal' | 'operations' | 'custom'
+  description?: string | null
+  is_builtin: boolean
+  enabled: boolean
+  estimated_manual_hours: number
+  input_fields: PlaybookInputField[]
+  stages: PlaybookStageSpec[]
+  deliverables_checklist: string[]
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface PlaybookStepRunItem {
+  id: string
+  stage_index: number
+  stage_id: string
+  stage_name: string
+  role_hint?: string | null
+  parallel_group?: string | null
+  sandbox_id?: string | null
+  sandbox_slug?: string | null
+  room_id?: string | null
+  task_id?: string | null
+  approval_required: boolean
+  approval_status?: string | null
+  approval_note?: string | null
+  approval_decided_by?: string | null
+  status: 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'rejected' | 'skipped'
+  deliverable_hint?: string | null
+  output_summary?: string | null
+  artifacts: string[]
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+export interface PlaybookRunItem {
+  id: string
+  playbook_id: string
+  playbook_key: string
+  playbook_name: string
+  team_id?: string | null
+  execution_mode?: 'project_group' | 'isolated'
+  title: string
+  inputs: Record<string, string>
+  uploaded_files: Array<{ sandbox_id?: string; slug?: string; path: string }>
+  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled'
+  current_stage_index: number
+  progress_done: number
+  progress_total: number
+  created_by: string
+  created_at?: string | null
+  updated_at?: string | null
+  completed_at?: string | null
+  steps: PlaybookStepRunItem[]
+  artifacts: Array<{ stage_name: string; value: string }>
+}
+
+export interface ScorecardData {
+  period_days: number
+  hourly_rate_usd: number
+  generated_at: string
+  kpis: {
+    total_employees: number
+    total_tasks: number
+    done_tasks: number
+    active_tasks: number
+    blocked_tasks: number
+    completion_rate_pct: number | null
+    blocked_rate_pct: number | null
+    approvals_approved: number
+    approvals_rejected: number
+    approvals_pending: number
+    first_pass_approval_rate_pct: number | null
+    avg_cycle_hours: number | null
+    playbook_runs_total: number
+    playbook_runs_completed: number
+    total_tokens: number
+    total_cost_usd: number
+    cost_per_task_usd: number | null
+    estimated_hours_saved: number
+    estimated_value_usd: number
+    roi_multiple: number | null
+  }
+  by_sandbox: Array<{
+    sandbox_id: string
+    slug: string
+    display_name: string
+    role_title?: string | null
+    ownership_mode: string
+    total_tasks: number
+    done_tasks: number
+    blocked_tasks: number
+    completion_rate_pct: number | null
+    tokens: number
+    cost_usd: number
+    cost_per_task_usd: number | null
+    estimated_hours_saved: number
+  }>
+  by_team: Array<{
+    team_id: string
+    team_name: string
+    department?: string | null
+    employees_count: number
+    total_tasks: number
+    done_tasks: number
+    blocked_tasks: number
+    cost_usd: number
+    estimated_hours_saved: number
+  }>
+}
+
+export interface SandboxMemoryItem {
+  id: string
+  title: string
+  category: string
+  source: string
+  summary: string
+  content: string
+  tags: string[]
+  pinned: boolean
+  enabled: boolean
+  updated_at?: number | string | null
+}
+
+export interface MemoryPromotionItem {
+  id: string
+  source_sandbox_id: string
+  source_sandbox_slug: string
+  memory_id: string
+  memory_title: string
+  memory_category: string
+  promoted_content: string
+  target_type: 'template_sop' | 'team_shared_doc'
+  target_template_id?: string | null
+  target_template_name?: string | null
+  target_team_id?: string | null
+  target_team_name?: string | null
+  target_file_name?: string | null
+  sop_version?: number | null
+  rollout_sandbox_ids: string[]
+  rollout_synced_count: number
+  promoted_by: string
+  created_at?: string | null
 }

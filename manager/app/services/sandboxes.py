@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import io
+import json
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from ..config import DEFAULT_AUTO_INSTALL_PLUGINS, Settings
 from ..docker_service import BaseSandboxRuntime, DockerService, SandboxRuntimeError
-from ..models import LlmProfile, Sandbox, User
+from ..models import LlmProfile, Sandbox, Team, TeamSandbox, User
 from ..security import hash_password
 from .common import (
     Conflict,
@@ -20,8 +22,10 @@ from .common import (
     unique_slug,
     utcnow,
 )
+from .llm_gateway import generate_sandbox_gateway_key
 from .policies import get_branding_config, get_extra_plugin_indexes
 from .templates import get_template_by_key
+from .vault import sync_bound_credentials
 
 
 def _attach_extra_plugin_indexes(db: Session, sandbox: Sandbox) -> None:
@@ -69,10 +73,22 @@ def create_sandbox(
     role_sop: str | None = None,
     preview_auth_mode: str = "public",
     daily_token_limit: int | None = None,
+    budget_action: str = "block",
+    ownership_mode: str = "personal",
+    maintainer_emails: list[str] | None = None,
+    team_ids: list[str] | None = None,
+    credential_profile_ids: list[str] | None = None,
+    set_new_user_display_name: bool = True,
 ) -> Sandbox:
     email = email.strip().lower()
+    clean_display_name = display_name.strip() if display_name and display_name.strip() else None
     pw_hash = hash_password(initial_password) if initial_password else None
-    user = get_or_create_user(db, email, display_name, password_hash=pw_hash)
+    user = get_or_create_user(
+        db,
+        email,
+        clean_display_name if set_new_user_display_name else None,
+        password_hash=pw_hash,
+    )
     final_slug = unique_slug(db, email, slug)
 
     tpl_key = (template or "agent-os").strip()
@@ -80,6 +96,11 @@ def create_sandbox(
 
     effective_llm_id = llm_profile_id or (
         tpl_obj.default_llm_profile_id if tpl_obj else None
+    )
+    resolved_cred_ids = (
+        list(dict.fromkeys(str(x).strip() for x in credential_profile_ids if str(x).strip()))
+        if credential_profile_ids is not None
+        else (tpl_obj.default_credential_profile_ids if tpl_obj else [])
     )
     llm_profile: LlmProfile | None = None
     if effective_llm_id:
@@ -139,6 +160,7 @@ def create_sandbox(
     sandbox = Sandbox(
         user_id=user.id,
         slug=final_slug,
+        display_name=clean_display_name,
         volume_name=f"dsh-{final_slug}-home",
         image_repo=resolved_repo,
         image_tag=resolved_tag,
@@ -153,14 +175,42 @@ def create_sandbox(
         cpu_limit=resolved_cpu,
         memory_limit=resolved_mem,
         auto_sleep_exempt=auto_sleep_exempt,
-        preview_auth_mode=preview_auth_mode if preview_auth_mode in {"public", "authenticated"} else "public",
+        preview_auth_mode=(
+            preview_auth_mode
+            if preview_auth_mode in {"public", "authenticated", "team"}
+            else "public"
+        ),
+        ownership_mode=(
+            ownership_mode if ownership_mode in {"personal", "shared"} else "personal"
+        ),
+        maintainer_emails_json=json.dumps(
+            list(
+                dict.fromkeys(
+                    str(e).strip().lower()
+                    for e in (maintainer_emails or [])
+                    if str(e).strip()
+                )
+            )
+        ),
         webhook_token=secrets.token_hex(16),
+        gateway_api_key=generate_sandbox_gateway_key(),
         daily_token_limit=daily_token_limit,
+        budget_action=(
+            budget_action if budget_action in {"block", "downgrade", "warn"} else "block"
+        ),
+        credential_profile_ids_json=json.dumps(resolved_cred_ids),
         llm_profile_id=llm_profile.id if llm_profile else None,
         status="creating",
     )
     db.add(sandbox)
     db.flush()
+    if team_ids:
+        clean_tids = list(dict.fromkeys(str(t).strip() for t in team_ids if str(t).strip()))
+        matched_teams = list(db.scalars(select(Team).where(Team.id.in_(clean_tids))).all())
+        for idx_t, tm in enumerate(matched_teams):
+            db.add(TeamSandbox(team_id=tm.id, sandbox_id=sandbox.id, is_moderator=False))
+            if idx_t == 0 and not sandbox.project_team_name:
+                sandbox.project_team_name = tm.name
     sandbox.user = user
     sandbox.llm_profile = llm_profile
     db.commit()
@@ -196,11 +246,30 @@ def create_sandbox(
         except Exception:
             pass
 
+    if resolved_cred_ids and hasattr(docker, "sync_credential_profile"):
+        try:
+            sync_bound_credentials(db, docker, sandbox)
+        except Exception:
+            pass
+
     sandbox.status = "running"
     sandbox.last_seen_at = utcnow()
     audit(db, "sandbox.create", target=sandbox.id, detail=f"slug={sandbox.slug}")
     db.commit()
     db.refresh(sandbox)
+
+    if team_ids:
+        from .teams import sync_project_mesh_group
+
+        clean_tids = list(dict.fromkeys(str(t).strip() for t in team_ids if str(t).strip()))
+        for tid in clean_tids:
+            tm = db.get(Team, tid)
+            if tm is not None:
+                try:
+                    sync_project_mesh_group(db, tm, docker, actor=user.email)
+                except Exception:
+                    pass
+
     return sandbox
 
 
@@ -237,6 +306,50 @@ def refresh_status(db: Session, docker: DockerService, sandbox: Sandbox) -> Sand
     sandbox.last_seen_at = utcnow()
     db.commit()
     return sandbox
+
+
+def refresh_statuses(
+    db: Session, docker: DockerService, sandboxes: list[Sandbox], max_workers: int = 16
+) -> list[Sandbox]:
+    """Refresh many sandboxes' runtime status in batch with a single DB commit.
+
+    Delegates to ``docker.statuses(...)`` (single ``containers.list`` on Docker,
+    concurrent probes on runtimes without a bulk API) so refreshing N sandboxes
+    takes one round-trip instead of N serial inspects.
+    """
+    if not sandboxes:
+        return sandboxes
+
+    status_map: dict[str, str] | None = None
+    if hasattr(docker, "statuses"):
+        try:
+            status_map = docker.statuses(sandboxes, max_workers=max_workers)
+        except Exception:
+            status_map = None
+
+    if status_map is None:
+        def _probe(sbx: Sandbox) -> str:
+            try:
+                return docker.status(sbx)
+            except Exception:
+                return "unknown"
+
+        if len(sandboxes) == 1:
+            results = [_probe(sandboxes[0])]
+        else:
+            workers = max(1, min(max_workers, len(sandboxes)))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(_probe, sandboxes))
+        status_map = {sbx.id: st for sbx, st in zip(sandboxes, results)}
+
+    now = utcnow()
+    for sbx in sandboxes:
+        current = status_map.get(sbx.id, "unknown")
+        if current not in {"unknown"}:
+            sbx.status = current
+        sbx.last_seen_at = now
+    db.commit()
+    return sandboxes
 
 
 def start_sandbox(db: Session, docker: DockerService, sandbox_id: str) -> Sandbox:
@@ -401,7 +514,8 @@ def clone_sandbox(
         docker,
         email=email,
         slug=slug,
-        display_name=display_name or source.user.display_name,
+        display_name=display_name or source.effective_display_name,
+        set_new_user_display_name=False,
         image_repo=source.image_repo,
         image_tag=source.image_tag,
         cpu_limit=source.cpu_limit,
@@ -415,6 +529,11 @@ def clone_sandbox(
         role_title=role_title if role_title is not None else source.role_title,
         role_description=source.role_description,
         role_sop=source.role_sop,
+        preview_auth_mode=source.preview_auth_mode or "public",
+        ownership_mode=getattr(source, "ownership_mode", "personal") or "personal",
+        maintainer_emails=source.maintainer_emails,
+        budget_action=getattr(source, "budget_action", "block") or "block",
+        credential_profile_ids=source.credential_profile_ids,
     )
     if source.status == "running":
         tmp = tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024)

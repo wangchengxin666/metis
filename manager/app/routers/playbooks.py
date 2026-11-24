@@ -24,24 +24,32 @@ from ..deps import (
 from ..models import Playbook, PlaybookRun, PlaybookStepRun, TeamMember
 from ..schemas import (
     PlaybookCreate,
+    PlaybookDraftRequest,
     PlaybookImportPayload,
+    PlaybookRunCancelRequest,
     PlaybookStepDecisionRequest,
+    PlaybookStepRetryRequest,
+    PlaybookStepSkipRequest,
     PlaybookUpdate,
 )
 from ..services.playbooks import (
+    cancel_playbook_run,
     create_playbook,
     decide_playbook_step,
     delete_playbook,
     export_playbook_declarative,
+    generate_playbook_draft_with_llm,
     import_playbook_declarative,
     list_playbooks,
+    retry_playbook_step,
     serialize_playbook,
     serialize_playbook_run,
+    skip_playbook_step,
     start_playbook_run,
     sync_playbook_run_progress,
     update_playbook,
 )
-from ..services.teams import list_accessible_sandboxes
+from ..services.teams import get_user_teams_summary, list_accessible_sandboxes
 
 router = APIRouter()
 
@@ -58,15 +66,54 @@ def _resolve_actor(request: Request, db: Session) -> tuple[str, bool]:
     return email, False
 
 
+def _require_playbook_author(request: Request, db: Session) -> tuple[str, bool]:
+    """Allow both Platform Admins and Team Leads to create/manage custom Playbooks."""
+    actor, is_admin = _resolve_actor(request, db)
+    if is_admin:
+        return actor, True
+    is_lead, _lead_ids, _teams = get_user_teams_summary(db, actor)
+    if is_lead:
+        return actor, False
+    raise HTTPException(status_code=403, detail="仅平台管理员或项目负责人可创建和管理 Playbook 模板")
+
+
+def _require_playbook_manage(pb: Playbook, actor: str, is_admin: bool) -> None:
+    if is_admin:
+        return
+    if pb.is_builtin or (pb.created_by or "").strip().lower() != actor.strip().lower():
+        raise HTTPException(status_code=403, detail="仅可修改或删除自己创建的自定义 Playbook")
+
+
 @router.get("/api/playbooks")
 def api_list_playbooks(
     request: Request,
     include_disabled: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    _actor, is_admin = _resolve_actor(request, db)
-    items = list_playbooks(db, enabled_only=not (include_disabled and is_admin))
+    actor, is_admin = _resolve_actor(request, db)
+    can_author = is_admin or get_user_teams_summary(db, actor)[0]
+    items = list_playbooks(db, enabled_only=not (include_disabled and can_author))
     return {"items": [serialize_playbook(pb) for pb in items]}
+
+
+@router.post("/api/playbooks/ai-draft")
+def api_ai_draft_playbook(
+    payload: PlaybookDraftRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Generate a structured, editable Playbook draft from a plain-language goal via the configured LLM."""
+    _require_playbook_author(request, db)
+    try:
+        return generate_playbook_draft_with_llm(
+            db,
+            goal=payload.goal,
+            category=payload.category,
+            stage_count=payload.stage_count,
+            llm_profile_id=payload.llm_profile_id,
+        )
+    except Exception as exc:
+        raise _manager_error(exc) from exc
 
 
 @router.post("/api/playbooks", status_code=201)
@@ -74,9 +121,8 @@ def api_create_playbook(
     payload: PlaybookCreate,
     request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api),
 ):
-    actor = session_email(request) or settings.manager_admin_email
+    actor, _is_admin = _require_playbook_author(request, db)
     try:
         pb = create_playbook(db, payload, actor=actor)
         return serialize_playbook(pb)
@@ -90,12 +136,12 @@ def api_update_playbook(
     payload: PlaybookUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api),
 ):
+    actor, is_admin = _require_playbook_author(request, db)
     pb = db.get(Playbook, playbook_id)
     if not pb:
         raise HTTPException(status_code=404, detail="Playbook 不存在")
-    actor = session_email(request) or settings.manager_admin_email
+    _require_playbook_manage(pb, actor, is_admin)
     try:
         updated = update_playbook(db, pb, payload, actor=actor)
         return serialize_playbook(updated)
@@ -108,12 +154,12 @@ def api_delete_playbook(
     playbook_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api),
 ):
+    actor, is_admin = _require_playbook_author(request, db)
     pb = db.get(Playbook, playbook_id)
     if not pb:
         raise HTTPException(status_code=404, detail="Playbook 不存在")
-    actor = session_email(request) or settings.manager_admin_email
+    _require_playbook_manage(pb, actor, is_admin)
     try:
         delete_playbook(db, pb, actor=actor)
         return {"ok": True}
@@ -146,14 +192,29 @@ def api_import_playbook(
     payload: PlaybookImportPayload,
     request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api),
 ):
-    actor = session_email(request) or settings.manager_admin_email
+    actor, is_admin = _require_playbook_author(request, db)
     try:
+        if payload.overwrite and not is_admin:
+            # Ensure team leads cannot overwrite built-in or other authors' Playbooks via import
+            import yaml as _yaml  # type: ignore
+
+            try:
+                doc = json.loads(payload.content)
+            except Exception:
+                doc = _yaml.safe_load(payload.content)
+            if isinstance(doc, dict) and doc.get("key"):
+                existing = db.scalar(
+                    select(Playbook).where(Playbook.key == str(doc["key"]).strip().lower())
+                )
+                if existing is not None:
+                    _require_playbook_manage(existing, actor, is_admin)
         pb = import_playbook_declarative(
             db, payload.content, overwrite=payload.overwrite, actor=actor
         )
         return serialize_playbook(pb)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -307,6 +368,98 @@ def api_decide_playbook_step(
             note=payload.note,
             output_summary=payload.output_summary,
             artifacts=payload.artifacts,
+            actor=actor,
+        )
+        return serialize_playbook_run(db, updated)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.post("/api/playbook-runs/{run_id}/cancel")
+def api_cancel_playbook_run(
+    run_id: str,
+    request: Request,
+    payload: PlaybookRunCancelRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    actor, is_admin = _resolve_actor(request, db)
+    run = db.get(PlaybookRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Playbook 运行记录不存在")
+    if not _can_access_run(db, run, actor, is_admin):
+        raise HTTPException(status_code=403, detail="无权操作该 Playbook 运行实例")
+    try:
+        updated = cancel_playbook_run(
+            db,
+            run,
+            note=payload.note if payload else "",
+            actor=actor,
+        )
+        return serialize_playbook_run(db, updated)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.post("/api/playbook-runs/{run_id}/steps/{step_id}/retry")
+def api_retry_playbook_step(
+    run_id: str,
+    step_id: str,
+    payload: PlaybookStepRetryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor, is_admin = _resolve_actor(request, db)
+    run = db.get(PlaybookRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Playbook 运行记录不存在")
+    if not _can_access_run(db, run, actor, is_admin):
+        raise HTTPException(status_code=403, detail="无权操作该 Playbook 运行实例")
+    step = db.get(PlaybookStepRun, step_id)
+    if not step or step.run_id != run.id:
+        raise HTTPException(status_code=404, detail="Playbook 阶段步骤不存在")
+    accessible = list_accessible_sandboxes(db, actor, is_admin)
+    try:
+        updated = retry_playbook_step(
+            db,
+            settings,
+            resolve_docker(),
+            run,
+            step,
+            sandbox_id=payload.sandbox_id,
+            note=payload.note,
+            accessible_sandboxes=accessible,
+            actor=actor,
+        )
+        return serialize_playbook_run(db, updated)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.post("/api/playbook-runs/{run_id}/steps/{step_id}/skip")
+def api_skip_playbook_step(
+    run_id: str,
+    step_id: str,
+    request: Request,
+    payload: PlaybookStepSkipRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    actor, is_admin = _resolve_actor(request, db)
+    run = db.get(PlaybookRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Playbook 运行记录不存在")
+    if not _can_access_run(db, run, actor, is_admin):
+        raise HTTPException(status_code=403, detail="无权操作该 Playbook 运行实例")
+    step = db.get(PlaybookStepRun, step_id)
+    if not step or step.run_id != run.id:
+        raise HTTPException(status_code=404, detail="Playbook 阶段步骤不存在")
+    try:
+        updated = skip_playbook_step(
+            db,
+            settings,
+            resolve_docker(),
+            run,
+            step,
+            note=payload.note if payload else "",
             actor=actor,
         )
         return serialize_playbook_run(db, updated)

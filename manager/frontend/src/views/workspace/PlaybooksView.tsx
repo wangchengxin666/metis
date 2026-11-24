@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
+  Ban,
   BookOpen,
   Check,
   CheckCircle2,
   Clock,
+  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -13,11 +15,15 @@ import {
   Loader2,
   MessageSquare,
   Paperclip,
+  Pencil,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  SkipForward,
   Sparkles,
+  Trash2,
   Upload,
   X,
   XCircle,
@@ -45,7 +51,13 @@ import type {
   PlaybookStepRunItem,
   SandboxItem,
   TeamItem,
+  TemplateItem,
 } from '../../types'
+import {
+  PlaybookEditorDialog,
+  type PlaybookEditorFormData,
+  playbookItemToForm,
+} from './PlaybookEditorDialog'
 
 const CATEGORY_COLORS: Record<string, string> = {
   engineering: 'border-indigo-500/40 text-indigo-300',
@@ -77,6 +89,18 @@ export function PlaybooksView({
   tRef.current = t
 
   const isAdminCatalog = mode === 'admin-catalog'
+  const canAuthor = Boolean(auth.admin || auth.is_team_lead)
+  const canManagePlaybook = useCallback(
+    (pb: PlaybookItem) =>
+      Boolean(
+        auth.admin ||
+          (auth.is_team_lead &&
+            !pb.is_builtin &&
+            (pb.created_by || '').toLowerCase() === (auth.email || '').toLowerCase()),
+      ),
+    [auth.admin, auth.email, auth.is_team_lead],
+  )
+
   const [tab, setTab] = useState<'catalog' | 'runs'>(
     isAdminCatalog ? 'catalog' : projectId ? 'runs' : 'catalog',
   )
@@ -84,6 +108,7 @@ export function PlaybooksView({
   const [runs, setRuns] = useState<PlaybookRunItem[]>([])
   const [sandboxes, setSandboxes] = useState<SandboxItem[]>([])
   const [teams, setTeams] = useState<TeamItem[]>([])
+  const [templates, setTemplates] = useState<TemplateItem[]>([])
   const [loading, setLoading] = useState(true)
 
   // Launch Playbook Modal
@@ -93,8 +118,24 @@ export function PlaybooksView({
   const [executionMode, setExecutionMode] = useState<'project_group' | 'isolated'>('isolated')
   const [inputValues, setInputValues] = useState<Record<string, string>>({})
   const [roleAssignments, setRoleAssignments] = useState<Record<string, string>>({})
+  const [reusedAssignments, setReusedAssignments] = useState(false)
   const [launchFiles, setLaunchFiles] = useState<File[]>([])
   const [launching, setLaunching] = useState(false)
+
+  // Visual Playbook Editor Modal (Create / Edit / Clone / AI Draft)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editingPb, setEditingPb] = useState<PlaybookItem | null>(null)
+  const [editorInitialForm, setEditorInitialForm] = useState<PlaybookEditorFormData | null>(null)
+
+  // Step Retry / Reassign Modal
+  const [retryCtx, setRetryCtx] = useState<{
+    run: PlaybookRunItem
+    step: PlaybookStepRunItem
+  } | null>(null)
+  const [retrySandboxId, setRetrySandboxId] = useState('')
+  const [retryNote, setRetryNote] = useState('')
+  const [retryingStep, setRetryingStep] = useState(false)
+  const [busyRunActionId, setBusyRunActionId] = useState<string | null>(null)
 
   // Step Approve / Revise / Reject Modal
   const [decideCtx, setDecideCtx] = useState<{
@@ -108,7 +149,7 @@ export function PlaybooksView({
   const [stepArtifacts, setStepArtifacts] = useState('')
   const [submittingStep, setSubmittingStep] = useState(false)
 
-  // Import YAML/JSON Modal (Admin)
+  // Import YAML/JSON Modal
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importOverwrite, setImportOverwrite] = useState(false)
@@ -127,8 +168,9 @@ export function PlaybooksView({
     if (!silent) setLoading(true)
     try {
       const sbxUrl = auth.admin ? '/api/sandboxes' : '/api/my/sandboxes'
-      const [pbRes, runRes, sbxRes, teamRes] = await Promise.all([
-        apiFetch<{ items: PlaybookItem[] }>('/api/playbooks'),
+      const pbUrl = canAuthor && isAdminCatalog ? '/api/playbooks?include_disabled=true' : '/api/playbooks'
+      const [pbRes, runRes, sbxRes, teamRes, tplRes] = await Promise.all([
+        apiFetch<{ items: PlaybookItem[] }>(pbUrl),
         isAdminCatalog
           ? Promise.resolve({ items: [] as PlaybookRunItem[] })
           : apiFetch<{ items: PlaybookRunItem[] }>(runsEndpoint),
@@ -138,11 +180,15 @@ export function PlaybooksView({
         projectId || isAdminCatalog
           ? Promise.resolve({ items: [] as TeamItem[] })
           : apiFetch<{ items: TeamItem[] }>('/api/teams').catch(() => ({ items: [] as TeamItem[] })),
+        canAuthor
+          ? apiFetch<{ items: TemplateItem[] }>('/api/templates').catch(() => ({ items: [] as TemplateItem[] }))
+          : Promise.resolve({ items: [] as TemplateItem[] }),
       ])
       setPlaybooks(pbRes.items || [])
       setRuns(runRes.items || [])
       setSandboxes(sbxRes.items || [])
       setTeams(teamRes.items || [])
+      setTemplates(tplRes.items || [])
     } catch (err: any) {
       if (!silent) {
         notify(err.message || tRef.current('admin.loadFailed'), 'error')
@@ -150,7 +196,7 @@ export function PlaybooksView({
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [auth.admin, isAdminCatalog, notify, projectId, projectSandboxes, runsEndpoint])
+  }, [auth.admin, canAuthor, isAdminCatalog, notify, projectId, projectSandboxes, runsEndpoint])
 
   const pollRunsOnly = useCallback(async () => {
     if (pollingRunsRef.current || isAdminCatalog) return
@@ -186,26 +232,146 @@ export function PlaybooksView({
     : teams.find((tm) => tm.id === runTeamId)?.mesh_room_id || null
   const canUseProjectGroup = Boolean((projectId || runTeamId) && selectedLaunchMeshRoomId)
 
-  const openLaunch = (pb: PlaybookItem) => {
+  const openLaunch = (pb: PlaybookItem, fromRun?: PlaybookRunItem) => {
     setLaunchPb(pb)
-    setRunTitle('')
-    const defaultTeamId = projectId || teams[0]?.id || ''
+    setRunTitle(fromRun ? fromRun.title : '')
+    const defaultTeamId = fromRun?.team_id || projectId || teams[0]?.id || ''
     setRunTeamId(defaultTeamId)
     const defaultRoom = projectId
       ? projectMeshRoomId
       : teams.find((tm) => tm.id === defaultTeamId)?.mesh_room_id
-    setExecutionMode(defaultRoom ? 'project_group' : 'isolated')
+    setExecutionMode(
+      fromRun?.execution_mode
+        ? fromRun.execution_mode
+        : defaultRoom
+          ? 'project_group'
+          : 'isolated',
+    )
     const defaults: Record<string, string> = {}
     for (const f of pb.input_fields) {
-      if (f.type === 'select' && f.options?.length) {
+      if (fromRun && typeof fromRun.inputs?.[f.key] === 'string') {
+        defaults[f.key] = fromRun.inputs[f.key]
+      } else if (f.type === 'select' && f.options?.length) {
         defaults[f.key] = f.options[0]
       } else {
         defaults[f.key] = ''
       }
     }
     setInputValues(defaults)
-    setRoleAssignments({})
+
+    // Reuse previous role assignments from explicit re-run or latest run of this Playbook in this project
+    const validSbxIds = new Set(effectiveSandboxes.map((s) => s.id))
+    const seedRun =
+      fromRun ||
+      runs.find((r) => r.playbook_id === pb.id && (!defaultTeamId || r.team_id === defaultTeamId)) ||
+      runs.find((r) => r.playbook_id === pb.id)
+    const prefilled: Record<string, string> = {}
+    if (seedRun) {
+      const ra = seedRun.role_assignments || {}
+      for (const st of pb.stages) {
+        const candidate =
+          ra[st.id] || seedRun.steps.find((step) => step.stage_id === st.id)?.sandbox_id || ''
+        if (candidate && validSbxIds.has(candidate)) {
+          prefilled[st.id] = candidate
+        }
+      }
+    }
+    setRoleAssignments(prefilled)
+    setReusedAssignments(Object.keys(prefilled).length > 0)
     setLaunchFiles([])
+  }
+
+  const openCreateEditor = () => {
+    setEditingPb(null)
+    setEditorInitialForm(null)
+    setEditorOpen(true)
+  }
+
+  const openEditEditor = (pb: PlaybookItem) => {
+    setEditingPb(pb)
+    setEditorInitialForm(playbookItemToForm(pb))
+    setEditorOpen(true)
+  }
+
+  const openCloneEditor = (pb: PlaybookItem) => {
+    setEditingPb(null)
+    setEditorInitialForm(playbookItemToForm(pb, { asClone: true }))
+    setEditorOpen(true)
+  }
+
+  const handleDeletePlaybook = async (pb: PlaybookItem) => {
+    if (!window.confirm(t('playbooks.deleteConfirm', { name: pb.name }))) return
+    try {
+      await apiFetch(`/api/playbooks/${pb.id}`, { method: 'DELETE' })
+      notify(t('playbooks.deleted'))
+      await loadAll()
+    } catch (err: any) {
+      notify(err.message || t('admin.loadFailed'), 'error')
+    }
+  }
+
+  const handleCancelRun = async (run: PlaybookRunItem) => {
+    if (!window.confirm(t('playbooks.cancelRunConfirm', { title: run.title }))) return
+    setBusyRunActionId(run.id)
+    try {
+      await apiFetch(`/api/playbook-runs/${run.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ note: '' }),
+      })
+      notify(t('playbooks.runCancelled'))
+      await loadAll({ silent: true })
+    } catch (err: any) {
+      notify(err.message || t('admin.loadFailed'), 'error')
+    } finally {
+      setBusyRunActionId(null)
+    }
+  }
+
+  const openRetryModal = (run: PlaybookRunItem, step: PlaybookStepRunItem) => {
+    setRetryCtx({ run, step })
+    setRetrySandboxId(step.sandbox_id || effectiveSandboxes[0]?.id || '')
+    setRetryNote('')
+  }
+
+  const handleRetryStep = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!retryCtx) return
+    setRetryingStep(true)
+    try {
+      await apiFetch(
+        `/api/playbook-runs/${retryCtx.run.id}/steps/${retryCtx.step.id}/retry`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            sandbox_id: retrySandboxId || null,
+            note: retryNote.trim(),
+          }),
+        },
+      )
+      notify(t('playbooks.stepRetried'))
+      setRetryCtx(null)
+      await loadAll({ silent: true })
+    } catch (err: any) {
+      notify(err.message || t('admin.loadFailed'), 'error')
+    } finally {
+      setRetryingStep(false)
+    }
+  }
+
+  const handleSkipStep = async (run: PlaybookRunItem, step: PlaybookStepRunItem) => {
+    setBusyRunActionId(step.id)
+    try {
+      await apiFetch(`/api/playbook-runs/${run.id}/steps/${step.id}/skip`, {
+        method: 'POST',
+        body: JSON.stringify({ note: '' }),
+      })
+      notify(t('playbooks.stepSkipped'))
+      await loadAll({ silent: true })
+    } catch (err: any) {
+      notify(err.message || t('admin.loadFailed'), 'error')
+    } finally {
+      setBusyRunActionId(null)
+    }
   }
 
   const handleLaunchSubmit = async (e: React.FormEvent) => {
@@ -342,11 +508,17 @@ export function PlaybooksView({
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               {t('common.refresh')}
             </Button>
-            {auth.admin && (
-              <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
-                <Upload className="h-4 w-4" />
-                {t('playbooks.importBtn')}
-              </Button>
+            {canAuthor && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+                  <Upload className="h-4 w-4" />
+                  {t('playbooks.importBtn')}
+                </Button>
+                <Button size="sm" onClick={openCreateEditor}>
+                  <Plus className="h-4 w-4" />
+                  {t('playbooks.createBtn')}
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -403,11 +575,17 @@ export function PlaybooksView({
               <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
               {t('common.refresh')}
             </Button>
-            {auth.admin && (
-              <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
-                <Upload className="h-3.5 w-3.5" />
-                {t('playbooks.importBtn')}
-              </Button>
+            {canAuthor && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+                  <Upload className="h-3.5 w-3.5" />
+                  {t('playbooks.importBtn')}
+                </Button>
+                <Button size="sm" onClick={openCreateEditor}>
+                  <Plus className="h-3.5 w-3.5" />
+                  {t('playbooks.createBtn')}
+                </Button>
+              </>
             )}
           </div>
         )}
@@ -429,6 +607,11 @@ export function PlaybooksView({
                     <Badge variant="secondary" className="text-[11px]">
                       <Sparkles className="h-3 w-3 mr-0.5 text-indigo-400" />
                       {t('playbooks.builtinBadge')}
+                    </Badge>
+                  )}
+                  {!pb.enabled && (
+                    <Badge variant="outline" className="text-[11px] border-zinc-700 text-zinc-500">
+                      {t('playbooks.disabledBadge')}
                     </Badge>
                   )}
                   <Badge variant="outline" className="text-[11px] font-mono">
@@ -494,21 +677,57 @@ export function PlaybooksView({
                   )}
                 </div>
 
-                <div className="pt-4 border-t border-zinc-800/70 flex items-center gap-2">
-                  <Button className="flex-1" size="sm" onClick={() => openLaunch(pb)}>
+                <div className="pt-4 border-t border-zinc-800/70 flex flex-wrap items-center gap-1.5">
+                  <Button
+                    className="flex-1 whitespace-nowrap"
+                    size="sm"
+                    disabled={!pb.enabled}
+                    onClick={() => openLaunch(pb)}
+                  >
                     <Play className="h-3.5 w-3.5" />
                     {t('playbooks.launchBtn')}
                   </Button>
+                  {canManagePlaybook(pb) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      title={t('playbooks.editBtn')}
+                      onClick={() => openEditEditor(pb)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {canAuthor && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      title={t('playbooks.cloneBtn')}
+                      onClick={() => openCloneEditor(pb)}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
+                    title={t('playbooks.exportYamlBtn')}
                     onClick={() =>
                       window.open(`/api/playbooks/${pb.id}/export?format=yaml`, '_blank')
                     }
                   >
                     <Download className="h-3.5 w-3.5" />
-                    {t('playbooks.exportYamlBtn')}
                   </Button>
+                  {canManagePlaybook(pb) && !pb.is_builtin && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-zinc-500 hover:text-rose-400 px-2"
+                      title={t('playbooks.deleteBtn')}
+                      onClick={() => void handleDeletePlaybook(pb)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -569,20 +788,50 @@ export function PlaybooksView({
                         {run.created_at ? ` · ${new Date(run.created_at).toLocaleString()}` : ''}
                       </div>
                     </div>
-                    <div className="w-40">
-                      <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
-                        <div
-                          className={cn(
-                            'h-full rounded-full transition-all',
-                            run.status === 'completed'
-                              ? 'bg-emerald-500'
-                              : run.status === 'failed'
-                                ? 'bg-rose-500'
-                                : 'bg-indigo-500',
-                          )}
-                          style={{ width: `${pct}%` }}
-                        />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="w-32">
+                        <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn(
+                              'h-full rounded-full transition-all',
+                              run.status === 'completed'
+                                ? 'bg-emerald-500'
+                                : run.status === 'failed' || run.status === 'cancelled'
+                                  ? 'bg-rose-500'
+                                  : 'bg-indigo-500',
+                            )}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
                       </div>
+                      {(() => {
+                        const matchedPb = playbooks.find((p) => p.id === run.playbook_id)
+                        return matchedPb ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs whitespace-nowrap"
+                            onClick={() => openLaunch(matchedPb, run)}
+                          >
+                            <Copy className="h-3 w-3" />
+                            {t('playbooks.rerunBtn')}
+                          </Button>
+                        ) : null
+                      })()}
+                      {(run.status === 'running' || run.status === 'awaiting_approval') && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-rose-400 hover:text-rose-300 whitespace-nowrap"
+                          disabled={busyRunActionId === run.id}
+                          onClick={() => void handleCancelRun(run)}
+                        >
+                          <Ban className="h-3 w-3" />
+                          {t('playbooks.cancelRunBtn')}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </CardHeader>
@@ -593,6 +842,10 @@ export function PlaybooksView({
                       const isRunning = st.status === 'running'
                       const isAwaiting = st.status === 'awaiting_approval'
                       const hasWarning = Boolean(st.output_summary?.startsWith('⚠️'))
+                      const isStalled =
+                        isRunning &&
+                        Boolean(st.started_at) &&
+                        Date.now() - Date.parse(st.started_at!) > 10 * 60 * 1000
                       return (
                         <div
                           key={st.id}
@@ -643,12 +896,25 @@ export function PlaybooksView({
                               <div className="text-zinc-400">{st.deliverable_hint}</div>
                             )}
                             {isRunning && !hasWarning && (
-                              <div className="flex items-center gap-1.5 rounded bg-indigo-500/10 border border-indigo-500/25 px-2.5 py-1.5 text-[11px] text-indigo-200">
-                                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                              <div
+                                className={cn(
+                                  'flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-[11px]',
+                                  isStalled
+                                    ? 'bg-amber-500/10 border-amber-500/35 text-amber-200'
+                                    : 'bg-indigo-500/10 border-indigo-500/25 text-indigo-200',
+                                )}
+                              >
+                                {isStalled ? (
+                                  <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0" />
+                                ) : (
+                                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                                )}
                                 <span>
-                                  {t('playbooks.agentRunningHint', {
-                                    slug: st.sandbox_slug || 'agent',
-                                  })}
+                                  {isStalled
+                                    ? t('playbooks.stalledHint')
+                                    : t('playbooks.agentRunningHint', {
+                                        slug: st.sandbox_slug || 'agent',
+                                      })}
                                 </span>
                               </div>
                             )}
@@ -696,7 +962,7 @@ export function PlaybooksView({
                             )}
                           </div>
 
-                          {isRunning && (
+                          {(isRunning || st.status === 'rejected') && (
                             <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zinc-800/60">
                               {st.sandbox_id && (
                                 <Button
@@ -715,19 +981,33 @@ export function PlaybooksView({
                                 size="sm"
                                 variant="ghost"
                                 className="h-7 text-[11px] text-zinc-300"
-                                onClick={() => openStepDecide(run, st, 'revise')}
+                                onClick={() => openRetryModal(run, st)}
                               >
                                 <RotateCcw className="h-3 w-3" />
-                                {t('playbooks.retryWakeBtn')}
+                                {t('playbooks.retryReassignBtn')}
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 text-[11px] text-zinc-400 hover:text-zinc-200 ml-auto"
-                                onClick={() => openStepDecide(run, st, 'approved', true)}
-                              >
-                                {t('playbooks.completeAdvanceBtn')}
-                              </Button>
+                              {isRunning && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-[11px] text-zinc-400 hover:text-zinc-200"
+                                    disabled={busyRunActionId === st.id}
+                                    onClick={() => void handleSkipStep(run, st)}
+                                  >
+                                    <SkipForward className="h-3 w-3" />
+                                    {t('playbooks.skipStepBtn')}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-[11px] text-zinc-400 hover:text-zinc-200 ml-auto"
+                                    onClick={() => openStepDecide(run, st, 'approved', true)}
+                                  >
+                                    {t('playbooks.completeAdvanceBtn')}
+                                  </Button>
+                                </>
+                              )}
                             </div>
                           )}
 
@@ -922,8 +1202,15 @@ export function PlaybooksView({
             {/* Role Assignments */}
             {effectiveSandboxes.length > 0 && (
               <div className="space-y-2 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/60 p-3">
-                <div className="text-xs font-medium text-zinc-300">
-                  {t('playbooks.roleAssignTitle')}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-medium text-zinc-300">
+                    {t('playbooks.roleAssignTitle')}
+                  </div>
+                  {reusedAssignments && (
+                    <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-300">
+                      {t('playbooks.reusedAssignmentsHint')}
+                    </Badge>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {launchPb.stages.map((st, idx) => (
@@ -1079,6 +1366,62 @@ export function PlaybooksView({
             </Button>
           </div>
         </form>
+      </Dialog>
+
+      {/* Visual Playbook Editor (Create / Edit / Clone / AI Draft) */}
+      <PlaybookEditorDialog
+        open={editorOpen}
+        editing={editingPb}
+        initialForm={editorInitialForm}
+        templates={templates}
+        onClose={() => setEditorOpen(false)}
+        onSaved={() => loadAll()}
+        notify={notify}
+      />
+
+      {/* Step Retry / Reassign Dialog */}
+      <Dialog
+        open={!!retryCtx}
+        onOpenChange={(o) => !o && !retryingStep && setRetryCtx(null)}
+        title={t('playbooks.retryDialogTitle', { stage: retryCtx?.step.stage_name ?? '' })}
+      >
+        {retryCtx && (
+          <form onSubmit={handleRetryStep} className="space-y-4 text-sm">
+            {effectiveSandboxes.length > 0 && (
+              <div className="space-y-1.5">
+                <Label>{t('playbooks.retryAssigneeLabel')}</Label>
+                <Select
+                  value={retrySandboxId}
+                  onChange={(e) => setRetrySandboxId(e.target.value)}
+                >
+                  {effectiveSandboxes.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      @{s.slug} {s.role_title ? `· ${s.role_title}` : ''}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label>{t('playbooks.retryNoteLabel')}</Label>
+              <Textarea
+                rows={3}
+                placeholder={t('playbooks.retryNotePlaceholder')}
+                value={retryNote}
+                onChange={(e) => setRetryNote(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
+              <Button type="button" variant="ghost" onClick={() => setRetryCtx(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button type="submit" disabled={retryingStep}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                {retryingStep ? t('common.saving') : t('playbooks.retryReassignBtn')}
+              </Button>
+            </div>
+          </form>
+        )}
       </Dialog>
     </div>
   )

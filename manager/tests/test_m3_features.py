@@ -161,7 +161,7 @@ stages:
     assert r1["steps"][0]["status"] == "completed"
     assert r1["steps"][1]["status"] == "running"
 
-    # Simulate @eng-dev finishing Stage 1 (Arch, approval_required=False) -> auto-completes AND dispatches parallel Stage 2 + Stage 3!
+    # Simulate @eng-dev finishing Stage 1 (Arch, approval_required=False) -> auto-completes AND dispatches Stage 2 (Impl) sequentially before QA!
     stage1_msg = r1["steps"][1]["task_id"]
     fake_docker.mesh_progress[("eng-dev", stage1_msg)] = {
         "completed": True,
@@ -171,10 +171,10 @@ stages:
     r2 = client.get("/api/playbook-runs").json()["items"][0]
     assert r2["steps"][1]["status"] == "completed"
     assert r2["steps"][2]["status"] == "running"
-    assert r2["steps"][3]["status"] == "running"
+    assert r2["steps"][3]["status"] == "pending"  # QA waits for Impl to finish!
     assert r2["steps"][4]["status"] == "pending"
 
-    # Simulate both parallel stages (Impl & QA) replying -> Stage 4 (Release) auto-dispatches in 'running'
+    # @eng-dev finishes Stage 2 (Impl) -> Stage 3 (QA) dispatches next
     fake_docker.mesh_progress[("eng-dev", r2["steps"][2]["task_id"])] = {
         "completed": True,
         "reply_text": "Implemented invoice export API and UI.",
@@ -182,6 +182,7 @@ stages:
     }
     r3 = client.get("/api/playbook-runs").json()["items"][0]
     assert r3["steps"][2]["status"] == "completed"
+    assert r3["steps"][3]["status"] == "running"
     assert r3["steps"][4]["status"] == "pending"  # QA still running
 
     fake_docker.mesh_progress[("eng-qa", r3["steps"][3]["task_id"])] = {
@@ -791,3 +792,177 @@ def test_workspace_inbox_task_groups_and_playbook_approvals(api_env):
     assert grp["counts"]["done"] == 2
     assert grp["counts"]["cancelled"] == 1
     assert [t["id"] for t in grp["tasks"]] == ["tsk_a", "tsk_b_old", "tsk_b_final"]
+
+
+def test_playbook_team_lead_authoring_ai_draft_and_run_controls(api_env, monkeypatch):
+    from app.models import LlmProfile
+    from app.services import playbooks as pb_service
+
+    client, fake_docker, _reg = api_env
+    _login_admin(client)
+
+    # Seed an LLM profile for AI draft generation
+    with SessionLocal() as db:
+        db.add(
+            LlmProfile(
+                name="Test Local LLM",
+                base_url="http://mock-llm:8000/v1",
+                model="qwen3.5-4b",
+                api_protocol="openai-completions",
+            )
+        )
+        db.commit()
+
+    # Create a Team Lead user and an ordinary Member user
+    _create_user_and_login(client, "lead-author@example.com", display_name="Team Lead")
+    _create_user_and_login(client, "plain-member@example.com", display_name="Plain Member")
+    _login_admin(client)
+
+    s_a = client.post("/api/sandboxes", json={"email": "lead-author@example.com", "slug": "pb-dev"}).json()
+    s_b = client.post("/api/sandboxes", json={"email": "lead-author@example.com", "slug": "pb-qa"}).json()
+    proj = client.post(
+        "/api/teams",
+        json={
+            "name": "Playbook Ops",
+            "slug": "playbook-ops",
+            "lead_emails": ["lead-author@example.com"],
+            "member_emails": ["plain-member@example.com"],
+            "sandbox_ids": [s_a["id"], s_b["id"]],
+        },
+    ).json()
+
+    # 1. Ordinary member CANNOT create Playbook or call AI draft (403)
+    _login_user(client, "plain-member@example.com")
+    denied_create = client.post(
+        "/api/playbooks",
+        json={
+            "name": "Member Blocked Flow",
+            "stages": [{"id": "s1", "name": "Step 1", "prompt_template": "Do work"}],
+        },
+    )
+    assert denied_create.status_code == 403
+    denied_ai = client.post("/api/playbooks/ai-draft", json={"goal": "每周汇总项目进度"})
+    assert denied_ai.status_code == 403
+
+    # 2. Team Lead CAN call AI draft (mocked LLM call), create (auto-key), edit, and delete own Playbook,
+    #    but CANNOT edit or delete a built-in Playbook (403)
+    _login_user(client, "lead-author@example.com")
+    monkeypatch.setattr(
+        pb_service,
+        "_call_llm_for_playbook_json",
+        lambda profile, sys_p, usr_p: {
+            "key": "weekly-digest",
+            "name": "研发周报自动汇总流",
+            "category": "operations",
+            "description": "汇总进展并审批归档",
+            "estimated_manual_hours": 3.0,
+            "input_fields": [
+                {"key": "week_label", "label": "周期", "type": "text", "required": True},
+            ],
+            "stages": [
+                {
+                    "id": "collect_code",
+                    "name": "代码与测试汇总",
+                    "role_hint": "研发",
+                    "parallel_group": "gather",
+                    "approval_required": False,
+                    "prompt_template": "汇总 {{week_label}} 进展",
+                },
+                {
+                    "id": "collect_qa",
+                    "name": "质量数据汇总",
+                    "role_hint": "QA",
+                    "parallel_group": "gather",
+                    "approval_required": False,
+                    "prompt_template": "汇总 {{week_label}} 质量指标",
+                },
+                {
+                    "id": "approve_digest",
+                    "name": "审批发布",
+                    "role_hint": "负责人",
+                    "parallel_group": None,
+                    "approval_required": True,
+                    "prompt_template": "整合并提交审批 {{previous_outputs}}",
+                },
+            ],
+            "deliverables_checklist": ["周报正文"],
+        },
+    )
+
+    ai_res = client.post("/api/playbooks/ai-draft", json={"goal": "每周五汇总代码和质量数据出周报并审批"})
+    assert ai_res.status_code == 200, ai_res.text
+    draft = ai_res.json()["draft"]
+    assert draft["name"] == "研发周报自动汇总流"
+    assert len(draft["stages"]) == 3
+
+    # Create without explicit key -> auto-generates unique key
+    draft_no_key = {**draft, "key": None}
+    created_pb = client.post("/api/playbooks", json=draft_no_key)
+    assert created_pb.status_code == 201, created_pb.text
+    pb_data = created_pb.json()
+    assert pb_data["key"]
+    assert pb_data["created_by"] == "lead-author@example.com"
+
+    # Team Lead can edit own custom Playbook
+    patched_pb = client.patch(
+        f"/api/playbooks/{pb_data['id']}",
+        json={"name": "研发周报汇总流 v2"},
+    )
+    assert patched_pb.status_code == 200
+    assert patched_pb.json()["name"] == "研发周报汇总流 v2"
+
+    # Team Lead CANNOT edit built-in Playbook
+    all_pbs = client.get("/api/playbooks").json()["items"]
+    builtin_pb = next(p for p in all_pbs if p["is_builtin"])
+    assert client.patch(f"/api/playbooks/{builtin_pb['id']}", json={"name": "Hack"}).status_code == 403
+
+    # 3. Run parallel-group custom Playbook & test Retry (reassign), Skip, and Cancel!
+    run = client.post(
+        f"/api/playbooks/{pb_data['id']}/runs",
+        data={
+            "title": "W48 周报",
+            "team_id": proj["id"],
+            "inputs_json": json.dumps({"week_label": "2026-W48"}),
+            "role_assignments_json": json.dumps({"collect_code": s_a["id"], "collect_qa": s_b["id"], "approve_digest": s_a["id"]}),
+        },
+    ).json()
+    assert run["steps"][0]["status"] == "running"
+    assert run["steps"][1]["status"] == "running"  # parallel_group='gather' ran together!
+    assert run["steps"][2]["status"] == "pending"
+    assert run["role_assignments"]["collect_code"] == s_a["id"]
+
+    # Retry step 0 and reassign to s_b
+    retried = client.post(
+        f"/api/playbook-runs/{run['id']}/steps/{run['steps'][0]['id']}/retry",
+        json={"sandbox_id": s_b["id"], "note": "请补充性能数据"},
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["steps"][0]["sandbox_slug"] == "pb-qa"
+
+    # Skip both parallel stages -> stage 2 auto-dispatches!
+    s0_skip = client.post(
+        f"/api/playbook-runs/{run['id']}/steps/{run['steps'][0]['id']}/skip",
+        json={"note": "skip 0"},
+    )
+    assert s0_skip.status_code == 200
+    assert s0_skip.json()["steps"][0]["status"] == "skipped"
+    assert s0_skip.json()["steps"][2]["status"] == "pending"  # step 1 still running
+
+    s1_skip = client.post(
+        f"/api/playbook-runs/{run['id']}/steps/{run['steps'][1]['id']}/skip",
+        json={"note": "skip 1"},
+    )
+    assert s1_skip.status_code == 200
+    assert s1_skip.json()["steps"][2]["status"] == "running"
+
+    # Cancel active run
+    cancelled = client.post(
+        f"/api/playbook-runs/{run['id']}/cancel",
+        json={"note": "取消演示"},
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["steps"][2]["status"] == "skipped"
+
+    # Team Lead can delete own custom Playbook
+    assert client.delete(f"/api/playbooks/{pb_data['id']}").status_code == 200

@@ -761,6 +761,7 @@ export interface PlaybookRunItem {
   execution_mode?: 'project_group' | 'isolated'
   title: string
   inputs: Record<string, string>
+  role_assignments?: Record<string, string>
   uploaded_files: Array<{ sandbox_id?: string; slug?: string; path: string }>
   status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled'
   current_stage_index: number

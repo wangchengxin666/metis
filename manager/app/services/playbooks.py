@@ -4,16 +4,28 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..docker_service import BaseSandboxRuntime
-from ..models import Playbook, PlaybookRun, PlaybookStepRun, Sandbox, SandboxRuntimeSnapshot, Team
+from ..models import (
+    LlmProfile,
+    Playbook,
+    PlaybookRun,
+    PlaybookStepRun,
+    Sandbox,
+    SandboxRuntimeSnapshot,
+    SandboxTemplate,
+    Team,
+)
 from ..schemas import PlaybookCreate, PlaybookUpdate
-from .common import Conflict, NotFoundError, audit, utcnow
+from ..security import decrypt_secret
+from .common import Conflict, ManagerError, NotFoundError, audit, utcnow
 from .notifications import NotificationEvent, dispatch_notification_event
 from .policies import get_branding_config
 from .teams import sync_project_mesh_group
@@ -102,7 +114,7 @@ BUILTIN_PLAYBOOKS: list[dict[str, Any]] = [
                 "name": "核心功能开发与联调",
                 "role_hint": "全栈研发工程师",
                 "template_key_hint": "fullstack",
-                "parallel_group": "build_verify",
+                "parallel_group": None,
                 "approval_required": False,
                 "prompt_template": (
                     "请根据架构方案完成「{{feature_title}}」前后端代码实现与自测，"
@@ -116,7 +128,7 @@ BUILTIN_PLAYBOOKS: list[dict[str, Any]] = [
                 "name": "自动化测试与 QA 验收",
                 "role_hint": "测试与质量保障专家",
                 "template_key_hint": "qa",
-                "parallel_group": "build_verify",
+                "parallel_group": None,
                 "approval_required": False,
                 "prompt_template": (
                     "请针对「{{feature_title}}」编写并执行端到端与边界用例，输出缺陷清单与质量验收结论。\n"
@@ -323,11 +335,27 @@ BUILTIN_PLAYBOOKS: list[dict[str, Any]] = [
 
 
 def ensure_default_playbooks(db: Session) -> None:
-    """Idempotently seed the 3 built-in enterprise showcase Playbooks."""
-    existing_keys = set(db.scalars(select(Playbook.key)).all())
-    added = False
+    """Idempotently seed the 3 built-in enterprise showcase Playbooks and repair legacy impl/qa parallel bug."""
+    existing_by_key = {pb.key: pb for pb in db.scalars(select(Playbook)).all()}
+    changed = False
     for spec in BUILTIN_PLAYBOOKS:
-        if spec["key"] in existing_keys:
+        existing = existing_by_key.get(spec["key"])
+        if existing is not None:
+            # Repair legacy rd-feature-delivery preset where impl & qa mistakenly ran in parallel
+            if spec["key"] == "rd-feature-delivery" and existing.is_builtin:
+                stages = existing.stages
+                impl_st = next((s for s in stages if s.get("id") == "impl"), None)
+                qa_st = next((s for s in stages if s.get("id") == "qa"), None)
+                if (
+                    impl_st is not None
+                    and qa_st is not None
+                    and impl_st.get("parallel_group") == "build_verify"
+                    and qa_st.get("parallel_group") == "build_verify"
+                ):
+                    impl_st["parallel_group"] = None
+                    qa_st["parallel_group"] = None
+                    existing.stages_json = json.dumps(stages, ensure_ascii=False)
+                    changed = True
             continue
         db.add(
             Playbook(
@@ -346,8 +374,8 @@ def ensure_default_playbooks(db: Session) -> None:
                 created_by="system",
             )
         )
-        added = True
-    if added:
+        changed = True
+    if changed:
         db.commit()
 
 
@@ -378,15 +406,36 @@ def list_playbooks(db: Session, *, enabled_only: bool = False) -> list[Playbook]
     return list(db.scalars(stmt).all())
 
 
+def _slugify_playbook_key(raw: str | None, fallback_name: str = "") -> str:
+    src = (raw or "").strip().lower() or (fallback_name or "").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", src).strip("-")[:54]
+    if len(slug) < 2 or not slug[0].isalnum():
+        slug = f"playbook-{secrets.token_hex(3)}"
+    return slug
+
+
+def _unique_playbook_key(db: Session, wanted: str | None, name: str) -> str:
+    if wanted and wanted.strip():
+        clean = wanted.strip().lower()
+        if db.scalar(select(Playbook).where(Playbook.key == clean)):
+            raise Conflict(f"Playbook '{clean}' 已存在")
+        return clean
+    base = _slugify_playbook_key(None, name)
+    cand = base
+    for i in range(2, 200):
+        if not db.scalar(select(Playbook).where(Playbook.key == cand)):
+            return cand
+        cand = f"{base[:56]}-{i}"
+    return f"playbook-{secrets.token_hex(4)}"
+
+
 def create_playbook(
     db: Session,
     payload: PlaybookCreate,
     *,
     actor: str | None = None,
 ) -> Playbook:
-    clean_key = payload.key.strip().lower()
-    if db.scalar(select(Playbook).where(Playbook.key == clean_key)):
-        raise Conflict(f"Playbook '{clean_key}' 已存在")
+    clean_key = _unique_playbook_key(db, payload.key, payload.name)
     pb = Playbook(
         key=clean_key,
         name=payload.name.strip(),
@@ -496,7 +545,8 @@ def import_playbook_declarative(
         raise ValueError("无法解析 Playbook 定义，请提供有效的 YAML 或 JSON 文档")
 
     spec = PlaybookCreate.model_validate(parsed)
-    existing = db.scalar(select(Playbook).where(Playbook.key == spec.key.strip().lower()))
+    clean_key = (spec.key or "").strip().lower()
+    existing = db.scalar(select(Playbook).where(Playbook.key == clean_key)) if clean_key else None
     if existing is not None:
         if not overwrite:
             raise Conflict(f"Playbook '{spec.key}' 已存在，如需覆盖请开启覆盖选项")
@@ -639,6 +689,18 @@ def _dispatch_step(
         rendered += "\n\n---\n### 随单附件路径\n" + "\n".join(f"- `{p}`" for p in uploaded_paths)
     if step.deliverable_hint:
         rendered += f"\n\n### 预期交付物\n- {step.deliverable_hint}"
+    total_stages = len(all_steps)
+    if total_stages > 1:
+        later_stages = [s.stage_name for s in all_steps if s.stage_index > step.stage_index]
+        later_hint = (
+            f"后续阶段（{' → '.join(later_stages[:4])}）将由 Playbook 在本阶段完成/审批后自动派发，请勿提前越界执行。"
+            if later_stages
+            else "本阶段为流程的最终收口阶段，请完成汇总交付。"
+        )
+        rendered += (
+            f"\n\n### 阶段边界（第 {step.stage_index + 1}/{total_stages} 阶段：{step.stage_name}）\n"
+            f"- 请仅聚焦并闭环本阶段的交付目标与验收要求；{later_hint}"
+        )
     rendered += (
         "\n\n### 执行要求\n"
         "请直接在本对话中完成任务并回复清晰、结构化的交付结论（如有生成文件请附带 `/home/workspace/...` 路径，"
@@ -1187,6 +1249,476 @@ def decide_playbook_step(
     return run
 
 
+def cancel_playbook_run(
+    db: Session,
+    run: PlaybookRun,
+    *,
+    note: str = "",
+    actor: str,
+) -> PlaybookRun:
+    """Cancel an in-flight Playbook run cleanly without deleting historical stage outputs."""
+    if run.status in {"completed", "cancelled"}:
+        return run
+    steps = list(
+        db.scalars(
+            select(PlaybookStepRun)
+            .where(PlaybookStepRun.run_id == run.id)
+            .order_by(PlaybookStepRun.stage_index.asc())
+        ).all()
+    )
+    now = utcnow()
+    clean_note = note.strip() or "人工手动终止运行"
+    for st in steps:
+        if st.status in {"pending", "running", "awaiting_approval"}:
+            st.status = "skipped"
+            st.approval_note = clean_note
+            st.approval_decided_by = actor
+            st.completed_at = now
+    run.status = "cancelled"
+    run.completed_at = now
+    run.updated_at = now
+    audit(
+        db,
+        "playbook.run_cancel",
+        target=run.id,
+        actor=actor,
+        detail=f"playbook={run.playbook_key},title={run.title[:60]}",
+    )
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def retry_playbook_step(
+    db: Session,
+    settings: Settings,
+    docker: BaseSandboxRuntime,
+    run: PlaybookRun,
+    step: PlaybookStepRun,
+    *,
+    sandbox_id: str | None = None,
+    note: str = "",
+    accessible_sandboxes: list[Sandbox],
+    actor: str,
+) -> PlaybookRun:
+    """Retry a Playbook stage (optionally reassigning to another accessible digital employee)."""
+    steps = list(
+        db.scalars(
+            select(PlaybookStepRun)
+            .where(PlaybookStepRun.run_id == run.id)
+            .order_by(PlaybookStepRun.stage_index.asc())
+        ).all()
+    )
+    sbx_by_id = {s.id: s for s in accessible_sandboxes}
+    target_sbx: Sandbox | None = None
+    if sandbox_id and sandbox_id.strip():
+        target_sbx = sbx_by_id.get(sandbox_id.strip())
+        if target_sbx is None:
+            raise ManagerError("指定的数字员工不存在或无权指派")
+        step.sandbox_id = target_sbx.id
+        step.sandbox_slug = target_sbx.slug
+        try:
+            ra = json.loads(run.role_assignments_json or "{}")
+            if not isinstance(ra, dict):
+                ra = {}
+        except Exception:
+            ra = {}
+        ra[step.stage_id] = target_sbx.id
+        run.role_assignments_json = json.dumps(ra, ensure_ascii=False)
+    elif step.sandbox_id:
+        target_sbx = sbx_by_id.get(step.sandbox_id) or db.get(Sandbox, step.sandbox_id)
+
+    try:
+        inputs = json.loads(run.inputs_json or "{}")
+    except Exception:
+        inputs = {}
+    try:
+        uploaded_meta = json.loads(run.uploaded_files_json or "[]")
+    except Exception:
+        uploaded_meta = []
+    paths = [
+        str(m.get("path"))
+        for m in uploaded_meta
+        if isinstance(m, dict)
+        and m.get("path")
+        and (not m.get("sandbox_id") or m.get("sandbox_id") == (target_sbx.id if target_sbx else None))
+    ]
+
+    # Recover original template from playbook definition when available so prompt doesn't duplicate headers
+    pb = db.get(Playbook, run.playbook_id)
+    if pb is not None:
+        orig_stage = next((s for s in pb.stages if s.get("id") == step.stage_id), None)
+        if orig_stage and orig_stage.get("prompt_template"):
+            step.prompt_rendered = str(orig_stage["prompt_template"])
+    clean_note = note.strip()
+    if clean_note:
+        step.prompt_rendered = (
+            f"{step.prompt_rendered or step.stage_name}\n\n### 重试补充要求（由 {actor} 指定）\n{clean_note}"
+        )
+
+    step.completed_at = None
+    step.approval_note = clean_note or None
+    _dispatch_step(
+        db,
+        settings,
+        docker,
+        run,
+        step,
+        steps,
+        target_sbx,
+        inputs=inputs if isinstance(inputs, dict) else {},
+        uploaded_paths=paths,
+        actor=actor,
+    )
+    run.status = "running"
+    run.completed_at = None
+    run.current_stage_index = step.stage_index
+    run.updated_at = utcnow()
+    audit(
+        db,
+        "playbook.step_retry",
+        target=run.id,
+        actor=actor,
+        detail=f"playbook={run.playbook_key},stage={step.stage_id},slug={step.sandbox_slug or ''}",
+    )
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def skip_playbook_step(
+    db: Session,
+    settings: Settings,
+    docker: BaseSandboxRuntime,
+    run: PlaybookRun,
+    step: PlaybookStepRun,
+    *,
+    note: str = "",
+    actor: str,
+) -> PlaybookRun:
+    """Skip a stage and immediately dispatch the next wave."""
+    steps = list(
+        db.scalars(
+            select(PlaybookStepRun)
+            .where(PlaybookStepRun.run_id == run.id)
+            .order_by(PlaybookStepRun.stage_index.asc())
+        ).all()
+    )
+    sbx_ids = list({s.sandbox_id for s in steps if s.sandbox_id})
+    sbx_by_id = (
+        {
+            s.id: s
+            for s in db.scalars(
+                select(Sandbox).where(Sandbox.id.in_(sbx_ids), Sandbox.deleted_at.is_(None))
+            ).all()
+        }
+        if sbx_ids
+        else {}
+    )
+    step.status = "skipped"
+    step.approval_note = note.strip() or "人工跳过本阶段"
+    step.approval_decided_by = actor
+    step.completed_at = utcnow()
+    _dispatch_next_wave(db, settings, docker, run, steps, sbx_by_id, actor=actor)
+    run.updated_at = utcnow()
+    audit(
+        db,
+        "playbook.step_skip",
+        target=run.id,
+        actor=actor,
+        detail=f"playbook={run.playbook_key},stage={step.stage_id},status={run.status}",
+    )
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def _strip_reasoning_and_extract_json(raw_text: str) -> dict[str, Any]:
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw_text or "", flags=re.IGNORECASE).strip()
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned, flags=re.IGNORECASE)
+    if fence:
+        cleaned = fence.group(1).strip()
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+    if first_brace >= 0 and last_brace > first_brace:
+        parsed = json.loads(cleaned[first_brace : last_brace + 1])
+        if isinstance(parsed, dict):
+            return parsed
+    raise ManagerError("模型未返回合法的 JSON 结构，请重试或换一个描述")
+
+
+def _call_llm_for_playbook_json(
+    profile: LlmProfile,
+    system_prompt: str,
+    user_prompt: str,
+) -> dict[str, Any]:
+    raw_key = ""
+    if profile.api_key_ciphertext:
+        try:
+            raw_key = decrypt_secret(profile.api_key_ciphertext)
+        except ValueError:
+            raw_key = ""
+    base = (profile.base_url or "").strip().rstrip("/")
+    if not base:
+        raise ManagerError(f"模型配置「{profile.name}」缺少 Base URL")
+    proto = (profile.api_protocol or "openai-completions").strip().lower()
+
+    with httpx.Client(timeout=90.0) as client:
+        if proto == "anthropic":
+            url = f"{base}/v1/messages" if not base.endswith("/v1") else f"{base}/messages"
+            headers = {
+                "content-type": "application/json",
+                "anthropic-version": "2023-06-01",
+            }
+            if raw_key:
+                headers["x-api-key"] = raw_key
+            resp = client.post(
+                url,
+                headers=headers,
+                json={
+                    "model": profile.model,
+                    "max_tokens": 3000,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                },
+            )
+            if resp.status_code >= 400:
+                raise ManagerError(f"调用模型失败 (HTTP {resp.status_code}): {resp.text[:240]}")
+            data = resp.json()
+            text = "".join(
+                str(b.get("text") or "")
+                for b in (data.get("content") or [])
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+            return _strip_reasoning_and_extract_json(text)
+
+        if proto == "google-gemini":
+            url = f"{base}/models/{profile.model}:generateContent"
+            params = {"key": raw_key} if raw_key else {}
+            resp = client.post(
+                url,
+                params=params,
+                headers={"content-type": "application/json"},
+                json={
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 3000},
+                },
+            )
+            if resp.status_code >= 400:
+                raise ManagerError(f"调用模型失败 (HTTP {resp.status_code}): {resp.text[:240]}")
+            data = resp.json()
+            cands = data.get("candidates") or []
+            parts = ((cands[0].get("content") or {}).get("parts") or []) if cands else []
+            text = "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict))
+            return _strip_reasoning_and_extract_json(text)
+
+        # OpenAI-compatible (chat/completions or responses)
+        headers = {"content-type": "application/json"}
+        if raw_key:
+            headers["authorization"] = f"Bearer {raw_key}"
+        url = (
+            f"{base}/chat/completions"
+            if not base.endswith("/chat/completions")
+            else base
+        )
+        resp = client.post(
+            url,
+            headers=headers,
+            json={
+                "model": profile.model,
+                "temperature": 0.3,
+                "max_tokens": 3000,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+        )
+        if resp.status_code >= 400:
+            raise ManagerError(f"调用模型失败 (HTTP {resp.status_code}): {resp.text[:240]}")
+        data = resp.json()
+        choices = data.get("choices") or []
+        msg = (choices[0].get("message") or {}) if choices else {}
+        text = str(msg.get("content") or "")
+        return _strip_reasoning_and_extract_json(text)
+
+
+def generate_playbook_draft_with_llm(
+    db: Session,
+    *,
+    goal: str,
+    category: str | None = None,
+    stage_count: int | None = None,
+    llm_profile_id: str | None = None,
+) -> dict[str, Any]:
+    """Generate a structured, editable Playbook draft from a plain-language goal using the configured LLM."""
+    profile: LlmProfile | None = None
+    if llm_profile_id and llm_profile_id.strip():
+        profile = db.get(LlmProfile, llm_profile_id.strip())
+    if profile is None:
+        # Prefer a profile actively bound to templates, else the latest configured profile
+        bound_id = db.scalar(
+            select(SandboxTemplate.default_llm_profile_id)
+            .where(SandboxTemplate.default_llm_profile_id.is_not(None))
+            .limit(1)
+        )
+        if bound_id:
+            profile = db.get(LlmProfile, bound_id)
+    if profile is None:
+        profile = db.scalar(select(LlmProfile).order_by(LlmProfile.created_at.desc()).limit(1))
+    if profile is None:
+        raise ManagerError("尚未配置 LLM 模型，请先在「模型与凭据」中配置至少一个可用模型")
+
+    templates = list(db.scalars(select(SandboxTemplate).order_by(SandboxTemplate.name.asc())).all())
+    tpl_hints = "\n".join(
+        f"- key={t.key} | role={t.role_title or t.name}" for t in templates[:15]
+    ) or "- key=fullstack | role=全栈研发工程师\n- key=qa | role=测试与质量保障专家\n- key=data | role=数据分析师"
+
+    stage_hint = f"建议设计 {stage_count} 个阶段。" if stage_count else "建议设计 2 到 4 个高内聚的大阶段（宏观里程碑 + 必要的人工审批门禁，不要把开发和对应的测试放进同一个 parallel_group）。"
+    cat_hint = f"分类优先使用 \"{category}\"。" if category else "category 只能是 engineering / analytics / legal / operations / custom 之一。"
+
+    system_prompt = (
+        "你是 Metis 企业数字员工协作平台的流程架构师。请根据用户的一句话业务目标，输出一个严格合法的 JSON 对象（不要任何 Markdown 说明或额外文字）。\n"
+        "JSON Schema 如下：\n"
+        "{\n"
+        '  "key": "lowercase-kebab-case-slug",\n'
+        '  "name": "简短中文流程名称",\n'
+        '  "category": "engineering|analytics|legal|operations|custom",\n'
+        '  "description": "1-2句清晰说明该流程的价值和适用场景",\n'
+        '  "estimated_manual_hours": 4.0,\n'
+        '  "input_fields": [\n'
+        '    {"key": "snake_case_key", "label": "字段中文名", "type": "text|textarea|select|file", "required": true, "placeholder": "示例", "options": []}\n'
+        "  ],\n"
+        '  "stages": [\n'
+        '    {"id": "snake_case_id", "name": "阶段名称", "role_hint": "适合岗位", "template_key_hint": "从可用模板选择", "parallel_group": null, "approval_required": false, "prompt_template": "清晰的阶段指令，使用 {{变量键}} 与 {{previous_outputs}}", "deliverable_hint": "预期交付物"}\n'
+        "  ],\n"
+        '  "deliverables_checklist": ["最终交付物1", "最终交付物2"]\n'
+        "}\n"
+        f"平台现有可用岗位模板：\n{tpl_hints}\n"
+        "规则：\n"
+        "1. 关键里程碑或对外发布/定稿节点建议设 approval_required=true；\n"
+        "2. 仅当两个阶段真正无先后依赖时才填相同的 parallel_group，否则填 null；\n"
+        "3. 每个后续阶段的 prompt_template 应引用 {{previous_outputs}} 和相关输入变量。"
+    )
+    user_prompt = f"用户目标：{goal.strip()}\n{cat_hint}\n{stage_hint}\n请直接输出 JSON："
+
+    raw = _call_llm_for_playbook_json(profile, system_prompt, user_prompt)
+
+    # Normalize & sanitize LLM JSON into guaranteed-valid PlaybookCreate shape
+    valid_cats = {"engineering", "analytics", "legal", "operations", "custom"}
+    chosen_cat = str(raw.get("category") or category or "custom").strip().lower()
+    if chosen_cat not in valid_cats:
+        chosen_cat = category if category in valid_cats else "custom"
+
+    name = str(raw.get("name") or goal.strip()[:40]).strip()[:120] or "自定义协作流"
+    raw_key = _slugify_playbook_key(str(raw.get("key") or ""), name)
+    try:
+        est_hours = max(0.5, min(200.0, float(raw.get("estimated_manual_hours") or 4.0)))
+    except Exception:
+        est_hours = 4.0
+
+    norm_fields: list[dict[str, Any]] = []
+    seen_fkeys: set[str] = set()
+    for idx, f in enumerate(raw.get("input_fields") or []):
+        if not isinstance(f, dict):
+            continue
+        fk = re.sub(r"[^a-z0-9_]+", "_", str(f.get("key") or f"field_{idx + 1}").strip().lower()).strip("_")[:48]
+        if not fk or fk in seen_fkeys:
+            fk = f"field_{idx + 1}"
+        seen_fkeys.add(fk)
+        ft = str(f.get("type") or "text").strip().lower()
+        if ft not in {"text", "textarea", "select", "file"}:
+            ft = "text"
+        opts: list[str] = []
+        for o in (f.get("options") or []):
+            if isinstance(o, dict):
+                val = str(o.get("label") or o.get("name") or o.get("value") or "").strip()
+            else:
+                val = str(o).strip()
+            if val and val not in opts:
+                opts.append(val)
+        if ft == "select" and not opts:
+            ft = "text"
+        norm_fields.append(
+            {
+                "key": fk,
+                "label": str(f.get("label") or fk).strip()[:120],
+                "type": ft,
+                "required": bool(f.get("required", idx == 0)),
+                "placeholder": str(f.get("placeholder") or "").strip()[:200],
+                "options": opts[:12],
+            }
+        )
+
+    norm_stages: list[dict[str, Any]] = []
+    seen_sids: set[str] = set()
+    for idx, s in enumerate((raw.get("stages") or [])[:12]):
+        if not isinstance(s, dict):
+            continue
+        sid = re.sub(r"[^a-z0-9_]+", "_", str(s.get("id") or f"stage_{idx + 1}").strip().lower()).strip("_")[:48]
+        if not sid or sid in seen_sids:
+            sid = f"stage_{idx + 1}"
+        seen_sids.add(sid)
+        sname = str(s.get("name") or f"阶段 {idx + 1}").strip()[:120]
+        pt = str(s.get("prompt_template") or sname).strip()[:5800] or sname
+        pg = str(s.get("parallel_group") or "").strip()[:48] or None
+        norm_stages.append(
+            {
+                "id": sid,
+                "name": sname,
+                "role_hint": str(s.get("role_hint") or "").strip()[:120],
+                "template_key_hint": str(s.get("template_key_hint") or "").strip()[:64],
+                "parallel_group": pg,
+                "approval_required": bool(s.get("approval_required", False)),
+                "prompt_template": pt,
+                "deliverable_hint": str(s.get("deliverable_hint") or "").strip()[:240],
+            }
+        )
+    if not norm_stages:
+        norm_stages.append(
+            {
+                "id": "execute",
+                "name": "执行与交付",
+                "role_hint": "数字员工",
+                "template_key_hint": "",
+                "parallel_group": None,
+                "approval_required": True,
+                "prompt_template": f"请完成以下目标并汇报交付成果：{goal.strip()}",
+                "deliverable_hint": "结构化交付结论与产物链接",
+            }
+        )
+
+    checklist = [
+        str(x).strip()[:200]
+        for x in (raw.get("deliverables_checklist") or [])
+        if str(x).strip()
+    ][:12]
+
+    validated = PlaybookCreate(
+        key=raw_key,
+        name=name,
+        category=chosen_cat,  # type: ignore[arg-type]
+        description=str(raw.get("description") or "").strip()[:580] or None,
+        enabled=True,
+        estimated_manual_hours=est_hours,
+        input_fields=norm_fields,  # type: ignore[arg-type]
+        stages=norm_stages,  # type: ignore[arg-type]
+        deliverables_checklist=checklist,
+    )
+    return {
+        "draft": validated.model_dump(),
+        "model": profile.model,
+        "profile_name": profile.name,
+    }
+
+
 def serialize_playbook_run(db: Session, run: PlaybookRun) -> dict[str, Any]:
     steps = list(
         db.scalars(
@@ -1203,6 +1735,12 @@ def serialize_playbook_run(db: Session, run: PlaybookRun) -> dict[str, Any]:
         uploaded = json.loads(run.uploaded_files_json or "[]")
     except Exception:
         uploaded = []
+    try:
+        role_assignments = json.loads(run.role_assignments_json or "{}")
+        if not isinstance(role_assignments, dict):
+            role_assignments = {}
+    except Exception:
+        role_assignments = {}
 
     serialized_steps = []
     all_artifacts: list[dict[str, str]] = []
@@ -1248,6 +1786,7 @@ def serialize_playbook_run(db: Session, run: PlaybookRun) -> dict[str, Any]:
         "execution_mode": getattr(run, "execution_mode", "isolated") or "isolated",
         "title": run.title,
         "inputs": inputs,
+        "role_assignments": role_assignments,
         "uploaded_files": uploaded,
         "status": run.status,
         "current_stage_index": run.current_stage_index,

@@ -1015,7 +1015,7 @@ class PlaybookStageSpec(BaseModel):
 
 
 class PlaybookCreate(BaseModel):
-    key: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
+    key: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
     name: str = Field(min_length=1, max_length=128)
     category: PLAYBOOK_CATEGORIES = "custom"
     description: str | None = Field(default=None, max_length=600)
@@ -1042,11 +1042,31 @@ class PlaybookImportPayload(BaseModel):
     overwrite: bool = False
 
 
+class PlaybookDraftRequest(BaseModel):
+    goal: str = Field(min_length=4, max_length=2000)
+    category: PLAYBOOK_CATEGORIES | None = None
+    stage_count: int | None = Field(default=None, ge=1, le=8)
+    llm_profile_id: str | None = None
+
+
 class PlaybookStepDecisionRequest(BaseModel):
     decision: Literal["approved", "revise", "rejected"]
     note: str = Field(default="", max_length=1000)
     output_summary: str | None = Field(default=None, max_length=4000)
     artifacts: list[str] | None = None
+
+
+class PlaybookStepRetryRequest(BaseModel):
+    sandbox_id: str | None = None
+    note: str = Field(default="", max_length=1000)
+
+
+class PlaybookStepSkipRequest(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+class PlaybookRunCancelRequest(BaseModel):
+    note: str = Field(default="", max_length=500)
 
 
 class MemoryPromoteRequest(BaseModel):

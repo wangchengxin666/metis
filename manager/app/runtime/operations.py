@@ -620,9 +620,11 @@ function extractArtifacts(text, msgs) {
   }
 
   let startIdx = 0;
+  let dispatchMsg = null;
   if (cfg.sinceMessageId) {
     const idx = messages.findIndex((m) => m && m.id === cfg.sinceMessageId);
     if (idx >= 0) {
+      dispatchMsg = messages[idx];
       startIdx = idx + 1;
     } else {
       // Dispatch message not found in this room yet; don't match older messages
@@ -630,9 +632,12 @@ function extractArtifacts(text, msgs) {
     }
   }
 
+  const effectiveThreadId = cfg.threadId || (dispatchMsg && dispatchMsg.threadId) || '';
+  const dispatchTs = (dispatchMsg && Number(dispatchMsg.createdAt)) || 0;
+
   const afterMsgs = messages.slice(startIdx).filter((m) => {
     if (!m) return false;
-    if (cfg.threadId && m.threadId && m.threadId !== cfg.threadId) return false;
+    if (effectiveThreadId && m.threadId && m.threadId !== effectiveThreadId) return false;
     return true;
   });
 
@@ -648,11 +653,32 @@ function extractArtifacts(text, msgs) {
     : null;
   const taskDone = Boolean(matchedTask && (matchedTask.status === 'done' || matchedTask.status === 'in_review'));
 
-  const replyText = agentReplies
+  // Detect any subtasks spawned in this room/thread after the stage dispatch so we never
+  // prematurely mark a Moderator-orchestrated stage complete while its subtasks are still running.
+  const spawnedTasks = dispatchTs > 0
+    ? tasks.filter((t) =>
+        t
+        && t.id !== cfg.sinceMessageId
+        && Number(t.createdAt || 0) >= dispatchTs - 1000
+        && (!effectiveThreadId || !t.threadId || t.threadId === effectiveThreadId)
+      )
+    : [];
+  const activeSpawned = spawnedTasks.filter((t) => !['done', 'cancelled'].includes(String(t.status || '').toLowerCase()));
+  const doneSpawned = spawnedTasks.filter((t) => String(t.status || '').toLowerCase() === 'done');
+  const blockedSpawned = activeSpawned.filter((t) => String(t.status || '').toLowerCase() === 'blocked');
+  const waitingOnSubtasks = spawnedTasks.length > 0 && activeSpawned.length > 0;
+
+  let replyText = agentReplies
     .map((m) => String(m.text || '').trim())
     .filter(Boolean)
     .join('\\n\\n')
     || (taskDone ? String((matchedTask && (matchedTask.summary || matchedTask.description)) || '').trim() : '');
+
+  if (!waitingOnSubtasks && doneSpawned.length > 0 && !replyText) {
+    replyText = doneSpawned
+      .map((t) => '- ' + (t.title || t.id) + (t.summary ? ': ' + String(t.summary).slice(0, 240) : ''))
+      .join('\\n');
+  }
 
   const errorText = errorMsgs.length ? String(errorMsgs[errorMsgs.length - 1].text || '').trim() : '';
   const artifacts = extractArtifacts(replyText, agentReplies);
@@ -661,9 +687,16 @@ function extractArtifacts(text, msgs) {
       if (a && !artifacts.includes(String(a))) artifacts.push(String(a));
     }
   }
+  for (const st of doneSpawned) {
+    if (Array.isArray(st.artifacts)) {
+      for (const a of st.artifacts) {
+        if (a && !artifacts.includes(String(a))) artifacts.push(String(a));
+      }
+    }
+  }
 
-  const completed = agentReplies.length > 0 || taskDone;
-  const failed = !completed && errorMsgs.length > 0;
+  const completed = waitingOnSubtasks ? false : (agentReplies.length > 0 || taskDone || (spawnedTasks.length > 0 && doneSpawned.length > 0));
+  const failed = !completed && !waitingOnSubtasks && errorMsgs.length > 0;
 
   console.log(JSON.stringify({
     ok: true,
@@ -671,6 +704,10 @@ function extractArtifacts(text, msgs) {
     room_id: cfg.roomId,
     completed,
     failed,
+    waiting_on_subtasks: waitingOnSubtasks,
+    subtasks_total: spawnedTasks.length - spawnedTasks.filter((t) => String(t.status || '').toLowerCase() === 'cancelled').length,
+    subtasks_done: doneSpawned.length,
+    subtasks_blocked: blockedSpawned.length,
     reply_text: replyText.slice(0, 4000),
     error_text: errorText.slice(0, 1000),
     artifacts,

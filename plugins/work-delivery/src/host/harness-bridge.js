@@ -150,6 +150,11 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
         async execute() {
           return { ok: true, state: service.getStateSnapshot() }
         },
+        presentCall: () => ({
+          card: 'generic',
+          title: 'Inspect Work & Delivery overview',
+          kind: 'other',
+        }),
       })
 
       reg({
@@ -192,6 +197,12 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
             approvalRequired: Boolean(args?.approvalRequired),
           })
         },
+        presentCall: (args) => ({
+          card: 'generic',
+          title: `Capture task: ${args?.title || ''}`,
+          kind: 'other',
+          rawInput: String(args?.description || args?.title || '').slice(0, 200),
+        }),
       })
     })().catch((err) => {
       logger?.warn?.(`Failed to register work-delivery tools: ${err?.message || err}`)

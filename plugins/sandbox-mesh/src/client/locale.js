@@ -194,8 +194,36 @@ export const en = {
   toolReplyLabel: 'Reply',
   toolSharedFilesLabel: 'Shared files',
   toolConnectedNodes: 'connected nodes',
+  toolGroupsCount: 'groups',
   toolNoNodes: 'No paired sandboxes',
   toolModeratorLabel: 'Moderator',
+  toolGroupCreatedBadge: 'New Group',
+  toolGroupReusedBadge: 'Active Group',
+  toolTopicLabel: 'Topic',
+  toolMembersLabel: 'Members',
+  toolModeratorReplyLabel: 'Moderator Summary',
+  toolTasksCountUnit: 'tasks',
+  toolModeWait: 'Parallel Wait',
+  toolModeAsync: 'Async Dispatch',
+  toolParallelResultsLabel: 'Peer Reports',
+  toolSharedFilesNote: 'Shared {count} file(s)',
+  toolUnblockedNote: 'Auto-unblocked {count} downstream task(s)',
+  toolApprovalWaitingNote: 'Approval card posted — waiting for human decision in Collab Space.',
+  toolBoardEmpty: 'No tracked tasks in this room yet.',
+  toolBoardSummaryDone: '{done}/{total} done',
+  toolBoardSummaryProgress: '{count} in progress',
+  toolBoardSummaryReview: '{count} in review',
+  toolBoardSummaryBlocked: '{count} blocked',
+  toolBoardSummaryApproval: '{count} awaiting approval',
+  toolOpenFileHint: 'Click to open file',
+  toolFileSharedOk: 'File delivered to room',
+  toolSentToLabel: 'Sent to',
+  toolRoomLabel: 'Room',
+  toolTargetFileLabel: 'File',
+  toolMessageLabel: 'Message',
+  toolApprovalPromptLabel: 'Approval Details',
+  toolAssigneeLabel: 'Assignee',
+  toolUnassigned: 'Unassigned',
   wakeCardTitle: 'Collab Space Request',
   wakeCardFrom: 'From',
   wakeCardRoom: 'Room',
@@ -482,8 +510,36 @@ export const zh = {
   toolReplyLabel: '远端回复',
   toolSharedFilesLabel: '附带共享文件',
   toolConnectedNodes: '个已连接节点',
+  toolGroupsCount: '个群聊',
   toolNoNodes: '暂无已配对沙箱',
   toolModeratorLabel: '主持人',
+  toolGroupCreatedBadge: '新建群聊',
+  toolGroupReusedBadge: '复用群聊',
+  toolTopicLabel: '协作目标',
+  toolMembersLabel: '群成员',
+  toolModeratorReplyLabel: '主持人汇总',
+  toolTasksCountUnit: '项任务',
+  toolModeWait: '并行等待',
+  toolModeAsync: '异步派发',
+  toolParallelResultsLabel: '成员回报',
+  toolSharedFilesNote: '已同步共享 {count} 个文件',
+  toolUnblockedNote: '已自动解锁 {count} 个下游任务',
+  toolApprovalWaitingNote: '已发起人工审批卡片，等待在协同空间确认。',
+  toolBoardEmpty: '当前房间暂无跟踪任务。',
+  toolBoardSummaryDone: '已完成 {done}/{total}',
+  toolBoardSummaryProgress: '进行中 {count}',
+  toolBoardSummaryReview: '待评审 {count}',
+  toolBoardSummaryBlocked: '已阻塞 {count}',
+  toolBoardSummaryApproval: '待审批 {count}',
+  toolOpenFileHint: '点击打开文件',
+  toolFileSharedOk: '文件已发送至会话',
+  toolSentToLabel: '发送至',
+  toolRoomLabel: '房间',
+  toolTargetFileLabel: '文件',
+  toolMessageLabel: '消息内容',
+  toolApprovalPromptLabel: '审批说明',
+  toolAssigneeLabel: '负责人',
+  toolUnassigned: '暂未指派',
   wakeCardTitle: '协同空间协作请求',
   wakeCardFrom: '来自',
   wakeCardRoom: '房间',
@@ -582,5 +638,13 @@ export function normalizeLang(rawLocale) {
 export function createTranslator(rawLocale) {
   const lang = normalizeLang(rawLocale)
   const dict = lang === 'zh' ? zh : en
-  return (key) => dict[key] ?? en[key] ?? key
+  return (key, vars = null) => {
+    let text = dict[key] ?? en[key] ?? key
+    if (vars && typeof vars === 'object') {
+      for (const [k, v] of Object.entries(vars)) {
+        text = text.replaceAll(`{${k}}`, String(v ?? ''))
+      }
+    }
+    return text
+  }
 }

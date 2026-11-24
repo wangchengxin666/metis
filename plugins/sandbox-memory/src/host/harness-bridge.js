@@ -233,6 +233,12 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
             sessionId: execCtx?.sessionId || execCtx?.session?.id || '',
           })
         },
+        presentCall: (args) => ({
+          card: 'generic',
+          title: `Save memory: ${args?.title || ''}`,
+          kind: 'other',
+          rawInput: String(args?.summary || args?.title || '').slice(0, 200),
+        }),
       })
 
       // Tool 2: memory_search
@@ -302,6 +308,12 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
             })),
           }
         },
+        presentCall: (args) => ({
+          card: 'generic',
+          title: `Recall memory${args?.query ? `: ${args.query}` : ''}`,
+          kind: 'other',
+          rawInput: String(args?.query || args?.category || '').slice(0, 160),
+        }),
       })
 
       // Tool 3: memory_get
@@ -339,6 +351,11 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
           const entries = service.store.getMany(ids, { trackAccess: true })
           return { ok: true, count: entries.length, entries }
         },
+        presentCall: (args) => ({
+          card: 'generic',
+          title: `Read memory (${Array.isArray(args?.ids) ? args.ids.length : 1})`,
+          kind: 'other',
+        }),
       })
 
       // Tool 4: memory_update
@@ -375,6 +392,12 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
             pinned: args?.pinned,
           })
         },
+        presentCall: (args) => ({
+          card: 'generic',
+          title: `Update memory: ${args?.title || args?.id || ''}`,
+          kind: 'other',
+          rawInput: String(args?.summary || args?.title || '').slice(0, 200),
+        }),
       })
 
       // Tool 5: memory_delete
@@ -397,6 +420,11 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
         async execute(args) {
           return service.deleteMemory(args?.id)
         },
+        presentCall: (args) => ({
+          card: 'generic',
+          title: `Delete memory ${args?.id || ''}`,
+          kind: 'other',
+        }),
       })
 
       // Tool 6: env_snapshot
@@ -439,6 +467,11 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
             : service.envScanner.getCachedSnapshot()
           return { ok: true, snapshot }
         },
+        presentCall: () => ({
+          card: 'generic',
+          title: 'Inspect sandbox environment snapshot',
+          kind: 'other',
+        }),
       })
     })().catch((err) => {
       logger?.warn?.(`Failed to register sandbox-memory tools: ${err?.message || err}`)

@@ -725,12 +725,21 @@ export const MEMORY_CSS = `
 
 /* Native DSH Chat Tool Card (tool.call.toolview) */
 .smem-tool-card {
-  border-radius: 10px;
-  border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.18));
+  border-radius: 9px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.2));
   background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
   overflow: hidden;
   font-size: 12.5px;
   color: var(--dsw-alias-label-primary, #111827);
+  margin: 2px 0;
+}
+
+.smem-tool-card.running {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #0284c7) 42%, transparent);
+}
+
+.smem-tool-card.error {
+  border-color: rgba(239, 68, 68, 0.36);
 }
 
 .smem-tool-head {
@@ -738,22 +747,34 @@ export const MEMORY_CSS = `
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 11px;
+  padding: 7px 11px;
   cursor: pointer;
   user-select: none;
+  transition: background-color 120ms ease;
+}
+
+.smem-tool-head:hover {
+  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.08));
 }
 
 .smem-tool-head-left {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.smem-tool-icon {
+  display: inline-flex;
+  color: var(--dsw-alias-brand-primary, #4f46e5);
+  flex-shrink: 0;
 }
 
 .smem-tool-title {
   font-weight: 600;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .smem-tool-preview {
@@ -761,19 +782,149 @@ export const MEMORY_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
+.smem-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.smem-tool-status.running { color: var(--dsw-alias-state-business-primary, #0284c7); }
+.smem-tool-status.ok { color: var(--dsw-alias-state-success-primary, #059669); }
+.smem-tool-status.error { color: var(--dsw-alias-state-error-primary, #dc2626); }
+
 .smem-tool-body {
-  padding: 8px 11px 10px;
-  border-top: 1px solid var(--dsw-alias-border-l1, rgba(128, 128, 128, 0.12));
+  padding: 10px 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1, rgba(128, 128, 128, 0.14));
+  background: var(--dsw-alias-bg-base, transparent);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--dsw-alias-label-primary, #111827);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.smem-tool-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.smem-tool-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128, 128, 128, 0.16));
+  background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
+}
+
+.smem-tool-entry-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, #111827);
+  word-break: break-word;
+}
+
+.smem-tool-entry-summary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary, #4b5563);
+  word-break: break-word;
+}
+
+.smem-tool-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.1));
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.smem-tool-md {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  line-height: 1.58;
+  color: var(--dsw-alias-label-primary, #111827);
+  word-break: break-word;
+}
+
+.smem-tool-md p { margin: 0; }
+.smem-tool-md h4 { margin: 3px 0 0; font-size: 13px; font-weight: 650; }
+.smem-tool-md ul, .smem-tool-md ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.smem-tool-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--dsw-alias-markdown-code-block, rgba(128, 128, 128, 0.14));
+}
+.smem-tool-md pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--dsw-alias-markdown-code-block, rgba(128, 128, 128, 0.1));
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128, 128, 128, 0.16));
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11.5px;
   line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+.smem-tool-md a, .smem-tool-link {
+  color: var(--dsw-alias-link, #0284c7);
+  text-decoration: none;
+}
+.smem-tool-md a:hover, .smem-tool-link:hover {
+  text-decoration: underline;
+}
+
+.smem-tool-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.smem-tool-env-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128, 128, 128, 0.14));
+  background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.03));
+}
+
+.smem-tool-error {
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(239, 68, 68, 0.34);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--dsw-alias-state-error-primary, #dc2626);
+  font-size: 12px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--dsw-alias-label-secondary, #4b5563);
-  max-height: 220px;
-  overflow-y: auto;
+}
+
+.smem-tool-muted {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
 }
 
 .smem-settings-wrap {

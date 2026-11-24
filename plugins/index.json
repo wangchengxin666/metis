@@ -91,8 +91,8 @@
       },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishTimestamp": 1795356000,
+          "version": "0.1.1",
+          "publishTimestamp": 1795534800,
           "source": {
             "type": "npm",
             "registry": "http://localhost:9000/plugins/npm"
@@ -185,8 +185,8 @@
       },
       "versions": [
         {
-          "version": "0.3.11",
-          "publishTimestamp": 1795529000,
+          "version": "0.3.12",
+          "publishTimestamp": 1795534800,
           "source": {
             "type": "npm",
             "registry": "http://localhost:9000/plugins/npm"
@@ -232,8 +232,8 @@
       },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishTimestamp": 1795269600,
+          "version": "0.1.1",
+          "publishTimestamp": 1795534800,
           "source": {
             "type": "npm",
             "registry": "http://localhost:9000/plugins/npm"

@@ -96,6 +96,18 @@ window.__ModuleLoader__.load({
       toolRunning: 'Running...',
       toolDone: 'Done',
       toolFailed: 'Failed',
+      toolSummaryCounts: '{active} active · {done} done · {pages} pages',
+      toolMetricActive: 'Active Tasks',
+      toolMetricDone: 'Completed',
+      toolMetricApproval: 'Pending Approval',
+      toolMetricPages: 'Published Pages',
+      toolMetricServices: 'Services',
+      toolApprovalRequiredBadge: 'Needs Approval',
+      toolPriorityLow: 'Low',
+      toolPriorityNormal: 'Normal',
+      toolPriorityHigh: 'High',
+      toolPriorityUrgent: 'Urgent',
+      toolNoneLabel: 'None',
 
       // Toasts
       toastTaskUpdated: 'Task updated',
@@ -176,6 +188,18 @@ window.__ModuleLoader__.load({
       toolRunning: '执行中...',
       toolDone: '已完成',
       toolFailed: '失败',
+      toolSummaryCounts: '进行中 {active} · 已完成 {done} · 页面 {pages}',
+      toolMetricActive: '进行中任务',
+      toolMetricDone: '已完成',
+      toolMetricApproval: '待审批',
+      toolMetricPages: '在线页面',
+      toolMetricServices: '后台服务',
+      toolApprovalRequiredBadge: '需人工审批',
+      toolPriorityLow: '低',
+      toolPriorityNormal: '普通',
+      toolPriorityHigh: '高',
+      toolPriorityUrgent: '紧急',
+      toolNoneLabel: '暂无',
 
       // Toasts
       toastTaskUpdated: '任务状态已更新',
@@ -688,11 +712,21 @@ window.__ModuleLoader__.load({
 
     /* Chat Tool Card */
     .wd-tool-card {
-      border-radius: var(--dsw-radius-md, 10px);
+      border-radius: 9px;
       border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.22));
-      background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.05));
+      background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
       overflow: hidden;
-      margin: 4px 0;
+      margin: 2px 0;
+      font-size: 12.5px;
+      color: var(--dsw-alias-label-primary, #111827);
+    }
+
+    .wd-tool-card.running {
+      border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #0284c7) 42%, transparent);
+    }
+
+    .wd-tool-card.error {
+      border-color: rgba(239, 68, 68, 0.36);
     }
 
     .wd-tool-head {
@@ -700,37 +734,149 @@ window.__ModuleLoader__.load({
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      padding: 8px 12px;
+      padding: 7px 11px;
       cursor: pointer;
       user-select: none;
+      transition: background-color 120ms ease;
+    }
+
+    .wd-tool-head:hover {
+      background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.08));
     }
 
     .wd-tool-head-left {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .wd-tool-icon {
+      display: inline-flex;
+      color: var(--dsw-alias-brand-primary, #4f46e5);
+      flex-shrink: 0;
     }
 
     .wd-tool-title {
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       color: var(--dsw-alias-label-primary, #111827);
       white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .wd-tool-preview {
-      font-size: 12.5px;
+      font-size: 12px;
       color: var(--dsw-alias-label-secondary, #6b7280);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
+    .wd-tool-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .wd-tool-status.running { color: var(--dsw-alias-state-business-primary, #0284c7); }
+    .wd-tool-status.ok { color: var(--dsw-alias-state-success-primary, #059669); }
+    .wd-tool-status.error { color: var(--dsw-alias-state-error-primary, #dc2626); }
+
     .wd-tool-body {
       padding: 10px 12px;
-      border-top: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.16));
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      border-top: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.14));
+      background: var(--dsw-alias-bg-base, transparent);
+      font-family: inherit;
+      font-size: 12.5px;
+      line-height: 1.55;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .wd-tool-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .wd-tool-metric {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 7px;
+      border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.16));
+      background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
+      font-size: 12px;
+    }
+
+    .wd-tool-metric strong {
+      font-weight: 650;
+      color: var(--dsw-alias-label-primary, #111827);
+    }
+
+    .wd-tool-metric span {
+      color: var(--dsw-alias-label-secondary, #6b7280);
+    }
+
+    .wd-tool-box {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.16));
+      background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
+    }
+
+    .wd-tool-section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--dsw-alias-label-secondary, #6b7280);
+    }
+
+    .wd-tool-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+
+    .wd-tool-link {
+      color: var(--dsw-alias-link, #0284c7);
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    .wd-tool-link:hover {
+      text-decoration: underline;
+    }
+
+    .wd-tool-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #9ca3af;
+      flex-shrink: 0;
+    }
+    .wd-tool-dot.running { background: #10b981; }
+    .wd-tool-dot.stopped, .wd-tool-dot.fatal { background: #ef4444; }
+
+    .wd-tool-error {
+      padding: 7px 10px;
+      border-radius: 7px;
+      border: 1px solid rgba(239, 68, 68, 0.34);
+      background: rgba(239, 68, 68, 0.08);
+      color: var(--dsw-alias-state-error-primary, #dc2626);
       font-size: 12px;
       line-height: 1.5;
       white-space: pre-wrap;
@@ -857,10 +1003,49 @@ window.__ModuleLoader__.load({
     }
 
     // --- client/tool-views.js ---
-    function parseToolArgsSafe(block) {
+    function wdTvIsPartialArguments(obj) {
+      return Boolean(
+        obj
+        && typeof obj === 'object'
+        && !Array.isArray(obj)
+        && typeof obj.text === 'function'
+        && typeof obj.value === 'function'
+        && typeof obj.keys === 'function',
+      )
+    }
+
+    function wdTvReadPartialArguments(pa) {
+      const out = {}
+      let keys = []
+      try {
+        keys = Array.from(pa.keys() || [])
+      } catch {
+        return out
+      }
+      for (const key of keys) {
+        if (typeof key !== 'string' || !key) continue
+        try {
+          const str = pa.text(key)
+          if (typeof str === 'string') {
+            out[key] = str
+            continue
+          }
+        } catch {}
+        try {
+          const val = pa.value(key)
+          if (val !== undefined) out[key] = val
+        } catch {}
+      }
+      return out
+    }
+
+    function wdTvAsString(val) {
+      return typeof val === 'string' ? val : ''
+    }
+
+    function parseWorkDeliveryToolArgsSafe(block) {
       if (!block || typeof block !== 'object') return {}
-      const direct = block.call?.args ?? block.args
-      if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct
+
       const raw = block.call?.argsRaw ?? block.argsRaw ?? ''
       if (typeof raw === 'string' && raw.trim()) {
         try {
@@ -868,10 +1053,23 @@ window.__ModuleLoader__.load({
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
         } catch {}
       }
+
+      const direct = block.call?.args ?? block.args
+      if (wdTvIsPartialArguments(direct)) {
+        return wdTvReadPartialArguments(direct)
+      }
+
+      if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+        const clean = {}
+        for (const [k, v] of Object.entries(direct)) {
+          if (typeof v !== 'function') clean[k] = v
+        }
+        return clean
+      }
       return {}
     }
 
-    function extractOutputText(block) {
+    function wdTvExtractOutputText(block) {
       if (!block || typeof block !== 'object' || !Array.isArray(block.content)) return ''
       return block.content
         .filter((item) => item && item.type === 'text' && typeof item.text === 'string' && item.text.trim())
@@ -879,12 +1077,75 @@ window.__ModuleLoader__.load({
         .join('\n')
     }
 
+    function wdTvParseOverviewOutput(outputText) {
+      const text = String(outputText || '').trim()
+      if (!text || !text.startsWith('Work & Delivery Overview')) return null
+      const out = {
+        header: '',
+        activeTasks: 0,
+        doneTasks: 0,
+        pendingApproval: 0,
+        pages: [],
+        services: [],
+      }
+      for (const rawLine of text.split('\n')) {
+        const line = rawLine.trim()
+        if (!line) continue
+        let m
+        if ((m = line.match(/^Work & Delivery Overview\s*\(([^)]+)\)/i))) {
+          out.header = m[1].trim()
+        } else if ((m = line.match(/^-\s*Tasks:\s*(\d+)\s+active,\s*(\d+)\s+done,\s*(\d+)\s+pending approval/i))) {
+          out.activeTasks = Number(m[1]) || 0
+          out.doneTasks = Number(m[2]) || 0
+          out.pendingApproval = Number(m[3]) || 0
+        } else if ((m = line.match(/^-\s*Published Pages\s*\(\d+\):\s*(.+)$/i))) {
+          if (m[1].trim().toLowerCase() !== 'none') {
+            out.pages = m[1].split(';').map((raw) => {
+              const pm = raw.trim().match(/^([^\s]+)\s*->\s*(.+)$/)
+              return pm ? { name: pm[1].trim(), url: pm[2].trim() } : { name: raw.trim(), url: '' }
+            }).filter((p) => p.name)
+          }
+        } else if ((m = line.match(/^-\s*Background Services\s*\(\d+\):\s*(.+)$/i))) {
+          if (m[1].trim().toLowerCase() !== 'none') {
+            out.services = m[1].split(';').map((raw) => {
+              const sm = raw.trim().match(/^([^\s(]+)\s*\(([^)]+)\)$/)
+              return sm ? { name: sm[1].trim(), status: sm[2].trim().toLowerCase() } : { name: raw.trim(), status: 'unknown' }
+            }).filter((s) => s.name)
+          }
+        }
+      }
+      return out
+    }
+
+    function wdTvParseTaskCreateOutput(outputText) {
+      const text = String(outputText || '').trim()
+      const m = text.match(/^Created task\s+#([^:]+):\s*"([^"]*)"(\s*\(pending human approval\))?$/i)
+      if (!m) return null
+      return {
+        taskId: m[1].trim(),
+        title: m[2],
+        approvalRequired: Boolean(m[3]),
+      }
+    }
+
+    function wdTvPriorityLabel(priority, t) {
+      const p = String(priority || '').toLowerCase()
+      if (p === 'urgent') return { label: t('toolPriorityUrgent'), cls: 'wd-badge-warn' }
+      if (p === 'high') return { label: t('toolPriorityHigh'), cls: 'wd-badge-warn' }
+      if (p === 'low') return { label: t('toolPriorityLow'), cls: '' }
+      if (p === 'normal') return { label: t('toolPriorityNormal'), cls: '' }
+      return null
+    }
+
     function createWorkDeliveryToolView({ React, getLocale, subscribeLocale }) {
       const h = React.createElement
 
-      return function WorkDeliveryToolView({ toolName, phase, block }) {
+      return function WorkDeliveryToolView(props) {
         const [langTick, setLangTick] = React.useState(0)
-        const [expanded, setExpanded] = React.useState(false)
+        const [localOpen, setLocalOpen] = React.useState(false)
+        const disclosure = typeof props.useDisclosure === 'function' ? props.useDisclosure() : null
+        const expanded = disclosure ? Boolean(disclosure.expanded) : localOpen
+        const toggleExpand = disclosure ? disclosure.toggle : () => setLocalOpen((v) => !v)
 
         React.useEffect(() => {
           if (typeof subscribeLocale !== 'function') return undefined
@@ -894,52 +1155,162 @@ window.__ModuleLoader__.load({
 
         const rawLocale = typeof getLocale === 'function' ? getLocale() : 'en'
         const t = createTranslator(rawLocale)
-        const name = String(toolName || block?.call?.name || '').trim()
-        const args = parseToolArgsSafe(block)
-        const outputText = extractOutputText(block)
-        const isError = Boolean(block?.isError)
-        const isRunning = phase === 'call' || phase === 'running' || phase === 'pending'
+        const block = props.block || {}
+        const name = String(props.toolName || block?.call?.name || block?.name || '').trim()
+        const isDone = props.phase === 'result' || props.phase === 'done' || ('kind' in block)
+        const isRunning = !isDone
+        const args = parseWorkDeliveryToolArgsSafe(block)
+        const outputText = isDone ? wdTvExtractOutputText(block) : ''
+        const isFailedText = /^Failed to create task:/i.test(outputText)
+        const isError = Boolean(isDone && (block?.isError || block?.error || isFailedText))
+
+        const parsedOverview = name === 'delivery_overview' ? wdTvParseOverviewOutput(outputText) : null
+        const parsedCreate = name === 'delivery_task_create' ? wdTvParseTaskCreateOutput(outputText) : null
+
+        const argTitle = wdTvAsString(args.title).trim()
+        const argDesc = wdTvAsString(args.description).trim()
+        const argPriority = wdTvAsString(args.priority).trim()
+        const argApproval = Boolean(args.approvalRequired || parsedCreate?.approvalRequired)
 
         const titleKey = name === 'delivery_task_create' ? 'toolTaskCreateTitle' : 'toolOverviewTitle'
-        const preview = name === 'delivery_task_create'
-          ? (args.title || '')
-          : (outputText.split('\n')[0] || '')
+        let preview = ''
+        if (name === 'delivery_task_create') {
+          preview = argTitle || parsedCreate?.title || ''
+        } else if (parsedOverview) {
+          preview = t('toolSummaryCounts', {
+            active: parsedOverview.activeTasks,
+            done: parsedOverview.doneTasks,
+            pages: parsedOverview.pages.length,
+          })
+        } else if (outputText) {
+          preview = outputText.split('\n')[0] || ''
+        }
 
         const statusText = isRunning ? t('toolRunning') : (isError ? t('toolFailed') : t('toolDone'))
+        const statusClass = isRunning ? 'running' : (isError ? 'error' : 'ok')
+        const hasDetails = Boolean(argTitle || argDesc || outputText)
+
+        const renderBody = () => {
+          if (isError) {
+            return h('div', { className: 'wd-tool-error' }, outputText || t('toolFailed'))
+          }
+
+          if (name === 'delivery_overview' && parsedOverview) {
+            return h(
+              React.Fragment || 'div',
+              null,
+              h(
+                'div',
+                { className: 'wd-tool-metrics' },
+                h('div', { className: 'wd-tool-metric' }, h('span', null, t('toolMetricActive')), h('strong', null, String(parsedOverview.activeTasks))),
+                h('div', { className: 'wd-tool-metric' }, h('span', null, t('toolMetricDone')), h('strong', null, String(parsedOverview.doneTasks))),
+                parsedOverview.pendingApproval > 0
+                  ? h('div', { className: 'wd-tool-metric' }, h('span', null, t('toolMetricApproval')), h('strong', null, String(parsedOverview.pendingApproval)))
+                  : null,
+                h('div', { className: 'wd-tool-metric' }, h('span', null, t('toolMetricPages')), h('strong', null, String(parsedOverview.pages.length))),
+                h('div', { className: 'wd-tool-metric' }, h('span', null, t('toolMetricServices')), h('strong', null, String(parsedOverview.services.length))),
+              ),
+              parsedOverview.pages.length > 0
+                ? h(
+                    'div',
+                    { className: 'wd-tool-box' },
+                    h('div', { className: 'wd-tool-section-label' }, t('toolMetricPages')),
+                    ...parsedOverview.pages.map((p) =>
+                      h(
+                        'div',
+                        { key: p.name, className: 'wd-tool-row' },
+                        h('strong', null, p.name),
+                        /^https?:\/\//i.test(p.url)
+                          ? h('a', { className: 'wd-tool-link', href: p.url, target: '_blank', rel: 'noopener noreferrer' }, p.url)
+                          : h('span', { className: 'wd-mono' }, p.url),
+                      ),
+                    ),
+                  )
+                : null,
+              parsedOverview.services.length > 0
+                ? h(
+                    'div',
+                    { className: 'wd-tool-box' },
+                    h('div', { className: 'wd-tool-section-label' }, t('toolMetricServices')),
+                    ...parsedOverview.services.map((sv) =>
+                      h(
+                        'div',
+                        { key: sv.name, className: 'wd-tool-row' },
+                        h(
+                          'span',
+                          { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 550 } },
+                          h('span', { className: `wd-tool-dot ${sv.status}` }),
+                          sv.name,
+                        ),
+                        h('span', { className: `wd-badge${sv.status === 'running' ? ' wd-badge-ok' : ''}` }, sv.status),
+                      ),
+                    ),
+                  )
+                : null,
+            )
+          }
+
+          if (name === 'delivery_task_create') {
+            const displayTitle = argTitle || parsedCreate?.title || ''
+            const prio = wdTvPriorityLabel(argPriority, t)
+            return h(
+              'div',
+              { className: 'wd-tool-box' },
+              h(
+                'div',
+                { className: 'wd-tool-row' },
+                h(
+                  'span',
+                  { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+                  displayTitle ? h('strong', null, displayTitle) : null,
+                  prio ? h('span', { className: `wd-badge ${prio.cls}` }, prio.label) : null,
+                  argApproval ? h('span', { className: 'wd-badge wd-badge-warn' }, t('toolApprovalRequiredBadge')) : null,
+                ),
+                parsedCreate?.taskId ? h('span', { className: 'wd-mono' }, `#${parsedCreate.taskId}`) : null,
+              ),
+              argDesc ? h('div', { style: { color: 'var(--dsw-alias-label-secondary, #6b7280)', whiteSpace: 'pre-wrap' } }, argDesc) : null,
+            )
+          }
+
+          return outputText ? h('div', { style: { whiteSpace: 'pre-wrap' } }, outputText) : null
+        }
 
         return h(
           'div',
-          { className: 'wd-tool-card' },
+          { className: `wd-tool-card ${statusClass}` },
           h(
             'div',
             {
               className: 'wd-tool-head',
               role: 'button',
               tabIndex: 0,
-              onClick: () => setExpanded((v) => !v),
+              onClick: () => { if (hasDetails) toggleExpand() },
               onKeyDown: (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if (hasDetails && (e.key === 'Enter' || e.key === ' ')) {
                   e.preventDefault()
-                  setExpanded((v) => !v)
+                  toggleExpand()
                 }
               },
             },
             h(
               'div',
               { className: 'wd-tool-head-left' },
-              h(WorkDeliveryNavIcon, { React, size: 15 }),
+              hasDetails ? h(ChevronIcon, { React, size: 12, expanded }) : null,
+              h('span', { className: 'wd-tool-icon' }, h(WorkDeliveryNavIcon, { React, size: 14 })),
               h('span', { className: 'wd-tool-title' }, t(titleKey)),
+              argApproval && name === 'delivery_task_create'
+                ? h('span', { className: 'wd-badge wd-badge-warn' }, t('toolApprovalRequiredBadge'))
+                : null,
               preview ? h('span', { className: 'wd-tool-preview' }, preview) : null,
             ),
             h(
-              'div',
-              { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flexShrink: 0 } },
-              h('span', { className: `wd-badge${isError ? '' : ' wd-badge-ok'}` }, statusText),
-              outputText ? h(ChevronIcon, { React, size: 13, expanded }) : null,
+              'span',
+              { className: `wd-tool-status ${statusClass}` },
+              statusText,
             ),
           ),
-          expanded && outputText
-            ? h('div', { className: 'wd-tool-body' }, outputText)
+          expanded && hasDetails
+            ? h('div', { className: 'wd-tool-body' }, renderBody())
             : null,
         )
       }

@@ -65,7 +65,13 @@ assert.ok(html.includes('TEAM_README.md'))
 // Scheduled tasks are owned by DSH native Automations (dsh-schedule), not duplicated here
 assert.ok(!html.includes('定时事务'))
 
-// Render AI chat tool view for delivery_task_create
+// Render AI chat tool views with DSH 0.2.3 PartialArguments & expanded structured views
+const makePartialArgs = (obj) => ({
+  keys() { return Object.keys(obj) },
+  text(k) { return typeof obj[k] === 'string' ? obj[k] : undefined },
+  value(k) { return typeof obj[k] === 'string' ? undefined : obj[k] },
+})
+const expandedDisclosure = () => ({ expanded: true, toggle() {} })
 const ToolView = createWorkDeliveryToolView({
   React,
   getLocale: () => 'zh-CN',
@@ -73,17 +79,52 @@ const ToolView = createWorkDeliveryToolView({
 })
 const toolHtml = renderToStaticMarkup(
   React.createElement(ToolView, {
+    callId: 'wd1',
     toolName: 'delivery_task_create',
-    phase: 'done',
+    phase: 'result',
+    useDisclosure: expandedDisclosure,
     block: {
-      call: { name: 'delivery_task_create', args: { title: 'Prepare Q4 review' } },
-      content: [{ type: 'text', text: 'Created task #tsk_1: "Prepare Q4 review"' }],
+      kind: 'tool-result',
+      call: {
+        name: 'delivery_task_create',
+        args: makePartialArgs({ title: 'Prepare Q4 review', description: 'Check KPI metrics', priority: 'high', approvalRequired: true }),
+      },
+      content: [{ type: 'text', text: 'Created task #tsk_1: "Prepare Q4 review" (pending human approval)' }],
       isError: false,
     },
   }),
 )
 assert.ok(toolHtml.includes('记录工作任务'))
 assert.ok(toolHtml.includes('Prepare Q4 review'))
+assert.ok(toolHtml.includes('需人工审批'))
+assert.ok(toolHtml.includes('Check KPI metrics'))
+assert.ok(!toolHtml.includes('text(k)'))
+
+const overviewHtml = renderToStaticMarkup(
+  React.createElement(ToolView, {
+    callId: 'wd2',
+    toolName: 'delivery_overview',
+    phase: 'result',
+    useDisclosure: expandedDisclosure,
+    block: {
+      kind: 'tool-result',
+      call: { name: 'delivery_overview', args: makePartialArgs({}) },
+      content: [{
+        type: 'text',
+        text: [
+          'Work & Delivery Overview (@lead · Tech Lead)',
+          '- Tasks: 5 active, 10 done, 1 pending approval',
+          '- Published Pages (1): demo -> http://localhost:9000/s/lead/apps/demo/',
+          '- Background Services (1): api (running)',
+        ].join('\n'),
+      }],
+    },
+  }),
+)
+assert.ok(overviewHtml.includes('进行中 5 · 已完成 10 · 页面 1'))
+assert.ok(overviewHtml.includes('wd-tool-metrics'))
+assert.ok(overviewHtml.includes('http://localhost:9000/s/lead/apps/demo/'))
+assert.ok(overviewHtml.includes('wd-tool-dot running'))
 
 ctrl.dispose()
 console.log('client-live ok')

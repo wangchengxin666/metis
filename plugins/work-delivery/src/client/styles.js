@@ -483,11 +483,21 @@ export const WORK_DELIVERY_CSS = `
 
 /* Chat Tool Card */
 .wd-tool-card {
-  border-radius: var(--dsw-radius-md, 10px);
+  border-radius: 9px;
   border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.22));
-  background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.05));
+  background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
   overflow: hidden;
-  margin: 4px 0;
+  margin: 2px 0;
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-primary, #111827);
+}
+
+.wd-tool-card.running {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary, #0284c7) 42%, transparent);
+}
+
+.wd-tool-card.error {
+  border-color: rgba(239, 68, 68, 0.36);
 }
 
 .wd-tool-head {
@@ -495,37 +505,149 @@ export const WORK_DELIVERY_CSS = `
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 11px;
   cursor: pointer;
   user-select: none;
+  transition: background-color 120ms ease;
+}
+
+.wd-tool-head:hover {
+  background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.08));
 }
 
 .wd-tool-head-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.wd-tool-icon {
+  display: inline-flex;
+  color: var(--dsw-alias-brand-primary, #4f46e5);
+  flex-shrink: 0;
 }
 
 .wd-tool-title {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--dsw-alias-label-primary, #111827);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .wd-tool-preview {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--dsw-alias-label-secondary, #6b7280);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.wd-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.wd-tool-status.running { color: var(--dsw-alias-state-business-primary, #0284c7); }
+.wd-tool-status.ok { color: var(--dsw-alias-state-success-primary, #059669); }
+.wd-tool-status.error { color: var(--dsw-alias-state-error-primary, #dc2626); }
+
 .wd-tool-body {
   padding: 10px 12px;
-  border-top: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.16));
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  border-top: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.14));
+  background: var(--dsw-alias-bg-base, transparent);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wd-tool-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wd-tool-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.16));
+  background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
+  font-size: 12px;
+}
+
+.wd-tool-metric strong {
+  font-weight: 650;
+  color: var(--dsw-alias-label-primary, #111827);
+}
+
+.wd-tool-metric span {
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.wd-tool-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.16));
+  background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04));
+}
+
+.wd-tool-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.wd-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.wd-tool-link {
+  color: var(--dsw-alias-link, #0284c7);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.wd-tool-link:hover {
+  text-decoration: underline;
+}
+
+.wd-tool-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #9ca3af;
+  flex-shrink: 0;
+}
+.wd-tool-dot.running { background: #10b981; }
+.wd-tool-dot.stopped, .wd-tool-dot.fatal { background: #ef4444; }
+
+.wd-tool-error {
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(239, 68, 68, 0.34);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--dsw-alias-state-error-primary, #dc2626);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

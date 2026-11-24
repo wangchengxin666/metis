@@ -65,7 +65,8 @@ export function stripMarkdownForPreview(rawText, maxLen = 88) {
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^>\s?/gm, '')
     .replace(/\|[-:\s|]+\|/g, ' ')
-    .replace(/[*~_]+/g, '')
+    .replace(/[*~]+/g, '')
+    .replace(/(^|[\s(（【\[])_+([^_\n]+?)_+(?=[\s.,;:!?)\]）】]|$)/g, '$1$2')
     .replace(/\s+/g, ' ')
     .trim()
   if (cleaned.length <= maxLen) return cleaned

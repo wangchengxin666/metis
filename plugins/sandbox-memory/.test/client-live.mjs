@@ -164,7 +164,13 @@ const mockHostState = {
   assert.ok(settingsHtmlEn.includes('Zero-Token Auto-Capture on Turn End'))
   assert.ok(settingsHtmlEn.includes('Include Compact Environment Snapshot'))
 
-  // Render Native Chat Tool Cards (no raw JSON dumps)
+  // Render Native Chat Tool Cards (DSH 0.2.3 PartialArguments + expanded structured views, zero raw code/JSON)
+  const makePartialArgs = (obj) => ({
+    keys() { return Object.keys(obj) },
+    text(k) { return typeof obj[k] === 'string' ? obj[k] : undefined },
+    value(k) { return typeof obj[k] === 'string' ? undefined : obj[k] },
+  })
+  const expandedDisclosure = () => ({ expanded: true, toggle() {} })
   const ToolCard = createMemoryToolView({
     React,
     getLocale: () => 'zh-CN',
@@ -172,25 +178,96 @@ const mockHostState = {
   })
   const saveCardHtml = ReactDOMServer.renderToStaticMarkup(
     React.createElement(ToolCard, {
+      callId: 'm1',
       toolName: 'memory_save',
       phase: 'result',
+      useDisclosure: expandedDisclosure,
       block: {
+        kind: 'tool-result',
         call: {
           name: 'memory_save',
-          argsRaw: JSON.stringify({ title: '包管理规范', category: 'preference' }),
+          args: makePartialArgs({
+            title: '包管理规范',
+            summary: '统一使用 yarn 4',
+            content: '请始终使用 **corepack yarn**，不要混用 `npm`。',
+            category: 'preference',
+            tags: ['yarn', 'frontend'],
+            pinned: true,
+          }),
+          argsRaw: JSON.stringify({
+            title: '包管理规范',
+            summary: '统一使用 yarn 4',
+            content: '请始终使用 **corepack yarn**，不要混用 `npm`。',
+            category: 'preference',
+            tags: ['yarn', 'frontend'],
+            pinned: true,
+          }),
         },
-        content: [{ type: 'text', text: 'Saved memory [mem_abc1234567] (preference): "包管理规范"' }],
+        content: [{ type: 'text', text: 'Saved memory [mem_abc1234567] (preference): "包管理规范" — 统一使用 yarn 4' }],
       },
     }),
   )
   assert.ok(saveCardHtml.includes('已保存记忆'))
   assert.ok(saveCardHtml.includes('包管理规范'))
+  assert.ok(saveCardHtml.includes('偏好'))
+  assert.ok(saveCardHtml.includes('<strong>corepack yarn</strong>'))
+  assert.ok(saveCardHtml.includes('#yarn'))
   assert.ok(!saveCardHtml.includes('"category"'), 'Tool card must not dump raw JSON args')
+  assert.ok(!saveCardHtml.includes('text(k)'), 'Must never leak PartialArguments method source')
 
-  // Verify real DSH CSS design tokens are used
+  const searchCardHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(ToolCard, {
+      callId: 'm2',
+      toolName: 'memory_search',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      block: {
+        kind: 'tool-result',
+        call: { name: 'memory_search', args: makePartialArgs({ query: 'yarn' }) },
+        content: [{ type: 'text', text: 'Found 1 memory match(es):\n- [mem_abc1234567|preference|pinned] 前端统一使用 Yarn — 所有前端工程使用 yarn 4 (yarn, frontend)' }],
+      },
+    }),
+  )
+  assert.ok(searchCardHtml.includes('找到 1 条'))
+  assert.ok(searchCardHtml.includes('前端统一使用 Yarn'))
+  assert.ok(searchCardHtml.includes('置顶'))
+  assert.ok(!searchCardHtml.includes('Found 1 memory match(es):'))
+
+  const envCardHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(ToolCard, {
+      callId: 'm3',
+      toolName: 'env_snapshot',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      block: {
+        kind: 'tool-result',
+        call: { name: 'env_snapshot', args: makePartialArgs({ refresh: true }) },
+        content: [{
+          type: 'text',
+          text: [
+            'Sandbox: slug=alice, home=/home/workspace',
+            'Public URL: https://dock.example.com/s/alice/',
+            'Toolchains (2): node@24.22.3, python3@3.13.2',
+            'Projects (1): billing-api [python, git]',
+            'Services (1): billing (running) -> uvicorn main:app --port 8001',
+            'Exposed Routes (1): billing -> 127.0.0.1:8001 (https://dock.example.com/s/alice/apps/billing/)',
+            'Cron Jobs (0): (none)',
+          ].join('\n'),
+        }],
+      },
+    }),
+  )
+  assert.ok(envCardHtml.includes('1 个项目 · 2 个工具链 · 1 个服务'))
+  assert.ok(envCardHtml.includes('node@24.22.3'))
+  assert.ok(envCardHtml.includes('billing-api · python, git'))
+  assert.ok(envCardHtml.includes('smem-dot running'))
+  assert.ok(envCardHtml.includes('https://dock.example.com/s/alice/apps/billing/'))
+
+  // Verify real DSH CSS design tokens are used and tool body is no longer raw monospace code dump
   assert.ok(MEMORY_CSS.includes('--dsw-alias-label-primary'))
   assert.ok(MEMORY_CSS.includes('--dsw-alias-bg-layer-1'))
   assert.ok(MEMORY_CSS.includes('--dsw-alias-brand-primary'))
+  assert.ok(!/\.smem-tool-body\s*\{[^}]*ui-monospace/.test(MEMORY_CSS), '.smem-tool-body must use proportional UI font')
 
   controller.dispose()
 }

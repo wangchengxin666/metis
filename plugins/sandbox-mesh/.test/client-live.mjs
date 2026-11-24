@@ -1047,6 +1047,172 @@ const ReactDOMServer = await importExternal('react-dom/server')
   assert.ok(settingsSopHtml.includes('全栈工程师'), 'Settings must include Full-Stack Engineer role preset')
   assert.ok(settingsSopHtml.includes('安全审计与合规专家'), 'Settings must include Security Auditor role preset')
 
+  // DSH 0.2.3 PartialArguments & structured expanded tool cards (never leaking `text(key)` JS method source or LLM coaching text)
+  const makePartialArgs = (obj) => ({
+    keys() { return Object.keys(obj) },
+    text(key) { return typeof obj[key] === 'string' ? obj[key] : undefined },
+    value(key) { return typeof obj[key] === 'string' ? undefined : obj[key] },
+  })
+  const expandedDisclosure = () => ({ expanded: true, toggle() {} })
+
+  // 1) mesh_task_update with PartialArguments must NOT print `text(key)` or `[handoff queued...]`
+  const updHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(MeshToolCard, {
+      callId: 'c-upd',
+      toolName: 'mesh_task_update',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      openFile: () => {},
+      block: {
+        kind: 'tool-result',
+        call: {
+          name: 'mesh_task_update',
+          args: makePartialArgs({
+            roomId: 'grp_rich',
+            taskId: 'tsk_abc_123',
+            status: 'done',
+            summary: '完成 `/healthz` 接口与 **WebSocket** 推送',
+            artifacts: ['/home/workspace/app/server.js', 'https://example.com/demo'],
+          }),
+          argsRaw: JSON.stringify({
+            roomId: 'grp_rich',
+            taskId: 'tsk_abc_123',
+            status: 'done',
+            summary: '完成 `/healthz` 接口与 **WebSocket** 推送',
+            artifacts: ['/home/workspace/app/server.js', 'https://example.com/demo'],
+          }),
+        },
+        content: [{
+          type: 'text',
+          text: 'Updated task [tsk_abc_123] "后端 API 服务实现" -> done (shared 1 file(s) first): 完成 /healthz 接口 (2 downstream task(s) unblocked) [handoff queued — will notify moderator/downstream automatically as soon as your turn ends]',
+        }],
+        isError: false,
+      },
+    }),
+  )
+  assert.ok(updHtml.includes('后端 API 服务实现'))
+  assert.ok(updHtml.includes('已完成'))
+  assert.ok(updHtml.includes('<strong>WebSocket</strong>'))
+  assert.ok(updHtml.includes('server.js'))
+  assert.ok(updHtml.includes('https://example.com/demo'))
+  assert.ok(updHtml.includes('已自动解锁 2 个下游任务'))
+  assert.ok(!updHtml.includes('text(key)'), 'Must never leak PartialArguments.prototype.text JS source')
+  assert.ok(!updHtml.includes('handoff queued'), 'Must hide internal LLM handoff note from user card')
+
+  // 2) mesh_share_file with PartialArguments must display real filename & room (never blank pill)
+  const shareHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(MeshToolCard, {
+      callId: 'c-share',
+      toolName: 'mesh_share_file',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      openFile: () => {},
+      block: {
+        kind: 'tool-result',
+        call: {
+          name: 'mesh_share_file',
+          args: makePartialArgs({ roomId: 'grp_rich', filePath: '/home/workspace/status_pulse/server.js', caption: '后端入口文件' }),
+        },
+        content: [{ type: 'text', text: 'Shared file to mesh room.' }],
+      },
+    }),
+  )
+  assert.ok(shareHtml.includes('server.js'))
+  assert.ok(shareHtml.includes('联调群'))
+  assert.ok(shareHtml.includes('后端入口文件'))
+  assert.ok(!shareHtml.includes('text(key)'))
+
+  // 3) mesh_dispatch_tasks must render structured task items and hide `NEXT STEP: END YOUR TURN`
+  const dispHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(MeshToolCard, {
+      callId: 'c-disp',
+      toolName: 'mesh_dispatch_tasks',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      block: {
+        kind: 'tool-result',
+        call: {
+          name: 'mesh_dispatch_tasks',
+          args: makePartialArgs({
+            roomId: 'grp_rich',
+            mode: 'async',
+            tasks: [
+              { title: '实现核心 API', assigneeSlug: 'bob', priority: 'high', description: '提供 `/healthz` 接口' },
+              { title: '生产发布审批', assigneeSlug: 'alice', approvalRequired: true, dependsOnIndices: [0] },
+            ],
+          }),
+        },
+        content: [{
+          type: 'text',
+          text: [
+            'Dispatched 2 task(s) in grp_rich (mode: async):',
+            '- [tsk_1] 实现核心 API (in_progress · @bob)',
+            '- [tsk_2] 生产发布审批 (todo · @alice · awaiting human approval · deps: tsk_1)',
+            '',
+            'NEXT STEP: Post a brief status update and END YOUR TURN now. Do NOT call `wait_agent`, `sleep`, or poll.',
+          ].join('\n'),
+        }],
+      },
+    }),
+  )
+  assert.ok(dispHtml.includes('sm-tool-task-list'))
+  assert.ok(dispHtml.includes('实现核心 API'))
+  assert.ok(dispHtml.includes('生产发布审批'))
+  assert.ok(dispHtml.includes('待审批'))
+  assert.ok(!dispHtml.includes('END YOUR TURN'), 'Must hide internal LLM turn-ending instruction')
+  assert.ok(!dispHtml.includes('wait_agent'))
+
+  // 4) mesh_discuss_group must render group metadata + topic and hide `Next steps as Moderator`
+  const discHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(MeshToolCard, {
+      callId: 'c-disc',
+      toolName: 'mesh_discuss_group',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      block: {
+        kind: 'tool-result',
+        call: {
+          name: 'mesh_discuss_group',
+          args: makePartialArgs({ groupName: '发布协同群', topic: '对齐 v1.0 上线检查项' }),
+        },
+        content: [{
+          type: 'text',
+          text: [
+            'Created task group "发布协同群" ready (roomId="grp_new", threadId="thr_1"). You are the LLM Moderator (@alice). Members:',
+            '- @bob (Backend): API & DB',
+            'Next steps as Moderator (passing roomId and threadId): call mesh_dispatch_tasks...',
+          ].join('\n'),
+        }],
+      },
+    }),
+  )
+  assert.ok(discHtml.includes('发布协同群'))
+  assert.ok(discHtml.includes('新建群聊'))
+  assert.ok(discHtml.includes('对齐 v1.0 上线检查项'))
+  assert.ok(!discHtml.includes('Next steps as Moderator'))
+
+  // 5) mesh_task_board & mesh_list_peers text outputs render cleanly, and stripMarkdownForPreview preserves underscores
+  assert.equal(stripMarkdownForPreview('Check tsk_abc_123 and _italic_ text'), 'Check tsk_abc_123 and italic text')
+  const tbHtml = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(MeshToolCard, {
+      callId: 'c-tb',
+      toolName: 'mesh_task_board',
+      phase: 'result',
+      useDisclosure: expandedDisclosure,
+      block: {
+        kind: 'tool-result',
+        call: { name: 'mesh_task_board', args: makePartialArgs({ roomId: 'grp_rich' }) },
+        content: [{
+          type: 'text',
+          text: 'Task Board (grp_rich) — 1/2 done, 1 in progress, 0 in review, 0 blocked:\n- [done] tsk_1 · 实现 API (@bob | artifacts: /home/workspace/api.js) — 测试通过',
+        }],
+      },
+    }),
+  )
+  assert.ok(tbHtml.includes('已完成 1/2'))
+  assert.ok(tbHtml.includes('进行中 1'))
+  assert.ok(tbHtml.includes('实现 API'))
+
   taskCtrl.dispose()
   richCtrl.dispose()
 }

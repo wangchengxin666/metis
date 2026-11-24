@@ -1,6 +1,6 @@
 {
   "name": "@metis/sandbox-memory",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Token-frugal sandbox environment awareness and cross-session long-term memory with automatic capture, native Harness tools, and a visual Memory Center UI.",
   "type": "module",
   "main": "./index.js",

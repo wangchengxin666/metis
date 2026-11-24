@@ -188,6 +188,7 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
             f"/api/auth/verify-sandbox/{sandbox.slug}"
         )
         dsh_rule = sandbox_traefik_dsh_rule(sandbox.slug)
+        preview_mode = (getattr(sandbox, "preview_auth_mode", None) or "public").strip().lower()
         labels = {
             "dsh.managed": "true",
             "dsh.owner": sandbox.user.email,
@@ -211,6 +212,14 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
             ),
             f"traefik.http.services.{router_name}.loadbalancer.server.port": "8080",
         }
+        if preview_mode != "public":
+            labels[f"traefik.http.routers.{router_name}.middlewares"] = f"{auth_mw}@docker"
+            labels[f"traefik.http.routers.{router_name}-mesh.rule"] = (
+                f"Path(`/s/{sandbox.slug}/p/4090`) || PathPrefix(`/s/{sandbox.slug}/p/4090/`)"
+            )
+            labels[f"traefik.http.routers.{router_name}-mesh.entrypoints"] = "web"
+            labels[f"traefik.http.routers.{router_name}-mesh.priority"] = "115"
+            labels[f"traefik.http.routers.{router_name}-mesh.service"] = router_name
 
         run_kwargs: dict[str, Any] = {
             "name": self.container_name(sandbox),

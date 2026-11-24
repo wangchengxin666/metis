@@ -49,10 +49,12 @@ def build_traefik_dynamic_config(
         auth_mw = f"dsh-auth-{slug}"
         verify_url = f"{manager_internal}/api/auth/verify-sandbox/{slug}"
 
-        preview_mode = getattr(sandbox, "preview_auth_mode", None) or "public"
-        if preview_mode == "authenticated":
+        preview_mode = (getattr(sandbox, "preview_auth_mode", None) or "public").strip().lower()
+        # Use priority 110 (> legacy @docker label priority 100) so HTTP Provider updates
+        # take effect within 2s across both existing and newly created containers without recreate.
+        if preview_mode != "public":
             routers[f"{router_name}-mesh"] = {
-                "rule": f"PathPrefix(`/s/{slug}/p/4090`)",
+                "rule": f"Path(`/s/{slug}/p/4090`) || PathPrefix(`/s/{slug}/p/4090/`)",
                 "entryPoints": [entrypoint],
                 "priority": 115,
                 "service": router_name,
@@ -60,7 +62,7 @@ def build_traefik_dynamic_config(
             routers[router_name] = {
                 "rule": f"PathPrefix(`/s/{slug}`)",
                 "entryPoints": [entrypoint],
-                "priority": 100,
+                "priority": 110,
                 "service": router_name,
                 "middlewares": [auth_mw],
             }
@@ -68,13 +70,13 @@ def build_traefik_dynamic_config(
             routers[router_name] = {
                 "rule": f"PathPrefix(`/s/{slug}`)",
                 "entryPoints": [entrypoint],
-                "priority": 100,
+                "priority": 110,
                 "service": router_name,
             }
         routers[dsh_router_name] = {
             "rule": sandbox_traefik_dsh_rule(slug),
             "entryPoints": [entrypoint],
-            "priority": 120,
+            "priority": 125,
             "service": router_name,
             "middlewares": [auth_mw],
         }

@@ -560,18 +560,27 @@ def test_phase3_runtime_operations_and_traefik_preview_auth():
     container = MagicMock(status="running", id="c1")
     mock_client.containers.get.return_value = container
 
-    # 1) build_traefik_dynamic_config respects preview_auth_mode='authenticated' while keeping mesh /p/4090 open
+    # 1) build_traefik_dynamic_config respects preview_auth_mode='authenticated' AND 'team'
+    #    with priority > 100 (beats legacy @docker labels) while keeping mesh /p/4090 open
     cfg = build_traefik_dynamic_config(settings, [(sbx, "http://dsh-sbx-lead:8080")])
     routers = cfg["http"]["routers"]
     assert "dsh-sbx-lead-mesh" in routers
     assert "/s/lead/p/4090" in routers["dsh-sbx-lead-mesh"]["rule"]
     assert "middlewares" not in routers["dsh-sbx-lead-mesh"]
     assert "dsh-auth-lead" in routers["dsh-sbx-lead"]["middlewares"]
+    assert routers["dsh-sbx-lead"]["priority"] > 100
+
+    sbx.preview_auth_mode = "team"
+    cfg_team = build_traefik_dynamic_config(settings, [(sbx, "http://dsh-sbx-lead:8080")])
+    assert "dsh-sbx-lead-mesh" in cfg_team["http"]["routers"]
+    assert "dsh-auth-lead" in cfg_team["http"]["routers"]["dsh-sbx-lead"]["middlewares"]
+    assert cfg_team["http"]["routers"]["dsh-sbx-lead"]["priority"] > 100
 
     sbx.preview_auth_mode = "public"
     cfg_pub = build_traefik_dynamic_config(settings, [(sbx, "http://dsh-sbx-lead:8080")])
     assert "dsh-sbx-lead-mesh" not in cfg_pub["http"]["routers"]
     assert "middlewares" not in cfg_pub["http"]["routers"]["dsh-sbx-lead"]
+    assert cfg_pub["http"]["routers"]["dsh-sbx-lead"]["priority"] > 100
 
     # 2) dispatch_mesh_task & decide_mesh_approval
     container.exec_run.return_value = (

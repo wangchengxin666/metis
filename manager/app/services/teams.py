@@ -6,7 +6,7 @@ from datetime import timedelta
 import re
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from ..config import Settings
@@ -373,11 +373,27 @@ def serialize_team(
         )
         or 0
     )
-    since_30d = utcnow() - timedelta(days=30)
+    now_utc = utcnow()
+    day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    since_30d = now_utc - timedelta(days=30)
+    team_ledger_scope = (
+        or_(LlmUsageLedger.team_id == team.id, LlmUsageLedger.sandbox_id.in_(sbx_ids))
+        if sbx_ids
+        else (LlmUsageLedger.team_id == team.id)
+    )
+    today_cost_usd = float(
+        db.scalar(
+            select(func.coalesce(func.sum(LlmUsageLedger.cost_amount), 0.0)).where(
+                team_ledger_scope,
+                LlmUsageLedger.created_at >= day_start,
+            )
+        )
+        or 0.0
+    )
     period_cost_usd = float(
         db.scalar(
             select(func.coalesce(func.sum(LlmUsageLedger.cost_amount), 0.0)).where(
-                LlmUsageLedger.team_id == team.id,
+                team_ledger_scope,
                 LlmUsageLedger.created_at >= since_30d,
             )
         )
@@ -393,6 +409,8 @@ def serialize_team(
         "status": getattr(team, "status", "active") or "active",
         "mesh_room_id": getattr(team, "mesh_room_id", None),
         "daily_token_budget": team.daily_token_budget,
+        "daily_cost_budget": getattr(team, "daily_cost_budget", None),
+        "today_cost_usd": round(today_cost_usd, 6),
         "created_by": team.created_by,
         "created_at": team.created_at.isoformat() if team.created_at else None,
         "updated_at": team.updated_at.isoformat() if team.updated_at else None,
@@ -546,6 +564,11 @@ def create_team(
             if payload.daily_token_budget and payload.daily_token_budget > 0
             else None
         ),
+        daily_cost_budget=(
+            round(float(payload.daily_cost_budget), 4)
+            if payload.daily_cost_budget is not None and float(payload.daily_cost_budget) > 0
+            else None
+        ),
         created_by=actor,
     )
     db.add(team)
@@ -682,6 +705,12 @@ def update_team(
     if payload.daily_token_budget is not None:
         team.daily_token_budget = (
             payload.daily_token_budget if payload.daily_token_budget > 0 else None
+        )
+    if payload.daily_cost_budget is not None:
+        team.daily_cost_budget = (
+            round(float(payload.daily_cost_budget), 4)
+            if float(payload.daily_cost_budget) > 0
+            else None
         )
     audit(db, "team.update", target=team.name, actor=actor)
     db.commit()

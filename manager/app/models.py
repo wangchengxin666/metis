@@ -154,6 +154,7 @@ class Sandbox(Base):
     preview_auth_mode: Mapped[str] = mapped_column(String(32), default="public")
     webhook_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     daily_token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    daily_cost_limit: Mapped[float | None] = mapped_column(Float, nullable=True)
     budget_action: Mapped[str] = mapped_column(String(32), default="block")
     gateway_api_key: Mapped[str | None] = mapped_column(String(128), unique=True, index=True, nullable=True)
     ownership_mode: Mapped[str] = mapped_column(String(32), default="personal")
@@ -387,6 +388,7 @@ class Team(Base):
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)  # active|archived
     mesh_room_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     daily_token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    daily_cost_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_by: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(

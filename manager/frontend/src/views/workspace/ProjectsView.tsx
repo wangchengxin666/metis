@@ -101,7 +101,7 @@ export function ProjectsView({
     name: '',
     department: '',
     description: '',
-    daily_token_budget: '',
+    daily_cost_budget: '',
     lead_emails: '',
     sandbox_ids: [] as string[],
   })
@@ -211,7 +211,7 @@ export function ProjectsView({
       name: '',
       department: '',
       description: '',
-      daily_token_budget: '',
+      daily_cost_budget: '',
       lead_emails: '',
       sandbox_ids: [],
     })
@@ -223,7 +223,10 @@ export function ProjectsView({
       name: proj.name,
       department: proj.department || '',
       description: proj.description || '',
-      daily_token_budget: proj.daily_token_budget ? String(proj.daily_token_budget) : '',
+      daily_cost_budget:
+        proj.daily_cost_budget != null && proj.daily_cost_budget > 0
+          ? String(proj.daily_cost_budget)
+          : '',
       lead_emails: '',
       sandbox_ids: [],
     })
@@ -234,8 +237,8 @@ export function ProjectsView({
     e.preventDefault()
     setSavingProject(true)
     try {
-      const budget = projectForm.daily_token_budget.trim()
-        ? Math.max(0, Number.parseInt(projectForm.daily_token_budget.trim(), 10) || 0)
+      const budget = projectForm.daily_cost_budget.trim()
+        ? Math.max(0, Number.parseFloat(projectForm.daily_cost_budget.trim()) || 0)
         : null
       if (projectDialogMode === 'edit' && selectedProject) {
         await apiFetch(`/api/teams/${selectedProject.id}`, {
@@ -244,7 +247,7 @@ export function ProjectsView({
             name: projectForm.name.trim(),
             department: projectForm.department.trim(),
             description: projectForm.description.trim(),
-            daily_token_budget: budget ?? 0,
+            daily_cost_budget: budget ?? 0,
           }),
         })
         notify(t('projects.updated'))
@@ -259,7 +262,7 @@ export function ProjectsView({
             name: projectForm.name.trim(),
             department: projectForm.department.trim() || null,
             description: projectForm.description.trim() || null,
-            daily_token_budget: budget,
+            daily_cost_budget: budget,
             lead_emails: leads,
             sandbox_ids: projectForm.sandbox_ids,
           }),
@@ -1066,11 +1069,12 @@ export function ProjectsView({
                 <Input
                   type="number"
                   min={0}
-                  value={projectForm.daily_token_budget}
+                  step="0.5"
+                  value={projectForm.daily_cost_budget}
                   onChange={(e) =>
-                    setProjectForm({ ...projectForm, daily_token_budget: e.target.value })
+                    setProjectForm({ ...projectForm, daily_cost_budget: e.target.value })
                   }
-                  placeholder="2000000"
+                  placeholder="10.00"
                 />
               </div>
             </div>
@@ -1335,7 +1339,11 @@ export function ProjectsView({
                         {t('projects.cardActiveRuns', { count: activeRuns })}
                       </span>
                       <span>·</span>
-                      <span>{formatCost(proj.period_cost_usd)}</span>
+                      <span>
+                        {proj.daily_cost_budget != null && proj.daily_cost_budget > 0
+                          ? `${formatCost(proj.today_cost_usd)} / $${proj.daily_cost_budget.toFixed(2)}/d`
+                          : formatCost(proj.period_cost_usd)}
+                      </span>
                     </div>
                     <span className="inline-flex items-center gap-1 text-indigo-400 font-medium group-hover:translate-x-0.5 transition-transform">
                       {t('projects.enterBtn')}
@@ -1445,10 +1453,11 @@ export function ProjectsView({
               <Input
                 type="number"
                 min={0}
-                placeholder="2000000"
-                value={projectForm.daily_token_budget}
+                step="0.5"
+                placeholder="10.00"
+                value={projectForm.daily_cost_budget}
                 onChange={(e) =>
-                  setProjectForm({ ...projectForm, daily_token_budget: e.target.value })
+                  setProjectForm({ ...projectForm, daily_cost_budget: e.target.value })
                 }
               />
             </div>

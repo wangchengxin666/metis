@@ -102,6 +102,7 @@ export interface SandboxItem {
   has_webhook_token?: boolean
   webhook_url?: string | null
   daily_token_limit?: number | null
+  daily_cost_limit?: number | null
   budget_action?: 'block' | 'downgrade' | 'warn'
   has_gateway_api_key?: boolean
   ownership_mode?: 'personal' | 'shared'
@@ -601,6 +602,8 @@ export interface TeamItem {
   description?: string | null
   department?: string | null
   daily_token_budget?: number | null
+  daily_cost_budget?: number | null
+  today_cost_usd?: number
   created_by?: string | null
   created_at?: string | null
   updated_at?: string | null
@@ -666,6 +669,8 @@ export interface FinOpsSummaryData {
     ownership_mode: string
     today_tokens: number
     today_cost: number
+    daily_cost_limit?: number | null
+    cost_budget_percent?: number | null
     daily_limit?: number | null
     budget_percent?: number | null
     budget_action: string
@@ -678,6 +683,9 @@ export interface FinOpsSummaryData {
     team_name: string
     department?: string | null
     today_tokens: number
+    today_cost: number
+    daily_cost_budget?: number | null
+    cost_budget_percent?: number | null
     daily_budget?: number | null
     period_tokens: number
     period_cost: number

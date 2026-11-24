@@ -108,6 +108,7 @@ export function AdminConsoleView({
     role_sop: '',
     ownership_mode: 'personal',
     maintainer_emails: '',
+    daily_cost_limit: '',
     budget_action: 'block',
     image_repo: 'dsh-sandbox',
     image_tag: 'latest',
@@ -138,7 +139,7 @@ export function AdminConsoleView({
     llm_profile_id: '',
     credential_profile_ids: [],
     preview_auth_mode: 'public',
-    daily_token_limit: '',
+    daily_cost_limit: '',
     budget_action: 'block',
     auto_sleep_exempt: false,
   })
@@ -341,6 +342,9 @@ export function AdminConsoleView({
             .split(/[\s,;]+/)
             .map((x) => x.trim().toLowerCase())
             .filter(Boolean),
+          daily_cost_limit: sbxForm.daily_cost_limit.trim()
+            ? Math.max(0, Number.parseFloat(sbxForm.daily_cost_limit.trim()) || 0)
+            : null,
           budget_action: sbxForm.budget_action,
           image_repo: sbxForm.image_repo.trim() || null,
           image_tag: sbxForm.image_tag.trim() || null,
@@ -402,7 +406,10 @@ export function AdminConsoleView({
       llm_profile_id: sbx.llm_profile_id || '',
       credential_profile_ids: [...(sbx.credential_profile_ids || [])],
       preview_auth_mode: sbx.preview_auth_mode || 'public',
-      daily_token_limit: sbx.daily_token_limit ? String(sbx.daily_token_limit) : '',
+      daily_cost_limit:
+        sbx.daily_cost_limit != null && sbx.daily_cost_limit > 0
+          ? String(sbx.daily_cost_limit)
+          : '',
       budget_action: sbx.budget_action || 'block',
       auto_sleep_exempt: Boolean(sbx.auto_sleep_exempt),
     })
@@ -426,8 +433,8 @@ export function AdminConsoleView({
     if (!editSbx) return
     setSavingSbx(true)
     try {
-      const tokenLimitNum = editSbxForm.daily_token_limit.trim()
-        ? Math.max(0, Number.parseInt(editSbxForm.daily_token_limit.trim(), 10) || 0)
+      const costLimitNum = editSbxForm.daily_cost_limit.trim()
+        ? Math.max(0, Number.parseFloat(editSbxForm.daily_cost_limit.trim()) || 0)
         : 0
       await apiFetch(`/api/sandboxes/${editSbx.id}`, {
         method: 'PATCH',
@@ -448,7 +455,7 @@ export function AdminConsoleView({
           llm_profile_id: editSbxForm.llm_profile_id,
           credential_profile_ids: editSbxForm.credential_profile_ids,
           preview_auth_mode: editSbxForm.preview_auth_mode,
-          daily_token_limit: tokenLimitNum,
+          daily_cost_limit: costLimitNum,
           budget_action: editSbxForm.budget_action,
           auto_sleep_exempt: editSbxForm.auto_sleep_exempt,
         }),

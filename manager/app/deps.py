@@ -150,6 +150,7 @@ def sandbox_out(
         webhook_url=wh_url,
         has_gateway_api_key=bool(gw_key),
         daily_token_limit=getattr(sandbox, "daily_token_limit", None),
+        daily_cost_limit=getattr(sandbox, "daily_cost_limit", None),
         budget_action=getattr(sandbox, "budget_action", None) or "block",
         project_team_name=getattr(sandbox, "project_team_name", None),
         team_ids=team_ids or [],

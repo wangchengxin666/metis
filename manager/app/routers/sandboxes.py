@@ -344,6 +344,7 @@ def create_sandbox_endpoint(
             maintainer_emails=payload.maintainer_emails,
             team_ids=payload.team_ids,
             daily_token_limit=payload.daily_token_limit,
+            daily_cost_limit=payload.daily_cost_limit,
             budget_action=payload.budget_action,
             credential_profile_ids=payload.credential_profile_ids,
         )
@@ -475,6 +476,7 @@ def patch_sandbox(
         and payload.ownership_mode is None
         and payload.maintainer_emails is None
         and payload.daily_token_limit is None
+        and payload.daily_cost_limit is None
         and payload.budget_action is None
         and not payload.rotate_webhook_token
         and not payload.rotate_gateway_key
@@ -571,6 +573,19 @@ def patch_sandbox(
                 "sandbox.token_budget",
                 target=sandbox.id,
                 detail=f"slug={sandbox.slug},daily_limit={sandbox.daily_token_limit}",
+            )
+            db.commit()
+        if payload.daily_cost_limit is not None:
+            sandbox.daily_cost_limit = (
+                round(float(payload.daily_cost_limit), 4)
+                if float(payload.daily_cost_limit) > 0
+                else None
+            )
+            audit(
+                db,
+                "sandbox.cost_budget",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},daily_cost_limit={sandbox.daily_cost_limit}",
             )
             db.commit()
         if payload.rotate_webhook_token or not getattr(sandbox, "webhook_token", None):

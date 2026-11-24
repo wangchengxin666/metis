@@ -190,16 +190,26 @@ def verify_sandbox_access(
     accept = (request.headers.get("accept") or "").lower()
     wants_html = "text/html" in accept
     fwd_uri = request.headers.get("x-forwarded-uri") or ""
-    is_preview_path = fwd_uri.startswith(f"/s/{slug}/apps/") or (
-        fwd_uri.startswith(f"/s/{slug}/p/") and not fwd_uri.startswith(f"/s/{slug}/p/4090")
+    fwd_path = fwd_uri.split("?", 1)[0]
+    is_mesh_path = fwd_path == f"/s/{slug}/p/4090" or fwd_path.startswith(f"/s/{slug}/p/4090/")
+    is_preview_path = (
+        fwd_path == f"/s/{slug}/apps"
+        or fwd_path.startswith(f"/s/{slug}/apps/")
+        or (fwd_path.startswith(f"/s/{slug}/p/") and not is_mesh_path)
     )
-    if is_preview_path and (getattr(sandbox, "preview_auth_mode", None) or "public") == "public":
+    preview_mode = (getattr(sandbox, "preview_auth_mode", None) or "public").strip().lower()
+    if is_preview_path and preview_mode == "public":
         return Response(status_code=200)
 
     if not email and not is_admin:
         if wants_html:
             safe_slug = html_lib.escape(slug)
             login_href = f"/login?next={quote(fwd_uri or f'/s/{slug}/', safe='/')}"
+            login_desc = (
+                f"访问预览应用 <code>/s/{safe_slug}/apps/</code> 需要先登录平台账号以验证访问权限。"
+                if is_preview_path
+                else f"访问工作区 <code>/s/{safe_slug}/</code> 需要验证您的身份，仅工作区归属人本人或平台管理员可进入。"
+            )
             html = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>需要登录 - DSH Sandbox Cloud</title>
 <style>body{{margin:0;background:#09090b;color:#f4f4f5;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}}
@@ -207,13 +217,36 @@ def verify_sandbox_access(
 h2{{margin:0 0 10px;font-size:18px}}p{{margin:0 0 20px;font-size:13px;color:#a1a1aa;line-height:1.6}}
 a.btn{{display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500}}</style></head>
 <body><div class="card"><h2>请先登录工作区平台</h2>
-<p>访问工作区 <code>/s/{safe_slug}/</code> 需要验证您的身份，仅工作区归属人本人或平台管理员可进入。</p>
+<p>{login_desc}</p>
 <a class="btn" href="{login_href}">前往登录</a></div></body></html>"""
             return HTMLResponse(content=html, status_code=401)
         raise HTTPException(status_code=401, detail="请先登录平台后再访问工作区")
 
     owner_email = sandbox.user.email.lower()
-    preview_mode = (getattr(sandbox, "preview_auth_mode", None) or "public").strip().lower()
+    if not is_admin and email:
+        viewer_user = (
+            sandbox.user
+            if email == owner_email
+            else db.scalar(select(User).where(User.email == email))
+        )
+        if viewer_user is not None and viewer_user.status != "active":
+            if wants_html:
+                html = f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>403 账号已禁用 - DSH Sandbox Cloud</title>
+<style>body{{margin:0;background:#09090b;color:#f4f4f5;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}}
+.card{{max-width:440px;padding:28px;border-radius:14px;background:#18181b;border:1px solid #3f3f46;box-shadow:0 20px 40px rgba(0,0,0,.5)}}
+h2{{margin:0 0 10px;font-size:18px;color:#fb7185}}p{{margin:0 0 20px;font-size:13px;color:#a1a1aa;line-height:1.6}}
+code{{background:#27272a;padding:2px 6px;border-radius:4px;color:#e4e4e7}}
+a.btn{{display:inline-block;background:#27272a;color:#f4f4f5;text-decoration:none;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid #3f3f46}}</style></head>
+<body><div class="card"><h2>403 账号已被禁用</h2>
+<p>账号 <code>{email}</code> 已被平台管理员禁用，暂时无法访问 <code>/s/{slug}/</code>。</p>
+<a class="btn" href="/login">返回登录页</a></div></body></html>"""
+                return HTMLResponse(content=html, status_code=403)
+            raise HTTPException(
+                status_code=403,
+                detail=f"禁止访问：账号 {email} 已被管理员禁用",
+            )
+
     if is_preview_path and preview_mode == "team" and not can_user_view_team_preview(db, sandbox, email, is_admin):
         if wants_html:
             html = f"""<!doctype html>

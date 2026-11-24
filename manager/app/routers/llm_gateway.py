@@ -96,24 +96,23 @@ async def llm_gateway_proxy(
             content={"error": {"message": "LLM profile not found", "type": "not_found"}},
         )
 
-    decision, target_profile, used_today, daily_limit = evaluate_budget_and_route(
-        db, settings, sandbox, profile
-    )
+    budget_eval = evaluate_budget_and_route(db, settings, sandbox, profile)
+    decision = budget_eval.decision
+    target_profile = budget_eval.profile
     if decision == "block":
         return JSONResponse(
             status_code=429,
             content={
                 "error": {
-                    "message": (
-                        f"Daily token budget exceeded for @{sandbox.slug} "
-                        f"({used_today:,}/{daily_limit:,} tokens)."
-                    ),
+                    "message": budget_eval.error_message
+                    or f"Daily budget exceeded for @{sandbox.slug}.",
                     "type": "budget_exceeded",
-                    "code": "daily_token_limit_exceeded",
+                    "code": budget_eval.error_code or "daily_cost_limit_exceeded",
                 }
             },
         )
 
+    protocol = (target_profile.api_protocol or "openai-completions").strip()
     raw_body = await request.body()
     requested_model = target_profile.model
     is_stream = False
@@ -122,12 +121,22 @@ async def llm_gateway_proxy(
             body_json = json.loads(raw_body.decode("utf-8"))
             if isinstance(body_json, dict):
                 is_stream = bool(body_json.get("stream"))
+                mutated = False
                 if decision == "fallback":
                     body_json["model"] = target_profile.model
                     requested_model = target_profile.model
-                    raw_body = json.dumps(body_json, ensure_ascii=False).encode("utf-8")
+                    mutated = True
                 elif body_json.get("model"):
                     requested_model = str(body_json["model"])
+                if (
+                    is_stream
+                    and protocol == "openai-completions"
+                    and "stream_options" not in body_json
+                ):
+                    body_json["stream_options"] = {"include_usage": True}
+                    mutated = True
+                if mutated:
+                    raw_body = json.dumps(body_json, ensure_ascii=False).encode("utf-8")
         except Exception:
             pass
 
@@ -147,7 +156,6 @@ async def llm_gateway_proxy(
         sub_clean = sub_clean[3:]
     upstream_url = f"{base_clean}/{sub_clean}" if sub_clean else base_clean
     forward_params = {k: v for k, v in request.query_params.items() if k != "key"}
-    protocol = (target_profile.api_protocol or "openai-completions").strip()
 
     forward_headers: dict[str, str] = {}
     for k, v in request.headers.items():

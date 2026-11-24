@@ -186,6 +186,7 @@ class SandboxCreate(BaseModel):
     maintainer_emails: list[str] = Field(default_factory=list)
     team_ids: list[str] = Field(default_factory=list)
     daily_token_limit: int | None = Field(default=None, ge=1000, le=1_000_000_000)
+    daily_cost_limit: float | None = Field(default=None, ge=0, le=1_000_000)
     budget_action: BUDGET_ACTIONS = "block"
 
     @field_validator("initial_password")
@@ -215,6 +216,7 @@ class SandboxPatch(BaseModel):
     ownership_mode: OWNERSHIP_MODES | None = None
     maintainer_emails: list[str] | None = None
     daily_token_limit: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    daily_cost_limit: float | None = Field(default=None, ge=0, le=1_000_000)
     budget_action: BUDGET_ACTIONS | None = None
     rotate_webhook_token: bool = False
     rotate_gateway_key: bool = False
@@ -257,6 +259,7 @@ class SandboxOut(BaseModel):
     webhook_url: str | None = None
     has_gateway_api_key: bool = False
     daily_token_limit: int | None = None
+    daily_cost_limit: float | None = None
     budget_action: str = "block"
     project_team_name: str | None = None
     team_ids: list[str] = Field(default_factory=list)
@@ -947,6 +950,7 @@ class TeamCreate(BaseModel):
     description: str | None = Field(default=None, max_length=600)
     department: str | None = Field(default=None, max_length=128)
     daily_token_budget: int | None = Field(default=None, ge=0, le=10_000_000_000)
+    daily_cost_budget: float | None = Field(default=None, ge=0, le=1_000_000)
     lead_emails: list[EmailStr] = Field(default_factory=list)
     member_emails: list[EmailStr] = Field(default_factory=list)
     sandbox_ids: list[str] = Field(default_factory=list)
@@ -959,6 +963,7 @@ class TeamUpdate(BaseModel):
     department: str | None = Field(default=None, max_length=128)
     status: Literal["active", "archived"] | None = None
     daily_token_budget: int | None = Field(default=None, ge=0, le=10_000_000_000)
+    daily_cost_budget: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class TeamMemberUpsert(BaseModel):

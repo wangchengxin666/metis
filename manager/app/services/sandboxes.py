@@ -73,6 +73,7 @@ def create_sandbox(
     role_sop: str | None = None,
     preview_auth_mode: str = "public",
     daily_token_limit: int | None = None,
+    daily_cost_limit: float | None = None,
     budget_action: str = "block",
     ownership_mode: str = "personal",
     maintainer_emails: list[str] | None = None,
@@ -195,6 +196,11 @@ def create_sandbox(
         webhook_token=secrets.token_hex(16),
         gateway_api_key=generate_sandbox_gateway_key(),
         daily_token_limit=daily_token_limit,
+        daily_cost_limit=(
+            round(float(daily_cost_limit), 4)
+            if daily_cost_limit is not None and float(daily_cost_limit) > 0
+            else None
+        ),
         budget_action=(
             budget_action if budget_action in {"block", "downgrade", "warn"} else "block"
         ),

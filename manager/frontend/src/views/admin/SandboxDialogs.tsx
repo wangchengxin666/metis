@@ -25,6 +25,7 @@ export interface ProvisionFormState {
   role_sop: string
   ownership_mode: 'personal' | 'shared'
   maintainer_emails: string
+  daily_cost_limit: string
   budget_action: 'block' | 'downgrade' | 'warn'
   image_repo: string
   image_tag: string
@@ -70,7 +71,7 @@ export interface EditSandboxFormState {
   llm_profile_id: string
   credential_profile_ids: string[]
   preview_auth_mode: string
-  daily_token_limit: string
+  daily_cost_limit: string
   budget_action: 'block' | 'downgrade' | 'warn'
   auto_sleep_exempt: boolean
 }
@@ -281,6 +282,18 @@ export function ProvisionSandboxDialog({
                 <option value="personal">{t('sandbox.ownershipPersonal')}</option>
                 <option value="shared">{t('sandbox.ownershipShared')}</option>
               </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('dialog.editSandbox.dailyTokenLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="0.1"
+                placeholder="e.g. 5.00"
+                value={sbxForm.daily_cost_limit}
+                onChange={(e) => setSbxForm({ ...sbxForm, daily_cost_limit: e.target.value })}
+              />
             </div>
 
             <div className="space-y-1.5">
@@ -822,11 +835,11 @@ export function EditSandboxDialog({
               <Input
                 type="number"
                 min={0}
-                step={10000}
-                placeholder="e.g. 500000"
-                value={editSbxForm.daily_token_limit}
+                step="0.1"
+                placeholder="e.g. 5.00"
+                value={editSbxForm.daily_cost_limit}
                 onChange={(e) =>
-                  setEditSbxForm({ ...editSbxForm, daily_token_limit: e.target.value })
+                  setEditSbxForm({ ...editSbxForm, daily_cost_limit: e.target.value })
                 }
               />
             </div>

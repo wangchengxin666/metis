@@ -172,6 +172,10 @@ def migrate_schema(target_engine: Engine) -> None:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN daily_token_limit INTEGER"
                 )
+            if "daily_cost_limit" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN daily_cost_limit FLOAT"
+                )
             if "project_team_name" not in columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN project_team_name VARCHAR(128)"
@@ -308,6 +312,10 @@ def migrate_schema(target_engine: Engine) -> None:
             if "mesh_room_id" not in team_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE teams ADD COLUMN mesh_room_id VARCHAR(128)"
+                )
+            if "daily_cost_budget" not in team_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE teams ADD COLUMN daily_cost_budget FLOAT"
                 )
 
         if "playbook_runs" in table_names:

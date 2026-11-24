@@ -644,3 +644,167 @@ def test_im_signed_approval_callbacks_and_native_git_webhooks(api_env):
         and c[1][3] == "webhook:gitlab"
         for c in fake_docker.calls
     )
+
+
+def test_daily_cost_limit_and_team_cost_budget_enforcement(api_env, monkeypatch):
+    client, _fake_docker, _reg = api_env
+    _login_admin(client)
+
+    fb_res = client.post(
+        "/api/llm-profiles",
+        json={
+            "name": "Economy Fallback",
+            "api_protocol": "openai-completions",
+            "base_url": "https://fallback.example.com/v1",
+            "model": "gpt-4o-mini",
+            "api_key": "sk-fb",
+            "gateway_enabled": True,
+            "input_price_per_1m": 0.1,
+            "output_price_per_1m": 0.2,
+        },
+    )
+    assert fb_res.status_code == 201
+    fb_id = fb_res.json()["id"]
+
+    # Price: $10/1M input, $20/1M output -> 10k in + 5k out = $0.10 + $0.10 = $0.20/request
+    prim_res = client.post(
+        "/api/llm-profiles",
+        json={
+            "name": "Flagship Model",
+            "api_protocol": "openai-completions",
+            "base_url": "https://primary.example.com/v1",
+            "model": "gpt-5",
+            "api_key": "sk-prim",
+            "gateway_enabled": True,
+            "input_price_per_1m": 10.0,
+            "output_price_per_1m": 20.0,
+            "fallback_llm_profile_id": fb_id,
+        },
+    )
+    assert prim_res.status_code == 201
+    prim_id = prim_res.json()["id"]
+
+    sbx_a = client.post(
+        "/api/sandboxes",
+        json={
+            "email": "a@corp.com",
+            "slug": "cost-a",
+            "llm_profile_id": prim_id,
+            "daily_cost_limit": 0.30,
+            "budget_action": "block",
+        },
+    ).json()
+    sbx_b = client.post(
+        "/api/sandboxes",
+        json={
+            "email": "b@corp.com",
+            "slug": "cost-b",
+            "llm_profile_id": prim_id,
+            "budget_action": "block",
+        },
+    ).json()
+    assert sbx_a["daily_cost_limit"] == 0.30
+
+    team_res = client.post(
+        "/api/teams",
+        json={
+            "name": "Cost Guard Team",
+            "daily_cost_budget": 0.50,
+            "sandbox_ids": [sbx_a["id"], sbx_b["id"]],
+        },
+    )
+    assert team_res.status_code == 201, team_res.text
+    team_id = team_res.json()["id"]
+    assert team_res.json()["daily_cost_budget"] == 0.50
+
+    with SessionLocal() as db:
+        vkey_a = db.get(Sandbox, sbx_a["id"]).gateway_api_key
+        vkey_b = db.get(Sandbox, sbx_b["id"]).gateway_api_key
+
+    recorded: list[dict] = []
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request(self, method, url, **kwargs):
+            recorded.append({"method": method, "url": url, "content": kwargs.get("content")})
+            body = json.loads(kwargs["content"].decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "id": "cmpl",
+                    "model": body.get("model"),
+                    "usage": {"prompt_tokens": 10000, "completion_tokens": 5000, "total_tokens": 15000},
+                },
+            )
+
+    monkeypatch.setattr(llm_gateway_router.httpx, "AsyncClient", _FakeAsyncClient)
+
+    # Call 1 on cost-a -> $0.20 (under $0.30 employee cap & $0.50 team cap)
+    r1 = client.post(
+        f"/api/llm-gateway/p/{prim_id}/chat/completions",
+        headers={"Authorization": f"Bearer {vkey_a}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "1"}]},
+    )
+    assert r1.status_code == 200
+
+    # Call 2 on cost-a -> brings cost-a to $0.40 (>= $0.30 employee cap)
+    r2 = client.post(
+        f"/api/llm-gateway/p/{prim_id}/chat/completions",
+        headers={"Authorization": f"Bearer {vkey_a}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "2"}]},
+    )
+    assert r2.status_code == 200
+
+    # Call 3 on cost-a -> BLOCKED by employee daily_cost_limit ($0.40 >= $0.30)
+    r3 = client.post(
+        f"/api/llm-gateway/p/{prim_id}/chat/completions",
+        headers={"Authorization": f"Bearer {vkey_a}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "3"}]},
+    )
+    assert r3.status_code == 429
+    assert r3.json()["error"]["code"] == "daily_cost_limit_exceeded"
+
+    # Switch cost-a to downgrade -> routes to fallback model!
+    client.patch(f"/api/sandboxes/{sbx_a['id']}", json={"budget_action": "downgrade"})
+    r4 = client.post(
+        f"/api/llm-gateway/p/{prim_id}/chat/completions",
+        headers={"Authorization": f"Bearer {vkey_a}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "4"}]},
+    )
+    assert r4.status_code == 200
+    assert json.loads(recorded[-1]["content"].decode("utf-8"))["model"] == "gpt-4o-mini"
+
+    # Call on cost-b (no individual cap): team cost is $0.402 -> succeeds & pushes team to $0.602 >= $0.50!
+    rb1 = client.post(
+        f"/api/llm-gateway/p/{prim_id}/chat/completions",
+        headers={"Authorization": f"Bearer {vkey_b}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "b1"}]},
+    )
+    assert rb1.status_code == 200
+
+    # Next call on cost-b -> BLOCKED by TEAM daily_cost_budget ($0.602 >= $0.50)!
+    rb2 = client.post(
+        f"/api/llm-gateway/p/{prim_id}/chat/completions",
+        headers={"Authorization": f"Bearer {vkey_b}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": "b2"}]},
+    )
+    assert rb2.status_code == 429
+    assert rb2.json()["error"]["code"] == "team_daily_cost_budget_exceeded"
+
+    # FinOps summary exposes cost caps and utilization percentages for both sandbox and team
+    fin = client.get("/api/finops/summary?days=7").json()
+    row_a = next(x for x in fin["by_sandbox"] if x["slug"] == "cost-a")
+    assert row_a["daily_cost_limit"] == 0.30
+    assert row_a["cost_budget_percent"] >= 100.0
+    row_tm = next(x for x in fin["by_team"] if x["team_id"] == team_id)
+    assert row_tm["daily_cost_budget"] == 0.50
+    assert row_tm["today_cost"] >= 0.50
+    assert row_tm["cost_budget_percent"] >= 100.0

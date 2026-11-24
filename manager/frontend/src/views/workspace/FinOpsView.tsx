@@ -79,6 +79,7 @@ export function FinOpsView({
     void loadData()
   }, [loadData])
 
+  const maxDailyCost = Math.max(0, ...(data?.daily_series || []).map((d) => d.cost))
   const maxDailyTokens = Math.max(
     1,
     ...(data?.daily_series || []).map((d) => d.tokens),
@@ -202,7 +203,9 @@ export function FinOpsView({
           ) : (
             <div className="flex items-end gap-1.5 h-36 pt-4 overflow-x-auto">
               {data.daily_series.map((pt) => {
-                const hPct = Math.max(8, Math.round((pt.tokens / maxDailyTokens) * 100))
+                const ratio =
+                  maxDailyCost > 0 ? pt.cost / maxDailyCost : pt.tokens / maxDailyTokens
+                const hPct = Math.max(8, Math.round(ratio * 100))
                 return (
                   <div
                     key={pt.date}
@@ -251,7 +254,12 @@ export function FinOpsView({
                 </thead>
                 <tbody className="divide-y divide-zinc-800/60">
                   {data.by_sandbox.map((row) => {
-                    const pct = row.budget_percent ?? 0
+                    const hasCostLimit =
+                      row.daily_cost_limit != null && row.daily_cost_limit > 0
+                    const hasLegacyTokLimit =
+                      !hasCostLimit && row.daily_limit != null && row.daily_limit > 0
+                    const pct =
+                      (hasCostLimit ? row.cost_budget_percent : row.budget_percent) ?? 0
                     const barColor =
                       pct >= 100
                         ? 'bg-rose-500'
@@ -280,13 +288,30 @@ export function FinOpsView({
                             <div className="text-[11px] text-zinc-500 mt-0.5">{row.role_title}</div>
                           )}
                         </td>
-                        <td className="py-3 pr-3 min-w-[180px]">
+                        <td className="py-3 pr-3 min-w-[200px]">
                           <div className="font-mono text-zinc-200">
-                            {formatTokens(row.today_tokens)}
-                            {row.daily_limit ? ` / ${formatTokens(row.daily_limit)}` : ''}
-                            {row.budget_percent != null ? ` (${row.budget_percent}%)` : ''}
+                            {hasCostLimit ? (
+                              <>
+                                <span className="text-emerald-300">{formatUsd(row.today_cost)}</span>
+                                {` / ${formatUsd(row.daily_cost_limit!)}`}
+                                {row.cost_budget_percent != null
+                                  ? ` (${row.cost_budget_percent}%)`
+                                  : ''}
+                              </>
+                            ) : hasLegacyTokLimit ? (
+                              <>
+                                {formatTokens(row.today_tokens)}
+                                {` / ${formatTokens(row.daily_limit!)}`}
+                                {row.budget_percent != null ? ` (${row.budget_percent}%)` : ''}
+                              </>
+                            ) : (
+                              <span className="text-emerald-300">{formatUsd(row.today_cost)}</span>
+                            )}
                           </div>
-                          {row.daily_limit ? (
+                          <div className="text-[11px] font-mono text-zinc-500 mt-0.5">
+                            {formatTokens(row.today_tokens)} tokens
+                          </div>
+                          {hasCostLimit || hasLegacyTokLimit ? (
                             <div className="mt-1.5 h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
                               <div
                                 className={cn('h-full rounded-full', barColor)}
@@ -335,20 +360,47 @@ export function FinOpsView({
               <p className="text-sm text-zinc-500 py-5 text-center">{t('finops.noData')}</p>
             ) : (
               <div className="divide-y divide-zinc-800/60 text-xs">
-                {data.by_team.map((tm) => (
-                  <div key={tm.team_id} className="py-2.5 flex items-center justify-between gap-2">
-                    <div>
-                      <div className="font-medium text-zinc-100">{tm.team_name}</div>
-                      {tm.department && <div className="text-zinc-500">{tm.department}</div>}
-                    </div>
-                    <div className="text-right font-mono">
-                      <div className="text-emerald-300">{formatUsd(tm.period_cost)}</div>
-                      <div className="text-zinc-400">
-                        {formatTokens(tm.period_tokens)} tokens
+                {data.by_team.map((tm) => {
+                  const hasTmCap =
+                    tm.daily_cost_budget != null && tm.daily_cost_budget > 0
+                  const tmPct = tm.cost_budget_percent ?? 0
+                  const tmBarColor =
+                    tmPct >= 100
+                      ? 'bg-rose-500'
+                      : tmPct >= 80
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-500'
+                  return (
+                    <div key={tm.team_id} className="py-2.5 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="font-medium text-zinc-100">{tm.team_name}</div>
+                          {tm.department && <div className="text-zinc-500">{tm.department}</div>}
+                        </div>
+                        <div className="text-right font-mono">
+                          <div className="text-emerald-300">
+                            {hasTmCap
+                              ? `${formatUsd(tm.today_cost)} / ${formatUsd(tm.daily_cost_budget!)} (${tmPct}%)`
+                              : formatUsd(tm.period_cost)}
+                          </div>
+                          <div className="text-zinc-400">
+                            {hasTmCap
+                              ? `${formatUsd(tm.period_cost)} (${formatTokens(tm.period_tokens)} tokens)`
+                              : `${formatTokens(tm.period_tokens)} tokens`}
+                          </div>
+                        </div>
                       </div>
+                      {hasTmCap && (
+                        <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className={cn('h-full rounded-full', tmBarColor)}
+                            style={{ width: `${Math.min(100, tmPct)}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </CardContent>

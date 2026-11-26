@@ -31,7 +31,7 @@ import {
 } from '../../components/ui'
 import { apiFetch } from '../../lib/client.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type { SandboxItem, SkillItem, TemplateItem } from '../../types'
+import type { SandboxItem, SkillItem } from '../../types'
 
 interface ResourceDraftRow {
   path: string
@@ -89,13 +89,11 @@ async function encodeUploadedResource(file: File): Promise<string> {
 export function SkillsCenterTab({
   skills,
   sandboxes,
-  templates = [],
   onRefresh,
   notify,
 }: {
   skills: SkillItem[]
   sandboxes: SandboxItem[]
-  templates?: TemplateItem[]
   onRefresh: () => Promise<void>
   notify: (msg: string, type?: 'success' | 'error') => void
 }) {
@@ -286,7 +284,6 @@ export function SkillsCenterTab({
       body.item_ids = pushItems.map((i) => i.id)
     }
     if (spec.sandbox_ids) body.sandbox_ids = spec.sandbox_ids
-    if (spec.template_keys) body.template_keys = spec.template_keys
     const res = await apiFetch<{
       synced: number
       total: number
@@ -893,7 +890,6 @@ export function SkillsCenterTab({
         }
         description={t('admin.skills.pushDialogDesc')}
         sandboxes={sandboxes}
-        templates={templates}
         alreadyPushedIds={
           pushItems && pushItems.length === 1 ? pushItems[0].pushed_sandbox_ids || [] : []
         }

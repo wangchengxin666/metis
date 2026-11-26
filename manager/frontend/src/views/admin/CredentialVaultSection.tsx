@@ -20,7 +20,6 @@ import type {
   CredentialPresetItem,
   CredentialProfileItem,
   SandboxItem,
-  TemplateItem,
 } from '../../types'
 
 interface EnvRow {
@@ -63,7 +62,6 @@ export interface CredentialVaultSectionProps {
   credentialProfiles: CredentialProfileItem[]
   credentialPresets?: CredentialPresetItem[]
   sandboxes: SandboxItem[]
-  templates?: TemplateItem[]
   onRefresh: () => Promise<void>
   notify: (msg: string, type?: 'success' | 'error') => void
 }
@@ -72,7 +70,6 @@ export function CredentialVaultSection({
   credentialProfiles,
   credentialPresets = [],
   sandboxes,
-  templates = [],
   onRefresh,
   notify,
 }: CredentialVaultSectionProps) {
@@ -188,9 +185,10 @@ export function CredentialVaultSection({
 
   const handleConfirmPush = async (spec: PushTargetSpec) => {
     if (!pushTarget) return
-    const body: Record<string, unknown> = {}
+    const body: Record<string, unknown> = {
+      action: spec.action,
+    }
     if (spec.sandbox_ids) body.sandbox_ids = spec.sandbox_ids
-    if (spec.template_keys) body.template_keys = spec.template_keys
     const res = await apiFetch<{
       synced: number
       total: number
@@ -200,12 +198,19 @@ export function CredentialVaultSection({
       body: JSON.stringify(body),
     })
     notify(
-      t('admin.vault.pushed', {
-        name: pushTarget.name,
-        synced: res.synced,
-        total: res.total,
-      }),
+      spec.action === 'remove'
+        ? t('admin.vault.removed', {
+            name: pushTarget.name,
+            synced: res.synced,
+            total: res.total,
+          })
+        : t('admin.vault.pushed', {
+            name: pushTarget.name,
+            synced: res.synced,
+            total: res.total,
+          }),
     )
+    await onRefresh()
     return res
   }
 
@@ -924,7 +929,7 @@ export function CredentialVaultSection({
         title={t('admin.vault.pushDialogTitle', { name: pushTarget?.name ?? '' })}
         description={t('admin.vault.pushDialogDesc')}
         sandboxes={sandboxes}
-        templates={templates}
+        allowRemove={true}
         alreadyPushedIds={
           pushTarget
             ? sandboxes

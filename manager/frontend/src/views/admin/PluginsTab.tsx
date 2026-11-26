@@ -16,7 +16,7 @@ import {
 import { apiFetch } from '../../lib/client.ts'
 import { pickLocalizedText } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type { PluginIndexSource, PluginItem, SandboxItem, TemplateItem } from '../../types'
+import type { PluginIndexSource, PluginItem, SandboxItem } from '../../types'
 
 export interface PluginsRegistryData {
   index_url: string
@@ -30,7 +30,6 @@ export interface PluginsRegistryData {
 export interface PluginsTabProps {
   pluginsData: PluginsRegistryData
   sandboxes: SandboxItem[]
-  templates?: TemplateItem[]
   copiedKey: string | null
   onCopy: (key: string, text: string) => void
   onRefresh: () => Promise<void>
@@ -40,7 +39,6 @@ export interface PluginsTabProps {
 export function PluginsTab({
   pluginsData,
   sandboxes,
-  templates = [],
   copiedKey,
   onCopy,
   onRefresh,
@@ -75,7 +73,6 @@ export function PluginsTab({
       )
       const body: Record<string, unknown> = { mode, plugins }
       if (targetSpec?.sandbox_ids) body.sandbox_ids = targetSpec.sandbox_ids
-      if (targetSpec?.template_keys) body.template_keys = targetSpec.template_keys
       const res = await apiFetch<{
         synced: number
         results?: Array<{ slug: string; ok: boolean; skipped?: boolean; detail?: string }>
@@ -313,15 +310,6 @@ export function PluginsTab({
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={syncingPlugins}
-                  onClick={() => handleSyncPlugins('reinstall_selected', [plg.slug])}
-                  title={t('admin.plugins.reinstallOneBtn')}
-                >
-                  <RefreshCw className={cn('h-3.5 w-3.5', syncingPlugins && 'animate-spin')} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
                   onClick={() => onCopy(plg.slug, plg.install_command)}
                 >
                   {copiedKey === plg.slug ? (
@@ -439,7 +427,6 @@ export function PluginsTab({
         title={t('cap.push.dialogTitle', { name: pushRequest?.title ?? '' })}
         description={t('admin.plugins.pushDialogDesc')}
         sandboxes={sandboxes}
-        templates={templates}
         onConfirm={async (spec) => {
           if (!pushRequest) return
           return await handleSyncPlugins(pushRequest.mode, pushRequest.plugins, spec)

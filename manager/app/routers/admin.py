@@ -579,6 +579,7 @@ def api_push_credential_profile(
             resolve_docker(),
             profile,
             targets,
+            action=req.action,
             actor=session_email(request) if request is not None else None,
         )
     except Exception as exc:

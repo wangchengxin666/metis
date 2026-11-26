@@ -826,6 +826,7 @@ class CredentialProfileOut(BaseModel):
 class CredentialProfilePushRequest(BaseModel):
     sandbox_ids: list[str] | None = None
     template_keys: list[str] | None = None
+    action: Literal["push", "remove"] = "push"
 
 
 class CredentialProfileRefreshAppRequest(BaseModel):

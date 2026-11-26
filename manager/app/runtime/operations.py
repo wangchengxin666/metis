@@ -1337,7 +1337,190 @@ console.log('CRED_SYNC_OK');
             },
         )
         detail = out.decode("utf-8", errors="replace").strip() if out else ""
-        return {"slug": sandbox.slug, "ok": ec == 0, "skipped": False, "detail": detail[-200:]}
+        return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": ec == 0, "skipped": False, "detail": detail[-200:]}
+
+    def remove_credential_profile(
+        self,
+        sandbox: Sandbox,
+        *,
+        git_host: str = "github.com",
+        clear_git_user_name: str | None = None,
+        clear_git_user_email: str | None = None,
+        env_keys: list[str] | None = None,
+        mcp_server_names: list[str] | None = None,
+        remove_git_credentials: bool = True,
+        remove_ssh: bool = False,
+        remove_github_enterprise: bool = False,
+    ) -> dict[str, Any]:
+        """Remove pushed credentials, host git/ssh entries, env vars, and unguarded embedded MCPs from a running sandbox."""
+        try:
+            st = self._workload_status(sandbox)
+        except Exception:
+            st = "unknown"
+        if st != "running":
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": f"status={st}"}
+
+        clean_host = (git_host or "github.com").strip() or "github.com"
+        payload: dict[str, Any] = {
+            "gitHost": clean_host,
+            "clearGitUserName": (clear_git_user_name or "").strip(),
+            "clearGitUserEmail": (clear_git_user_email or "").strip(),
+            "envKeys": [str(k).strip() for k in (env_keys or []) if str(k).strip()],
+            "mcpServerNames": [str(m).strip() for m in (mcp_server_names or []) if str(m).strip()],
+            "removeGitCredentials": bool(remove_git_credentials),
+            "removeSsh": bool(remove_ssh),
+            "removeGithubEnterprise": bool(remove_github_enterprise),
+        }
+        node_script = """
+const fs = require('fs');
+const path = require('path');
+const cp = require('child_process');
+const cfg = JSON.parse(process.env.CRED_REMOVE_PAYLOAD || '{}');
+const home = '/home/workspace';
+const dshHome = path.join(home, '.dsh');
+const sbxDir = path.join(home, '.dsh-sandbox');
+
+function loadYaml() {
+  for (const cand of ['/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml', '/usr/local/lib/node_modules/yaml', 'yaml']) {
+    try { return require(cand); } catch {}
+  }
+  return null;
+}
+
+function atomicWrite(filePath, content, mode) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = filePath + '.tmp.' + process.pid + '.' + Date.now();
+  fs.writeFileSync(tmp, content, mode ? { encoding: 'utf8', mode } : 'utf8');
+  if (mode) { try { fs.chmodSync(tmp, mode); } catch {} }
+  fs.renameSync(tmp, filePath);
+  if (mode) { try { fs.chmodSync(filePath, mode); } catch {} }
+}
+
+const rawHost = String(cfg.gitHost || 'github.com').trim();
+const scheme = rawHost.startsWith('http://') ? 'http' : 'https';
+const host = rawHost.replace(/^https?:\\/\\//, '').replace(/\\/.*$/, '') || 'github.com';
+
+function unsetGitIfMatching(key, expectedVal) {
+  if (!expectedVal) return;
+  try {
+    const cur = cp.execFileSync('git', ['config', '--global', '--get', key], { encoding: 'utf8' }).trim();
+    if (cur === expectedVal) {
+      cp.execFileSync('git', ['config', '--global', '--unset-all', key]);
+    }
+  } catch {}
+}
+unsetGitIfMatching('user.name', cfg.clearGitUserName);
+unsetGitIfMatching('user.email', cfg.clearGitUserEmail);
+
+if (cfg.removeGitCredentials) {
+  for (const s of [scheme, scheme === 'http' ? 'https' : 'http']) {
+    try { cp.execFileSync('git', ['config', '--global', '--unset-all', 'http.' + s + '://' + host + '.sslVerify']); } catch {}
+  }
+  const gitCredPath = path.join(home, '.git-credentials');
+  if (fs.existsSync(gitCredPath)) {
+    const existingLines = fs.readFileSync(gitCredPath, 'utf8').split(/\\r?\\n/).map((l) => l.trim()).filter(Boolean);
+    const filtered = existingLines.filter((line) => {
+      try {
+        return new URL(line).host !== host;
+      } catch {
+        return !line.endsWith('@' + host);
+      }
+    });
+    if (filtered.length > 0) {
+      atomicWrite(gitCredPath, filtered.join('\\n') + '\\n', 0o600);
+    } else {
+      try { fs.unlinkSync(gitCredPath); } catch {}
+    }
+  }
+}
+
+if (cfg.removeSsh) {
+  const sshDir = path.join(home, '.ssh');
+  const keyName = host === 'github.com' ? 'id_ed25519' : 'id_ed25519_' + host.replace(/[^A-Za-z0-9._-]/g, '_');
+  const keyPath = path.join(sshDir, keyName);
+  try { if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath); } catch {}
+  const sshConfigPath = path.join(sshDir, 'config');
+  if (fs.existsSync(sshConfigPath)) {
+    const beginMark = '# BEGIN METIS ' + host;
+    const endMark = '# END METIS ' + host;
+    const escapedBegin = beginMark.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+    const escapedEnd = endMark.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+    let cur = fs.readFileSync(sshConfigPath, 'utf8');
+    cur = cur.replace(new RegExp(escapedBegin + '[\\\\s\\\\S]*?' + escapedEnd + '\\\\n?', 'g'), '').trim();
+    if (cur) atomicWrite(sshConfigPath, cur + '\\n', 0o600);
+    else { try { fs.unlinkSync(sshConfigPath); } catch {} }
+  }
+}
+
+if (cfg.removeGithubEnterprise) {
+  const entPath = path.join(sbxDir, 'github-enterprise.json');
+  try { if (fs.existsSync(entPath)) fs.unlinkSync(entPath); } catch {}
+}
+
+const dropKeys = new Set((cfg.envKeys || []).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k)));
+if (dropKeys.size > 0) {
+  const envFile = path.join(sbxDir, 'vault.env');
+  if (fs.existsSync(envFile)) {
+    const kept = [];
+    for (const line of fs.readFileSync(envFile, 'utf8').split(/\\r?\\n/)) {
+      const m = /^export\\s+([A-Za-z_][A-Za-z0-9_]*)=(.+)$/.exec(line.trim());
+      if (m && !dropKeys.has(m[1])) kept.push(line.trim());
+    }
+    atomicWrite(envFile, kept.length ? kept.join('\\n') + '\\n' : '', 0o600);
+  }
+  const yaml = loadYaml();
+  const credPath = path.join(dshHome, '.credentials.yaml');
+  if (yaml && fs.existsSync(credPath)) {
+    try {
+      const credDoc = yaml.parse(fs.readFileSync(credPath, 'utf8')) || {};
+      if (credDoc.refs && typeof credDoc.refs === 'object') {
+        for (const k of dropKeys) delete credDoc.refs[k];
+        atomicWrite(credPath, yaml.stringify(credDoc), 0o600);
+      }
+    } catch {}
+  }
+}
+
+const dropMcps = new Set((cfg.mcpServerNames || []).filter((s) => /^[A-Za-z0-9_-]{1,32}$/.test(s)));
+if (dropMcps.size > 0) {
+  const mcpPath = path.join(dshHome, 'mcp.json');
+  if (fs.existsSync(mcpPath)) {
+    try {
+      const mcpData = JSON.parse(fs.readFileSync(mcpPath, 'utf8')) || {};
+      if (mcpData.mcpServers && typeof mcpData.mcpServers === 'object') {
+        for (const s of dropMcps) delete mcpData.mcpServers[s];
+        atomicWrite(mcpPath, JSON.stringify(mcpData, null, 2) + '\\n', 0o600);
+      }
+    } catch {}
+  }
+  const yaml = loadYaml();
+  const patchPath = path.join(dshHome, 'profiles', 'web', 'cordis.patch.yml');
+  if (yaml && fs.existsSync(patchPath)) {
+    try {
+      const entries = yaml.parse(fs.readFileSync(patchPath, 'utf8'));
+      if (Array.isArray(entries)) {
+        const mcpEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'mcp-manager');
+        if (mcpEntry && mcpEntry.config && mcpEntry.config.servers) {
+          for (const s of dropMcps) delete mcpEntry.config.servers[s];
+          atomicWrite(patchPath, yaml.stringify(entries));
+        }
+      }
+    } catch {}
+  }
+}
+console.log('CRED_REMOVE_OK');
+"""
+        ec, out = self.exec_command(
+            sandbox,
+            ["node", "-e", node_script],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "CRED_REMOVE_PAYLOAD": json.dumps(payload),
+            },
+        )
+        detail = out.decode("utf-8", errors="replace").strip() if out else ""
+        return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": ec == 0, "skipped": False, "detail": detail[-200:]}
 
     def sync_mcp_servers(
         self,

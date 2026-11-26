@@ -7,7 +7,6 @@ import type {
   McpServerItem,
   SandboxItem,
   SkillItem,
-  TemplateItem,
 } from '../../types'
 import { CredentialVaultSection } from './CredentialVaultSection'
 import { McpCenterTab } from './McpCenterTab'
@@ -25,7 +24,6 @@ export function CapabilitiesView({
   mcpServers,
   skills,
   sandboxes,
-  templates,
   copiedKey,
   onCopy,
   onRefresh,
@@ -39,7 +37,6 @@ export function CapabilitiesView({
   mcpServers: McpServerItem[]
   skills: SkillItem[]
   sandboxes: SandboxItem[]
-  templates: TemplateItem[]
   copiedKey: string | null
   onCopy: (key: string, text: string) => void
   onRefresh: () => Promise<void>
@@ -117,7 +114,6 @@ export function CapabilitiesView({
         <PluginsTab
           pluginsData={pluginsData}
           sandboxes={sandboxes}
-          templates={templates}
           copiedKey={copiedKey}
           onCopy={onCopy}
           onRefresh={onRefresh}
@@ -130,7 +126,6 @@ export function CapabilitiesView({
           credentialProfiles={credentialProfiles}
           credentialPresets={credentialPresets}
           sandboxes={sandboxes}
-          templates={templates}
           onRefresh={onRefresh}
           notify={notify}
         />
@@ -140,7 +135,6 @@ export function CapabilitiesView({
         <McpCenterTab
           mcpServers={mcpServers}
           sandboxes={sandboxes}
-          templates={templates}
           onRefresh={onRefresh}
           notify={notify}
         />
@@ -150,7 +144,6 @@ export function CapabilitiesView({
         <SkillsCenterTab
           skills={skills}
           sandboxes={sandboxes}
-          templates={templates}
           onRefresh={onRefresh}
           notify={notify}
         />

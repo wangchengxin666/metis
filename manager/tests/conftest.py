@@ -598,8 +598,40 @@ class FakeDockerService:
         )
         item = self.containers.get(sandbox.slug)
         if not item or item.get("status") != "running":
-            return {"slug": sandbox.slug, "ok": False, "skipped": True, "detail": "not running"}
-        return {"slug": sandbox.slug, "ok": True, "skipped": False, "detail": "CRED_SYNC_OK"}
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": "not running"}
+        return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": True, "skipped": False, "detail": "CRED_SYNC_OK"}
+
+    def remove_credential_profile(
+        self,
+        sandbox: Sandbox,
+        *,
+        git_host: str = "github.com",
+        clear_git_user_name: str | None = None,
+        clear_git_user_email: str | None = None,
+        env_keys: list[str] | None = None,
+        mcp_server_names: list[str] | None = None,
+        remove_git_credentials: bool = True,
+        remove_ssh: bool = False,
+        remove_github_enterprise: bool = False,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            (
+                "remove_credential_profile",
+                {
+                    "slug": sandbox.slug,
+                    "git_host": git_host,
+                    "env_keys": list(env_keys or []),
+                    "mcp_server_names": list(mcp_server_names or []),
+                    "remove_git_credentials": remove_git_credentials,
+                    "remove_ssh": remove_ssh,
+                    "remove_github_enterprise": remove_github_enterprise,
+                },
+            )
+        )
+        item = self.containers.get(sandbox.slug)
+        if not item or item.get("status") != "running":
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": "not running"}
+        return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": True, "skipped": False, "detail": "CRED_REMOVE_OK"}
 
     def sync_mcp_servers(
         self,

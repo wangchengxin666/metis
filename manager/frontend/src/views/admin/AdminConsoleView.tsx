@@ -864,7 +864,6 @@ export function AdminConsoleView({
           mcpServers={mcpServers}
           skills={skills}
           sandboxes={sandboxes}
-          templates={templates}
           copiedKey={copiedKey}
           onCopy={copyText}
           onRefresh={refreshAll}

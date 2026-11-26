@@ -308,19 +308,35 @@ def delete_credential_profile(
     actor: str | None = None,
 ) -> None:
     name = profile.name
+    pid = profile.id
+    for sbx in db.scalars(select(Sandbox).where(Sandbox.deleted_at.is_(None))).all():
+        ids = sbx.credential_profile_ids
+        if pid in ids:
+            sbx.credential_profile_ids_json = json.dumps([x for x in ids if x != pid])
     audit(db, "credential.delete", target=name, actor=actor)
     db.delete(profile)
     db.commit()
 
 
-def push_credential_profile(
+def _profile_mcp_servers_map(profile: CredentialProfile) -> dict[str, object]:
+    if not profile.mcp_servers_json:
+        return {}
+    try:
+        raw_mcp = json.loads(profile.mcp_servers_json)
+        if isinstance(raw_mcp, dict):
+            sub = raw_mcp.get("mcpServers", raw_mcp)
+            return dict(sub) if isinstance(sub, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _extract_profile_runtime_attrs(
     db: Session,
-    docker: BaseSandboxRuntime,
     profile: CredentialProfile,
-    sandboxes: list[Sandbox],
     *,
-    actor: str | None = None,
     force_refresh_github_app: bool = False,
+    include_secrets: bool = True,
 ) -> dict[str, object]:
     auth_mode = (getattr(profile, "github_auth_mode", None) or "pat").strip().lower()
     is_gh = is_github_profile(
@@ -330,30 +346,30 @@ def push_credential_profile(
         github_api_base_url=getattr(profile, "github_api_base_url", None),
     )
 
-    if auth_mode == "github_app":
-        git_token = ensure_fresh_github_app_token(
-            db, profile, force_refresh=force_refresh_github_app
-        )
-    else:
-        git_token = (
-            decrypt_secret(profile.git_token_ciphertext)
-            if profile.git_token_ciphertext
-            else ""
-        )
-
-    ssh_key = (
-        decrypt_secret(profile.ssh_private_key_ciphertext)
-        if profile.ssh_private_key_ciphertext
-        else ""
-    )
+    git_token = ""
+    ssh_key = ""
     env_vars: dict[str, str] = {}
-    if profile.env_vars_ciphertext:
-        try:
-            raw_env = json.loads(decrypt_secret(profile.env_vars_ciphertext))
-            if isinstance(raw_env, dict):
-                env_vars = {str(k): str(v) for k, v in raw_env.items()}
-        except Exception:
-            pass
+    if include_secrets:
+        if auth_mode == "github_app":
+            git_token = ensure_fresh_github_app_token(
+                db, profile, force_refresh=force_refresh_github_app
+            )
+        elif profile.git_token_ciphertext:
+            git_token = decrypt_secret(profile.git_token_ciphertext)
+
+        if profile.ssh_private_key_ciphertext:
+            ssh_key = decrypt_secret(profile.ssh_private_key_ciphertext)
+
+        if profile.env_vars_ciphertext:
+            try:
+                raw_env = json.loads(decrypt_secret(profile.env_vars_ciphertext))
+                if isinstance(raw_env, dict):
+                    env_vars = {str(k): str(v) for k, v in raw_env.items()}
+            except Exception:
+                pass
+        env_keys = list(env_vars.keys())
+    else:
+        env_keys = list(profile.env_var_keys)
 
     clean_host = normalize_git_host(profile.git_host)
     api_base: str | None = None
@@ -366,25 +382,192 @@ def push_credential_profile(
         api_base = resolve_github_api_base(
             profile.git_host, getattr(profile, "github_api_base_url", None)
         )
-        env_vars.setdefault("GITHUB_HOST", web_origin)
-        env_vars.setdefault("GITHUB_API_URL", api_base)
-        if git_token:
-            # GitHub App installation tokens are always pushed fresh into GITHUB_TOKEN / PAT refs.
-            if auth_mode == "github_app":
-                env_vars["GITHUB_TOKEN"] = git_token
-                env_vars["GITHUB_PERSONAL_ACCESS_TOKEN"] = git_token
-            else:
-                env_vars.setdefault("GITHUB_TOKEN", git_token)
-                env_vars.setdefault("GITHUB_PERSONAL_ACCESS_TOKEN", git_token)
+        if include_secrets:
+            env_vars.setdefault("GITHUB_HOST", web_origin)
+            env_vars.setdefault("GITHUB_API_URL", api_base)
+            if git_token:
+                if auth_mode == "github_app":
+                    env_vars["GITHUB_TOKEN"] = git_token
+                    env_vars["GITHUB_PERSONAL_ACCESS_TOKEN"] = git_token
+                else:
+                    env_vars.setdefault("GITHUB_TOKEN", git_token)
+                    env_vars.setdefault("GITHUB_PERSONAL_ACCESS_TOKEN", git_token)
+        for gh_key in ("GITHUB_HOST", "GITHUB_API_URL", "GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"):
+            if gh_key not in env_keys:
+                env_keys.append(gh_key)
 
-    mcp_servers: dict[str, object] = {}
-    if profile.mcp_servers_json:
-        try:
-            raw_mcp = json.loads(profile.mcp_servers_json)
-            if isinstance(raw_mcp, dict):
-                mcp_servers = raw_mcp.get("mcpServers", raw_mcp)
-        except Exception:
-            pass
+    return {
+        "auth_mode": auth_mode,
+        "is_gh": is_gh,
+        "clean_host": clean_host,
+        "api_base": api_base,
+        "git_auth_username": git_auth_username,
+        "git_token": git_token,
+        "ssh_key": ssh_key,
+        "env_vars": env_vars,
+        "env_keys": env_keys,
+        "mcp_servers": _profile_mcp_servers_map(profile),
+    }
+
+
+def push_credential_profile(
+    db: Session,
+    docker: BaseSandboxRuntime,
+    profile: CredentialProfile,
+    sandboxes: list[Sandbox],
+    *,
+    action: str = "push",
+    actor: str | None = None,
+    force_refresh_github_app: bool = False,
+) -> dict[str, object]:
+    from ..models import McpServer
+
+    if action not in {"push", "remove"}:
+        raise ValueError("action 仅支持 push 或 remove")
+
+    if action == "remove":
+        target_attrs = _extract_profile_runtime_attrs(db, profile, include_secrets=False)
+        clean_host = str(target_attrs["clean_host"])
+        is_gh = bool(target_attrs["is_gh"])
+        target_env_keys = list(target_attrs["env_keys"])  # type: ignore[arg-type]
+        target_mcp_names = list(target_attrs["mcp_servers"].keys())  # type: ignore[union-attr]
+
+        results = []
+        for sbx in sandboxes:
+            remaining_ids = [pid for pid in sbx.credential_profile_ids if pid != profile.id]
+            remaining_profiles = (
+                list(
+                    db.scalars(
+                        select(CredentialProfile).where(CredentialProfile.id.in_(remaining_ids))
+                    ).all()
+                )
+                if remaining_ids
+                else []
+            )
+            rem_attrs_list = [
+                (rp, _extract_profile_runtime_attrs(db, rp, include_secrets=False))
+                for rp in remaining_profiles
+            ]
+            rem_env_keys = {
+                k for _, ra in rem_attrs_list for k in ra["env_keys"]  # type: ignore[index]
+            }
+            bound_mcp_slugs = (
+                set(
+                    db.scalars(
+                        select(McpServer.slug).where(McpServer.id.in_(sbx.mcp_server_ids))
+                    ).all()
+                )
+                if sbx.mcp_server_ids
+                else set()
+            )
+            rem_mcp_names = bound_mcp_slugs | {
+                m for _, ra in rem_attrs_list for m in ra["mcp_servers"].keys()  # type: ignore[union-attr]
+            }
+            rem_hosts = {str(ra["clean_host"]) for _, ra in rem_attrs_list}
+            rem_ssh_hosts = {
+                str(ra["clean_host"]) for rp, ra in rem_attrs_list if rp.has_ssh_key
+            }
+            rem_has_gh = any(bool(ra["is_gh"]) for _, ra in rem_attrs_list)
+            rem_git_names = {
+                (rp.git_user_name or "").strip() for rp in remaining_profiles if (rp.git_user_name or "").strip()
+            }
+            rem_git_emails = {
+                (rp.git_user_email or "").strip() for rp in remaining_profiles if (rp.git_user_email or "").strip()
+            }
+
+            try:
+                res = docker.remove_credential_profile(
+                    sbx,
+                    git_host=clean_host,
+                    clear_git_user_name=(
+                        profile.git_user_name
+                        if (profile.git_user_name or "").strip() and not rem_git_names
+                        else None
+                    ),
+                    clear_git_user_email=(
+                        profile.git_user_email
+                        if (profile.git_user_email or "").strip() and not rem_git_emails
+                        else None
+                    ),
+                    env_keys=[k for k in target_env_keys if k not in rem_env_keys],
+                    mcp_server_names=[m for m in target_mcp_names if m not in rem_mcp_names],
+                    remove_git_credentials=clean_host not in rem_hosts,
+                    remove_ssh=profile.has_ssh_key and (clean_host not in rem_ssh_hosts),
+                    remove_github_enterprise=is_gh and not rem_has_gh,
+                )
+            except Exception as exc:
+                res = {"slug": sbx.slug, "sandbox_id": sbx.id, "ok": False, "skipped": False, "detail": str(exc)}
+
+            if res.get("ok"):
+                sbx.credential_profile_ids_json = json.dumps(remaining_ids)
+                # Re-sync remaining bound credentials only if any overlapped with the removed profile's host/keys.
+                for rp, ra in rem_attrs_list:
+                    overlapped = (
+                        str(ra["clean_host"]) == clean_host
+                        or bool(set(ra["env_keys"]) & set(target_env_keys))  # type: ignore[arg-type]
+                        or (bool(ra["is_gh"]) and is_gh)
+                    )
+                    if overlapped:
+                        try:
+                            full = _extract_profile_runtime_attrs(db, rp, include_secrets=True)
+                            docker.sync_credential_profile(
+                                sbx,
+                                git_user_name=rp.git_user_name,
+                                git_user_email=rp.git_user_email,
+                                git_host=str(full["clean_host"]),
+                                git_token=str(full["git_token"]),
+                                ssh_private_key=str(full["ssh_key"]),
+                                env_vars=full["env_vars"],  # type: ignore[arg-type]
+                                mcp_servers=full["mcp_servers"],  # type: ignore[arg-type]
+                                github_api_base_url=full["api_base"],  # type: ignore[arg-type]
+                                git_auth_username=str(full["git_auth_username"]),
+                                github_tls_verify=bool(getattr(rp, "github_tls_verify", True)),
+                                is_github=bool(full["is_gh"]),
+                            )
+                        except Exception:
+                            pass
+            results.append(res)
+
+        synced = sum(1 for r in results if r.get("ok"))
+        skipped = sum(1 for r in results if r.get("skipped"))
+        failed = len(results) - synced - skipped
+        target_slugs = ",".join(s.slug for s in sandboxes[:10])
+        if len(sandboxes) > 10:
+            target_slugs += f",+{len(sandboxes) - 10}"
+        audit(
+            db,
+            "credential.remove",
+            target=profile.name,
+            actor=actor,
+            detail=f"host={clean_host},synced={synced}/{len(results)},targets={target_slugs}",
+        )
+        db.commit()
+        return {
+            "action": "remove",
+            "profile_id": profile.id,
+            "profile_name": profile.name,
+            "synced": synced,
+            "skipped": skipped,
+            "failed": failed,
+            "total": len(results),
+            "results": results,
+        }
+
+    attrs = _extract_profile_runtime_attrs(
+        db,
+        profile,
+        force_refresh_github_app=force_refresh_github_app,
+        include_secrets=True,
+    )
+    auth_mode = str(attrs["auth_mode"])
+    is_gh = bool(attrs["is_gh"])
+    clean_host = str(attrs["clean_host"])
+    api_base = attrs["api_base"]
+    git_auth_username = str(attrs["git_auth_username"])
+    git_token = str(attrs["git_token"])
+    ssh_key = str(attrs["ssh_key"])
+    env_vars: dict[str, str] = attrs["env_vars"]  # type: ignore[assignment]
+    mcp_servers: dict[str, object] = attrs["mcp_servers"]  # type: ignore[assignment]
 
     results = []
     for sbx in sandboxes:
@@ -397,11 +580,15 @@ def push_credential_profile(
             ssh_private_key=ssh_key,
             env_vars=env_vars,
             mcp_servers=mcp_servers,
-            github_api_base_url=api_base,
+            github_api_base_url=api_base,  # type: ignore[arg-type]
             git_auth_username=git_auth_username,
             github_tls_verify=bool(getattr(profile, "github_tls_verify", True)),
             is_github=is_gh,
         )
+        if res.get("ok"):
+            cur = sbx.credential_profile_ids
+            if profile.id not in cur:
+                sbx.credential_profile_ids_json = json.dumps([*cur, profile.id])
         results.append(res)
 
     synced = sum(1 for r in results if r.get("ok"))
@@ -419,6 +606,7 @@ def push_credential_profile(
     )
     db.commit()
     return {
+        "action": "push",
         "profile_id": profile.id,
         "profile_name": profile.name,
         "synced": synced,

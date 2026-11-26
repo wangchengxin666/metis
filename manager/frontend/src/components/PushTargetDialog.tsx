@@ -2,11 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Search, Send, Trash2, XCircle } from 'lucide-react'
 import { Badge, Button, Dialog, Input, cn } from './ui'
 import { useI18n } from '../lib/i18nContext'
-import type { SandboxItem, TemplateItem } from '../types'
+import type { SandboxItem } from '../types'
 
 export interface PushTargetSpec {
   sandbox_ids?: string[]
-  template_keys?: string[]
   action: 'push' | 'remove'
 }
 
@@ -29,7 +28,6 @@ export function PushTargetDialog({
   title,
   description,
   sandboxes,
-  templates = [],
   alreadyPushedIds = [],
   allowRemove = false,
   confirmLabel,
@@ -40,18 +38,16 @@ export function PushTargetDialog({
   title: string
   description: string
   sandboxes: SandboxItem[]
-  templates?: TemplateItem[]
   alreadyPushedIds?: string[]
   allowRemove?: boolean
   confirmLabel?: string
   onConfirm: (spec: PushTargetSpec) => Promise<PushExecutionResult | void>
 }) {
   const { t } = useI18n()
-  const [mode, setMode] = useState<'sandboxes' | 'templates' | 'all'>('sandboxes')
+  const [mode, setMode] = useState<'sandboxes' | 'all'>('sandboxes')
   const [action, setAction] = useState<'push' | 'remove'>('push')
   const [search, setSearch] = useState('')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [selectedTpls, setSelectedTpls] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [lastResult, setLastResult] = useState<PushExecutionResult | null>(null)
@@ -79,7 +75,6 @@ export function PushTargetDialog({
       .filter((s) => pushedSet.has(s.id))
       .map((s) => s.id)
     setSelectedIds(preSelected)
-    setSelectedTpls([])
   }, [open, runningSandboxes, pushedSet])
 
   const filteredSandboxes = useMemo(() => {
@@ -101,12 +96,6 @@ export function PushTargetDialog({
         return
       }
       spec.sandbox_ids = selectedIds
-    } else if (mode === 'templates') {
-      if (selectedTpls.length === 0) {
-        setErrorMsg(t('cap.push.selectRequired'))
-        return
-      }
-      spec.template_keys = selectedTpls
     }
 
     setSubmitting(true)
@@ -170,7 +159,6 @@ export function PushTargetDialog({
           {(
             [
               { id: 'sandboxes', label: t('admin.vault.pushModeSandboxes') },
-              { id: 'templates', label: t('admin.vault.pushModeTemplates') },
               { id: 'all', label: t('admin.vault.pushModeAll') },
             ] as const
           ).map((m) => (
@@ -304,45 +292,6 @@ export function PushTargetDialog({
             <div className="text-xs text-zinc-400">
               {t('cap.push.selectedCount', { count: selectedIds.length })}
             </div>
-          </div>
-        )}
-
-        {mode === 'templates' && (
-          <div className="max-h-60 overflow-y-auto divide-y divide-zinc-800/70 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/60">
-            {templates.length === 0 ? (
-              <p className="px-3.5 py-6 text-center text-xs text-zinc-500">
-                {t('cap.push.noTemplates')}
-              </p>
-            ) : (
-              templates.map((tpl) => {
-                const checked = selectedTpls.includes(tpl.key)
-                const matchCount = runningSandboxes.filter((s) => s.template === tpl.key).length
-                return (
-                  <label
-                    key={tpl.id}
-                    className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-xs cursor-pointer hover:bg-zinc-900/60"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(e) =>
-                          setSelectedTpls((prev) =>
-                            e.target.checked
-                              ? [...prev, tpl.key]
-                              : prev.filter((k) => k !== tpl.key),
-                          )
-                        }
-                        className="rounded border-zinc-600 accent-indigo-500"
-                      />
-                      <span className="font-medium text-zinc-100">{tpl.name}</span>
-                      <span className="font-mono text-zinc-500">({tpl.key})</span>
-                    </div>
-                    <Badge variant="outline">{matchCount} running</Badge>
-                  </label>
-                )
-              })
-            )}
           </div>
         )}
 

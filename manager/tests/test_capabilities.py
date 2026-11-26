@@ -728,3 +728,104 @@ def test_skill_zip_bundle_import_export_resources_and_security(api_env):
     assert push_res.status_code == 200
     assert push_res.json()["synced"] == 1
     assert any(c[0] == "sync_skills" and "bundle-demo-skill" in c[1][1] for c in fake_docker.calls)
+
+
+def test_credential_push_binds_and_remove_preserves_shared_and_bound_mcp(api_env):
+    client, fake_docker, _ = api_env
+
+    # Standalone GitHub MCP pushed explicitly to alice
+    mcp_list = client.get("/api/mcp-servers", headers=ADMIN_HEADERS).json()
+    gh_mcp = next(m for m in mcp_list if m["slug"] == "github")
+
+    # Create two overlapping + distinct credential profiles
+    cred_a = client.post(
+        "/api/credential-profiles",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "Cred A GitHub",
+            "category": "git",
+            "git_host": "github.corp.internal",
+            "git_user_name": "Bot A",
+            "git_user_email": "bota@corp.internal",
+            "git_token": "ghp_aaa",
+            "ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nAAA\n-----END OPENSSH PRIVATE KEY-----",
+            "env_vars_json": json.dumps({"SHARED_KEY": "from_a", "ONLY_A": "val_a"}),
+            "mcp_servers_json": json.dumps({"github": {"command": "echo"}, "vault-only-mcp": {"command": "echo"}}),
+        },
+    ).json()
+    cred_b = client.post(
+        "/api/credential-profiles",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "Cred B Shared Env",
+            "category": "api",
+            "git_host": "gitlab.corp.internal",
+            "env_vars_json": json.dumps({"SHARED_KEY": "from_b"}),
+        },
+    ).json()
+
+    alice = client.post(
+        "/api/sandboxes",
+        headers=ADMIN_HEADERS,
+        json={"email": "alice-cred@corp.com", "slug": "alice-cred"},
+    ).json()
+
+    # Bind GitHub MCP explicitly + push both Cred A and Cred B to alice
+    assert (
+        client.post(
+            f"/api/mcp-servers/{gh_mcp['id']}/push",
+            headers=ADMIN_HEADERS,
+            json={"sandbox_ids": [alice["id"]], "action": "push"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/credential-profiles/{cred_a['id']}/push",
+            headers=ADMIN_HEADERS,
+            json={"sandbox_ids": [alice["id"]], "action": "push"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/credential-profiles/{cred_b['id']}/push",
+            headers=ADMIN_HEADERS,
+            json={"sandbox_ids": [alice["id"]], "action": "push"},
+        ).status_code
+        == 200
+    )
+
+    alice_after_push = client.get(f"/api/sandboxes/{alice['id']}", headers=ADMIN_HEADERS).json()
+    assert set(alice_after_push["credential_profile_ids"]) == {cred_a["id"], cred_b["id"]}
+
+    # Remove Cred A ONLY -> Cred B and standalone GitHub MCP must remain protected
+    fake_docker.calls.clear()
+    rem = client.post(
+        f"/api/credential-profiles/{cred_a['id']}/push",
+        headers=ADMIN_HEADERS,
+        json={"sandbox_ids": [alice["id"]], "action": "remove"},
+    )
+    assert rem.status_code == 200, rem.text
+    assert rem.json()["action"] == "remove"
+    assert rem.json()["synced"] == 1
+
+    rem_calls = [c[1] for c in fake_docker.calls if c[0] == "remove_credential_profile"]
+    assert len(rem_calls) == 1
+    detail = rem_calls[0]
+    assert detail["slug"] == "alice-cred"
+    assert detail["git_host"] == "github.corp.internal"
+    assert detail["remove_git_credentials"] is True
+    assert detail["remove_ssh"] is True
+    assert detail["remove_github_enterprise"] is True
+    assert "ONLY_A" in detail["env_keys"]
+    assert "SHARED_KEY" not in detail["env_keys"]
+    assert detail["mcp_server_names"] == ["vault-only-mcp"]  # 'github' kept via explicit MCP binding
+
+    # Shared-key credential Cred B is re-synced after removing Cred A
+    assert any(
+        c[0] == "sync_credential_profile" and c[1][0] == "alice-cred" and c[1][2] == "gitlab.corp.internal"
+        for c in fake_docker.calls
+    )
+    alice_after_rem = client.get(f"/api/sandboxes/{alice['id']}", headers=ADMIN_HEADERS).json()
+    assert alice_after_rem["credential_profile_ids"] == [cred_b["id"]]

@@ -29,7 +29,7 @@ import {
 } from '../../components/ui'
 import { apiFetch } from '../../lib/client.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type { McpServerItem, SandboxItem, TemplateItem } from '../../types'
+import type { McpServerItem, SandboxItem } from '../../types'
 
 interface McpFormState {
   slug: string
@@ -66,13 +66,11 @@ const EMPTY_MCP_FORM: McpFormState = {
 export function McpCenterTab({
   mcpServers,
   sandboxes,
-  templates = [],
   onRefresh,
   notify,
 }: {
   mcpServers: McpServerItem[]
   sandboxes: SandboxItem[]
-  templates?: TemplateItem[]
   onRefresh: () => Promise<void>
   notify: (msg: string, type?: 'success' | 'error') => void
 }) {
@@ -230,7 +228,6 @@ export function McpCenterTab({
       body.item_ids = pushItems.map((i) => i.id)
     }
     if (spec.sandbox_ids) body.sandbox_ids = spec.sandbox_ids
-    if (spec.template_keys) body.template_keys = spec.template_keys
     const res = await apiFetch<{
       synced: number
       total: number
@@ -673,7 +670,6 @@ export function McpCenterTab({
         }
         description={t('admin.mcp.pushDialogDesc')}
         sandboxes={sandboxes}
-        templates={templates}
         alreadyPushedIds={alreadyPushedUnion}
         allowRemove={true}
         onConfirm={handlePushConfirm}

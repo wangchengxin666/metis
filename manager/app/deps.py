@@ -134,6 +134,8 @@ def sandbox_out(
         llm_profile_id=sandbox.llm_profile_id,
         llm_profile_name=sandbox.llm_profile.name if sandbox.llm_profile else None,
         credential_profile_ids=sandbox.credential_profile_ids,
+        mcp_server_ids=sandbox.mcp_server_ids,
+        skill_ids=sandbox.skill_ids,
         cpu_limit=(
             sandbox.cpu_limit
             if sandbox.cpu_limit is not None
@@ -281,6 +283,8 @@ def _ensure_active_user(db: Session, email: str) -> User | None:
 
 
 def _manager_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, Conflict):

@@ -27,6 +27,7 @@ from .oidc import probe_oidc_discovery
 from .routers import (
     admin,
     auth,
+    capabilities,
     integrations,
     llm_gateway,
     memory_hub,
@@ -44,6 +45,8 @@ from .scheduler import BackgroundWorker
 from .services import (
     ensure_bootstrap_admin,
     ensure_bootstrap_oidc_provider,
+    ensure_default_mcp_servers,
+    ensure_default_skills,
     ensure_default_templates,
     list_oidc_providers,
 )
@@ -74,6 +77,8 @@ async def lifespan(_app: FastAPI):
         ensure_bootstrap_admin(db, settings.manager_admin_email)
         ensure_default_templates(db, settings)
         ensure_default_playbooks(db)
+        ensure_default_mcp_servers(db)
+        ensure_default_skills(db)
         ensure_sandbox_gateway_keys(db)
         ensure_bootstrap_oidc_provider(db, settings)
         if settings.manager_auth_mode == "oidc":
@@ -123,6 +128,7 @@ app.include_router(system.router)
 app.include_router(plugins.router)
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(capabilities.router)
 app.include_router(notifications.router)
 app.include_router(llm_gateway.router)
 app.include_router(teams.router)

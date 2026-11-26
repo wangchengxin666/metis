@@ -106,7 +106,7 @@ export function FinOpsView({
           <Select
             value={String(days)}
             onChange={(e) => setDays(Number(e.target.value))}
-            className="h-9 text-xs w-28"
+            className="h-9 text-xs w-auto min-w-[120px]"
           >
             <option value="7">{t('finops.days7')}</option>
             <option value="30">{t('finops.days30')}</option>
@@ -116,7 +116,7 @@ export function FinOpsView({
             <Select
               value={teamId}
               onChange={(e) => setTeamId(e.target.value)}
-              className="h-9 text-xs w-44"
+              className="h-9 text-xs w-auto min-w-[168px] max-w-full sm:max-w-[320px]"
             >
               <option value="">{t('finops.allTeams')}</option>
               {teams.map((tm) => (

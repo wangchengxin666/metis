@@ -346,6 +346,12 @@ def create_template(db: Session, payload: TemplateCreate) -> SandboxTemplate:
         default_credential_profile_ids_json=_serialize_cred_ids(
             payload.default_credential_profile_ids
         ),
+        default_mcp_server_ids_json=_serialize_cred_ids(
+            payload.default_mcp_server_ids
+        ),
+        default_skill_ids_json=_serialize_cred_ids(
+            payload.default_skill_ids
+        ),
         image_repo=payload.image_repo.strip(),
         image_tag=payload.image_tag.strip(),
         default_cpu_limit=payload.default_cpu_limit,
@@ -383,6 +389,14 @@ def update_template(
     if payload.default_credential_profile_ids is not None:
         tpl.default_credential_profile_ids_json = _serialize_cred_ids(
             payload.default_credential_profile_ids
+        )
+    if payload.default_mcp_server_ids is not None:
+        tpl.default_mcp_server_ids_json = _serialize_cred_ids(
+            payload.default_mcp_server_ids
+        )
+    if payload.default_skill_ids is not None:
+        tpl.default_skill_ids_json = _serialize_cred_ids(
+            payload.default_skill_ids
         )
     if payload.image_repo is not None:
         tpl.image_repo = payload.image_repo.strip()

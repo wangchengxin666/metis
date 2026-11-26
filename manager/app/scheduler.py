@@ -13,6 +13,7 @@ from .models import PlaybookRun, Sandbox
 from .services import audit, get_branding_config, get_idle_sleep_policy, utcnow
 from .services.notifications import NotificationEvent, dispatch_notification_event
 from .services.playbooks import sync_playbook_run_progress
+from .services.vault import refresh_expiring_github_app_credentials
 from .services.workspace_hub import refresh_sandboxes_snapshots
 
 logger = logging.getLogger("dsh-manager.scheduler")
@@ -143,3 +144,8 @@ class BackgroundWorker:
                         sync_playbook_run_progress(db, self.settings, self.docker, run)
                 except Exception:
                     logger.warning("periodic workforce snapshot refresh failed")
+
+            try:
+                refresh_expiring_github_app_credentials(db, self.docker)
+            except Exception:
+                logger.warning("periodic GitHub App token refresh failed")

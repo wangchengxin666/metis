@@ -90,6 +90,7 @@ def migrate_schema(target_engine: Engine) -> None:
     """Apply idempotent, dialect-agnostic column migrations for SQLite, PostgreSQL, and MySQL."""
     backend = target_engine.dialect.name
     bool_false = "0" if backend == "sqlite" else "FALSE"
+    bool_true = "1" if backend == "sqlite" else "TRUE"
     ts_type = "TIMESTAMP" if backend == "postgresql" else "DATETIME"
 
     with target_engine.begin() as connection:
@@ -184,6 +185,14 @@ def migrate_schema(target_engine: Engine) -> None:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN credential_profile_ids_json TEXT"
                 )
+            if "mcp_server_ids_json" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN mcp_server_ids_json TEXT"
+                )
+            if "skill_ids_json" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandboxes ADD COLUMN skill_ids_json TEXT"
+                )
             if "budget_action" not in columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandboxes ADD COLUMN budget_action VARCHAR(32) NOT NULL DEFAULT 'block'"
@@ -228,6 +237,14 @@ def migrate_schema(target_engine: Engine) -> None:
             if "default_credential_profile_ids_json" not in tpl_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE sandbox_templates ADD COLUMN default_credential_profile_ids_json TEXT"
+                )
+            if "default_mcp_server_ids_json" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN default_mcp_server_ids_json TEXT"
+                )
+            if "default_skill_ids_json" not in tpl_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sandbox_templates ADD COLUMN default_skill_ids_json TEXT"
                 )
             if "sop_version" not in tpl_columns:
                 connection.exec_driver_sql(
@@ -325,6 +342,55 @@ def migrate_schema(target_engine: Engine) -> None:
             if "execution_mode" not in pb_run_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE playbook_runs ADD COLUMN execution_mode VARCHAR(32) NOT NULL DEFAULT 'isolated'"
+                )
+
+        if "credential_profiles" in table_names:
+            cred_columns = {
+                col["name"] for col in inspector.get_columns("credential_profiles")
+            }
+            if "preset_key" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN preset_key VARCHAR(64)"
+                )
+            if "category" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT 'custom'"
+                )
+            if "description" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN description VARCHAR(512)"
+                )
+            if "github_auth_mode" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN github_auth_mode VARCHAR(32) NOT NULL DEFAULT 'pat'"
+                )
+            if "github_api_base_url" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN github_api_base_url VARCHAR(512)"
+                )
+            if "github_app_id" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN github_app_id VARCHAR(64)"
+                )
+            if "github_app_installation_id" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN github_app_installation_id VARCHAR(64)"
+                )
+            if "github_tls_verify" not in cred_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE credential_profiles ADD COLUMN github_tls_verify BOOLEAN NOT NULL DEFAULT {bool_true}"
+                )
+            if "github_app_private_key_ciphertext" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN github_app_private_key_ciphertext TEXT NOT NULL DEFAULT ''"
+                )
+            if "github_app_cached_token_ciphertext" not in cred_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE credential_profiles ADD COLUMN github_app_cached_token_ciphertext TEXT NOT NULL DEFAULT ''"
+                )
+            if "github_app_token_expires_at" not in cred_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE credential_profiles ADD COLUMN github_app_token_expires_at {ts_type}"
                 )
 
 

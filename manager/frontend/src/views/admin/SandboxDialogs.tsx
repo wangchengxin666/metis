@@ -6,10 +6,12 @@ import { useI18n } from '../../lib/i18nContext'
 import type {
   CredentialProfileItem,
   LlmProfileItem,
+  McpServerItem,
   OverviewData,
   PluginItem,
   RolePresetItem,
   SandboxItem,
+  SkillItem,
   TemplateItem,
   UserItem,
 } from '../../types'
@@ -33,6 +35,8 @@ export interface ProvisionFormState {
   memory_limit: string
   llm_profile_id: string
   credential_profile_ids: string[]
+  mcp_server_ids: string[]
+  skill_ids: string[]
   init_repo_url: string
   auto_install_plugins: string
   init_script: string
@@ -48,6 +52,8 @@ export interface TemplateFormState {
   role_sop: string
   default_llm_profile_id: string
   default_credential_profile_ids: string[]
+  default_mcp_server_ids: string[]
+  default_skill_ids: string[]
   image_repo: string
   image_tag: string
   default_cpu_limit: string
@@ -70,28 +76,31 @@ export interface EditSandboxFormState {
   image_tag: string
   llm_profile_id: string
   credential_profile_ids: string[]
+  mcp_server_ids: string[]
+  skill_ids: string[]
   preview_auth_mode: string
   daily_cost_limit: string
   budget_action: 'block' | 'downgrade' | 'warn'
   auto_sleep_exempt: boolean
 }
 
-function CredentialProfileCheckboxes({
-  profiles,
+function IdChecklistPicker({
+  items,
   selectedIds,
+  emptyHint,
   onChange,
 }: {
-  profiles: CredentialProfileItem[]
+  items: Array<{ id: string; name: string; sub?: string }>
   selectedIds: string[]
+  emptyHint: string
   onChange: (next: string[]) => void
 }) {
-  const { t } = useI18n()
-  if (profiles.length === 0) {
-    return <p className="text-[11px] text-zinc-500">{t('admin.vault.noBundlesHint')}</p>
+  if (items.length === 0) {
+    return <p className="text-[11px] text-zinc-500">{emptyHint}</p>
   }
   return (
     <div className="max-h-32 overflow-y-auto rounded-[var(--brand-radius-sm)] border border-zinc-800 bg-zinc-950/60 p-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-      {profiles.map((p) => {
+      {items.map((p) => {
         const checked = selectedIds.includes(p.id)
         return (
           <label
@@ -111,6 +120,7 @@ function CredentialProfileCheckboxes({
               className="rounded border-zinc-700 accent-indigo-500 shrink-0"
             />
             <span className="truncate">{p.name}</span>
+            {p.sub && <span className="font-mono text-[10px] text-zinc-500 shrink-0">{p.sub}</span>}
           </label>
         )
       })}
@@ -130,6 +140,8 @@ export function ProvisionSandboxDialog({
   templates,
   llmProfiles,
   credentialProfiles = [],
+  mcpServers = [],
+  skills = [],
   effectiveAllowLocalUser,
   plugins = [],
 }: {
@@ -144,6 +156,8 @@ export function ProvisionSandboxDialog({
   templates: TemplateItem[]
   llmProfiles: LlmProfileItem[]
   credentialProfiles?: CredentialProfileItem[]
+  mcpServers?: McpServerItem[]
+  skills?: SkillItem[]
   effectiveAllowLocalUser: boolean
   plugins?: PluginItem[]
 }) {
@@ -211,7 +225,7 @@ export function ProvisionSandboxDialog({
               </div>
             )}
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 sm:col-span-2">
               <Label>{t('dialog.provision.templateLabel')}</Label>
               <Select
                 value={sbxForm.template}
@@ -225,7 +239,7 @@ export function ProvisionSandboxDialog({
               </Select>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 sm:col-span-2">
               <Label>{t('dialog.provision.llmLabel')}</Label>
               <Select
                 value={sbxForm.llm_profile_id}
@@ -406,10 +420,29 @@ export function ProvisionSandboxDialog({
 
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label>{t('admin.vault.boundTemplatesHint')}</Label>
-                  <CredentialProfileCheckboxes
-                    profiles={credentialProfiles}
+                  <IdChecklistPicker
+                    items={credentialProfiles}
                     selectedIds={sbxForm.credential_profile_ids}
+                    emptyHint={t('admin.vault.noBundlesHint')}
                     onChange={(next) => setSbxForm({ ...sbxForm, credential_profile_ids: next })}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>{t('admin.mcp.boundHint')}</Label>
+                  <IdChecklistPicker
+                    items={mcpServers.map((m) => ({ id: m.id, name: m.name, sub: m.slug }))}
+                    selectedIds={sbxForm.mcp_server_ids}
+                    emptyHint={t('admin.mcp.noBoundHint')}
+                    onChange={(next) => setSbxForm({ ...sbxForm, mcp_server_ids: next })}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>{t('admin.skills.boundHint')}</Label>
+                  <IdChecklistPicker
+                    items={skills.map((s) => ({ id: s.id, name: s.name, sub: s.slug }))}
+                    selectedIds={sbxForm.skill_ids}
+                    emptyHint={t('admin.skills.noBoundHint')}
+                    onChange={(next) => setSbxForm({ ...sbxForm, skill_ids: next })}
                   />
                 </div>
 
@@ -456,6 +489,8 @@ export function TemplateEditorDialog({
   overview,
   plugins = [],
   credentialProfiles = [],
+  mcpServers = [],
+  skills = [],
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -468,6 +503,8 @@ export function TemplateEditorDialog({
   overview: OverviewData | null
   plugins?: PluginItem[]
   credentialProfiles?: CredentialProfileItem[]
+  mcpServers?: McpServerItem[]
+  skills?: SkillItem[]
 }) {
   const { t } = useI18n()
   return (
@@ -645,11 +682,36 @@ export function TemplateEditorDialog({
 
             <div className="space-y-1.5 sm:col-span-2">
               <Label>{t('admin.vault.boundTemplatesHint')}</Label>
-              <CredentialProfileCheckboxes
-                profiles={credentialProfiles}
+              <IdChecklistPicker
+                items={credentialProfiles}
                 selectedIds={tplForm.default_credential_profile_ids}
+                emptyHint={t('admin.vault.noBundlesHint')}
                 onChange={(next) =>
                   setTplForm({ ...tplForm, default_credential_profile_ids: next })
+                }
+              />
+            </div>
+
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>{t('admin.mcp.boundHint')}</Label>
+              <IdChecklistPicker
+                items={mcpServers.map((m) => ({ id: m.id, name: m.name, sub: m.slug }))}
+                selectedIds={tplForm.default_mcp_server_ids}
+                emptyHint={t('admin.mcp.noBoundHint')}
+                onChange={(next) =>
+                  setTplForm({ ...tplForm, default_mcp_server_ids: next })
+                }
+              />
+            </div>
+
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>{t('admin.skills.boundHint')}</Label>
+              <IdChecklistPicker
+                items={skills.map((s) => ({ id: s.id, name: s.name, sub: s.slug }))}
+                selectedIds={tplForm.default_skill_ids}
+                emptyHint={t('admin.skills.noBoundHint')}
+                onChange={(next) =>
+                  setTplForm({ ...tplForm, default_skill_ids: next })
                 }
               />
             </div>
@@ -698,6 +760,8 @@ export function EditSandboxDialog({
   onRotateGatewayKey,
   llmProfiles,
   credentialProfiles = [],
+  mcpServers = [],
+  skills = [],
 }: {
   target: SandboxItem | null
   onClose: () => void
@@ -708,6 +772,8 @@ export function EditSandboxDialog({
   onRotateGatewayKey?: (sbx: SandboxItem) => Promise<void> | void
   llmProfiles: LlmProfileItem[]
   credentialProfiles?: CredentialProfileItem[]
+  mcpServers?: McpServerItem[]
+  skills?: SkillItem[]
 }) {
   const { t } = useI18n()
   const setEditSbx = (_v: null) => onClose()
@@ -906,11 +972,34 @@ export function EditSandboxDialog({
             )}
             <div className="space-y-1.5 col-span-2">
               <Label>{t('admin.vault.boundTemplatesHint')}</Label>
-              <CredentialProfileCheckboxes
-                profiles={credentialProfiles}
+              <IdChecklistPicker
+                items={credentialProfiles}
                 selectedIds={editSbxForm.credential_profile_ids}
+                emptyHint={t('admin.vault.noBundlesHint')}
                 onChange={(next) =>
                   setEditSbxForm({ ...editSbxForm, credential_profile_ids: next })
+                }
+              />
+            </div>
+            <div className="space-y-1.5 col-span-2">
+              <Label>{t('admin.mcp.boundHint')}</Label>
+              <IdChecklistPicker
+                items={mcpServers.map((m) => ({ id: m.id, name: m.name, sub: m.slug }))}
+                selectedIds={editSbxForm.mcp_server_ids}
+                emptyHint={t('admin.mcp.noBoundHint')}
+                onChange={(next) =>
+                  setEditSbxForm({ ...editSbxForm, mcp_server_ids: next })
+                }
+              />
+            </div>
+            <div className="space-y-1.5 col-span-2">
+              <Label>{t('admin.skills.boundHint')}</Label>
+              <IdChecklistPicker
+                items={skills.map((s) => ({ id: s.id, name: s.name, sub: s.slug }))}
+                selectedIds={editSbxForm.skill_ids}
+                emptyHint={t('admin.skills.noBoundHint')}
+                onChange={(next) =>
+                  setEditSbxForm({ ...editSbxForm, skill_ids: next })
                 }
               />
             </div>

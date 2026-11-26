@@ -146,7 +146,7 @@ export function AuditCenterTab({
             />
           </div>
           <Select
-            className="h-9 text-xs w-auto min-w-[140px]"
+            className="h-9 text-xs w-auto min-w-[140px] max-w-full sm:max-w-[280px]"
             value={category}
             onChange={(e) => {
               setCategory(e.target.value)
@@ -162,7 +162,7 @@ export function AuditCenterTab({
             <option value="system">{t('audit.catSystem')}</option>
           </Select>
           <Select
-            className="h-9 text-xs w-auto min-w-[170px] font-mono"
+            className="h-9 text-xs w-auto min-w-[180px] max-w-full sm:max-w-[340px] font-mono"
             value={action}
             onChange={(e) => {
               setAction(e.target.value)

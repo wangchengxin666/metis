@@ -110,7 +110,7 @@ export function WorkforceAppsCard({
               )}
             />
             <Select
-              className="h-8 text-xs w-auto min-w-[180px]"
+              className="h-8 text-xs w-auto min-w-[220px] max-w-full"
               disabled={togglingPreviewAuth}
               value={effectivePreviewAuth}
               onChange={(e) => void handlePreviewAuthChange(e.target.value)}

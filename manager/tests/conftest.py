@@ -575,12 +575,61 @@ class FakeDockerService:
         ssh_private_key: str = "",
         env_vars: dict[str, str] | None = None,
         mcp_servers: dict[str, Any] | None = None,
+        github_api_base_url: str | None = None,
+        git_auth_username: str = "oauth2",
+        github_tls_verify: bool = True,
+        is_github: bool = False,
     ) -> dict[str, Any]:
         self.calls.append(("sync_credential_profile", (sandbox.slug, git_user_name, git_host)))
+        self.calls.append(
+            (
+                "sync_credential_profile_detail",
+                {
+                    "slug": sandbox.slug,
+                    "git_user_name": git_user_name,
+                    "git_host": git_host,
+                    "git_token": git_token,
+                    "github_api_base_url": github_api_base_url,
+                    "git_auth_username": git_auth_username,
+                    "github_tls_verify": github_tls_verify,
+                    "is_github": is_github,
+                },
+            )
+        )
         item = self.containers.get(sandbox.slug)
         if not item or item.get("status") != "running":
             return {"slug": sandbox.slug, "ok": False, "skipped": True, "detail": "not running"}
         return {"slug": sandbox.slug, "ok": True, "skipped": False, "detail": "CRED_SYNC_OK"}
+
+    def sync_mcp_servers(
+        self,
+        sandbox: Sandbox,
+        *,
+        upsert_servers: dict[str, dict[str, Any]] | None = None,
+        remove_slugs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            ("sync_mcp_servers", (sandbox.slug, sorted((upsert_servers or {}).keys()), list(remove_slugs or [])))
+        )
+        item = self.containers.get(sandbox.slug)
+        if not item or item.get("status") != "running":
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": "not running"}
+        return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": True, "skipped": False, "detail": "MCP_SYNC_OK"}
+
+    def sync_skills(
+        self,
+        sandbox: Sandbox,
+        *,
+        upsert_skills: list[dict[str, Any]] | None = None,
+        remove_slugs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            ("sync_skills", (sandbox.slug, [str(s.get("slug")) for s in (upsert_skills or [])], list(remove_slugs or [])))
+        )
+        item = self.containers.get(sandbox.slug)
+        if not item or item.get("status") != "running":
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": "not running"}
+        return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": True, "skipped": False, "detail": "SKILL_SYNC_OK"}
 
     def sync_shared_project_file(
         self,
@@ -665,6 +714,7 @@ def reset_database() -> None:
         from app.models import (
             CredentialProfile,
             LlmUsageLedger,
+            McpServer,
             MemoryPromotion,
             NotificationChannel,
             NotificationDelivery,
@@ -673,13 +723,17 @@ def reset_database() -> None:
             PlaybookStepRun,
             ProvisionRequest,
             SandboxRuntimeSnapshot,
+            SkillItem,
             Team,
             TeamMember,
             TeamSandbox,
             WorkspaceSnapshot,
         )
+        from app.services.capabilities import ensure_default_mcp_servers, ensure_default_skills
         from app.services.playbooks import ensure_default_playbooks
 
+        db.query(SkillItem).delete()
+        db.query(McpServer).delete()
         db.query(MemoryPromotion).delete()
         db.query(PlaybookStepRun).delete()
         db.query(PlaybookRun).delete()
@@ -707,6 +761,8 @@ def reset_database() -> None:
         ensure_bootstrap_admin(db, settings.manager_admin_email)
         ensure_default_templates(db, settings)
         ensure_default_playbooks(db)
+        ensure_default_mcp_servers(db)
+        ensure_default_skills(db)
 
 
 @pytest.fixture()

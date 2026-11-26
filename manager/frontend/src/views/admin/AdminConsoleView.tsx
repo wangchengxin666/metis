@@ -19,18 +19,22 @@ import { useI18n } from '../../lib/i18nContext'
 import type {
   AdminItem,
   AuthMe,
+  CredentialPresetItem,
   CredentialProfileItem,
   LlmProfileItem,
+  McpServerItem,
   OidcProviderItem,
   OverviewData,
   RolePresetItem,
   SandboxItem,
   SandboxStats,
+  SkillItem,
   TemplateItem,
   UserItem,
 } from '../../types'
 import { PlaybooksView } from '../workspace/PlaybooksView'
 import { AuditCenterTab } from './AuditCenterTab'
+import { CapabilitiesView, type CapabilitySubTab } from './CapabilitiesView'
 import { LlmAndVaultTab } from './LlmAndVaultTab'
 import { NotificationsTab } from './NotificationsTab'
 import {
@@ -39,7 +43,7 @@ import {
   ContainerLogsDialog,
   DestroySandboxDialog,
 } from './OperationsDialogs'
-import { PluginsRegistryData, PluginsTab } from './PluginsTab'
+import { PluginsRegistryData } from './PluginsTab'
 import {
   EditSandboxDialog,
   EditSandboxFormState,
@@ -77,8 +81,9 @@ export function AdminConsoleView({
   const activeTab = activeSection
   const setActiveTab = onSelectSection
   const [workforceSubTab, setWorkforceSubTab] = useState<'sandboxes' | 'templates' | 'playbooks'>('sandboxes')
+  const [capSubTab, setCapSubTab] = useState<CapabilitySubTab>('plugins')
   const [accessSubTab, setAccessSubTab] = useState<'users' | 'sso'>('users')
-  const [opsSubTab, setOpsSubTab] = useState<'plugins' | 'notifications' | 'audit'>('plugins')
+  const [opsSubTab, setOpsSubTab] = useState<'notifications' | 'audit'>('notifications')
 
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [sandboxes, setSandboxes] = useState<SandboxItem[]>([])
@@ -88,6 +93,9 @@ export function AdminConsoleView({
   const [seedingPresets, setSeedingPresets] = useState(false)
   const [llmProfiles, setLlmProfiles] = useState<LlmProfileItem[]>([])
   const [credentialProfiles, setCredentialProfiles] = useState<CredentialProfileItem[]>([])
+  const [credentialPresets, setCredentialPresets] = useState<CredentialPresetItem[]>([])
+  const [mcpServers, setMcpServers] = useState<McpServerItem[]>([])
+  const [skills, setSkills] = useState<SkillItem[]>([])
   const [oidcProviders, setOidcProviders] = useState<OidcProviderItem[]>([])
   const [pluginsData, setPluginsData] = useState<PluginsRegistryData | null>(null)
   const [users, setUsers] = useState<UserItem[]>([])
@@ -116,6 +124,8 @@ export function AdminConsoleView({
     memory_limit: '4g',
     llm_profile_id: '',
     credential_profile_ids: [],
+    mcp_server_ids: [],
+    skill_ids: [],
     init_repo_url: '',
     auto_install_plugins: DEFAULT_CORE_AUTO_INSTALL_PLUGINS,
     init_script: '',
@@ -138,6 +148,8 @@ export function AdminConsoleView({
     image_tag: 'latest',
     llm_profile_id: '',
     credential_profile_ids: [],
+    mcp_server_ids: [],
+    skill_ids: [],
     preview_auth_mode: 'public',
     daily_cost_limit: '',
     budget_action: 'block',
@@ -174,6 +186,8 @@ export function AdminConsoleView({
     role_sop: '',
     default_llm_profile_id: '',
     default_credential_profile_ids: [],
+    default_mcp_server_ids: [],
+    default_skill_ids: [],
     image_repo: 'dsh-sandbox',
     image_tag: 'latest',
     default_cpu_limit: '2.0',
@@ -243,28 +257,49 @@ export function AdminConsoleView({
       },
     )
     try {
-      const [ov, , tplRes, presetsRes, llmRes, credRes, plgRes, usrRes, admRes, oidcRes] =
-        await Promise.all([
-          apiFetch<OverviewData>('/api/overview'),
-          sandboxesReq,
-          apiFetch<TemplateItem[]>('/api/templates'),
-          apiFetch<{ items: RolePresetItem[] }>('/api/templates/presets').catch(() => ({
-            items: [] as RolePresetItem[],
-          })),
-          apiFetch<LlmProfileItem[]>('/api/llm-profiles'),
-          apiFetch<CredentialProfileItem[]>('/api/credential-profiles').catch(
-            () => [] as CredentialProfileItem[],
-          ),
-          apiFetch<PluginsRegistryData>('/api/plugins'),
-          apiFetch<UserItem[]>('/api/users'),
-          apiFetch<AdminItem[]>('/api/admins'),
-          apiFetch<OidcProviderItem[]>('/api/oidc-providers'),
-        ])
+      const [
+        ov,
+        ,
+        tplRes,
+        presetsRes,
+        llmRes,
+        credRes,
+        credPresetsRes,
+        mcpRes,
+        skillsRes,
+        plgRes,
+        usrRes,
+        admRes,
+        oidcRes,
+      ] = await Promise.all([
+        apiFetch<OverviewData>('/api/overview'),
+        sandboxesReq,
+        apiFetch<TemplateItem[]>('/api/templates'),
+        apiFetch<{ items: RolePresetItem[] }>('/api/templates/presets').catch(() => ({
+          items: [] as RolePresetItem[],
+        })),
+        apiFetch<LlmProfileItem[]>('/api/llm-profiles'),
+        apiFetch<CredentialProfileItem[]>('/api/credential-profiles').catch(
+          () => [] as CredentialProfileItem[],
+        ),
+        apiFetch<{ items: CredentialPresetItem[] }>('/api/credential-profiles/presets').catch(
+          () => ({ items: [] as CredentialPresetItem[] }),
+        ),
+        apiFetch<McpServerItem[]>('/api/mcp-servers').catch(() => [] as McpServerItem[]),
+        apiFetch<SkillItem[]>('/api/skills').catch(() => [] as SkillItem[]),
+        apiFetch<PluginsRegistryData>('/api/plugins'),
+        apiFetch<UserItem[]>('/api/users'),
+        apiFetch<AdminItem[]>('/api/admins'),
+        apiFetch<OidcProviderItem[]>('/api/oidc-providers'),
+      ])
       setOverview(ov)
       setTemplates(tplRes)
       setRolePresets(presetsRes.items || [])
       setLlmProfiles(llmRes)
       setCredentialProfiles(credRes)
+      setCredentialPresets(credPresetsRes.items || [])
+      setMcpServers(mcpRes)
+      setSkills(skillsRes)
       setPluginsData(plgRes)
       setUsers(usrRes)
       setAdmins(admRes)
@@ -305,6 +340,8 @@ export function AdminConsoleView({
         role_sop: found.role_sop || '',
         llm_profile_id: found.default_llm_profile_id || prev.llm_profile_id,
         credential_profile_ids: [...(found.default_credential_profile_ids || [])],
+        mcp_server_ids: [...(found.default_mcp_server_ids || [])],
+        skill_ids: [...(found.default_skill_ids || [])],
         image_repo: found.image_repo,
         image_tag: found.image_tag,
         cpu_limit: String(found.default_cpu_limit),
@@ -352,6 +389,8 @@ export function AdminConsoleView({
           memory_limit: sbxForm.memory_limit.trim() || '4g',
           llm_profile_id: sbxForm.llm_profile_id || null,
           credential_profile_ids: sbxForm.credential_profile_ids,
+          mcp_server_ids: sbxForm.mcp_server_ids,
+          skill_ids: sbxForm.skill_ids,
           init_repo_url: sbxForm.init_repo_url.trim() || null,
           auto_install_plugins: sbxForm.auto_install_plugins.trim(),
           init_script: sbxForm.init_script,
@@ -405,6 +444,8 @@ export function AdminConsoleView({
       image_tag: sbx.image_tag,
       llm_profile_id: sbx.llm_profile_id || '',
       credential_profile_ids: [...(sbx.credential_profile_ids || [])],
+      mcp_server_ids: [...(sbx.mcp_server_ids || [])],
+      skill_ids: [...(sbx.skill_ids || [])],
       preview_auth_mode: sbx.preview_auth_mode || 'public',
       daily_cost_limit:
         sbx.daily_cost_limit != null && sbx.daily_cost_limit > 0
@@ -454,6 +495,8 @@ export function AdminConsoleView({
           image_tag: editSbxForm.image_tag.trim(),
           llm_profile_id: editSbxForm.llm_profile_id,
           credential_profile_ids: editSbxForm.credential_profile_ids,
+          mcp_server_ids: editSbxForm.mcp_server_ids,
+          skill_ids: editSbxForm.skill_ids,
           preview_auth_mode: editSbxForm.preview_auth_mode,
           daily_cost_limit: costLimitNum,
           budget_action: editSbxForm.budget_action,
@@ -561,6 +604,8 @@ export function AdminConsoleView({
       role_sop: '',
       default_llm_profile_id: '',
       default_credential_profile_ids: [],
+      default_mcp_server_ids: [],
+      default_skill_ids: [],
       image_repo: overview?.default_image_repo || 'dsh-sandbox',
       image_tag: overview?.default_image_tag || 'latest',
       default_cpu_limit: '2.0',
@@ -583,6 +628,8 @@ export function AdminConsoleView({
       role_sop: tpl.role_sop || '',
       default_llm_profile_id: tpl.default_llm_profile_id || '',
       default_credential_profile_ids: [...(tpl.default_credential_profile_ids || [])],
+      default_mcp_server_ids: [...(tpl.default_mcp_server_ids || [])],
+      default_skill_ids: [...(tpl.default_skill_ids || [])],
       image_repo: tpl.image_repo,
       image_tag: tpl.image_tag,
       default_cpu_limit: String(tpl.default_cpu_limit),
@@ -606,6 +653,8 @@ export function AdminConsoleView({
         role_sop: tplForm.role_sop.trim() || null,
         default_llm_profile_id: tplForm.default_llm_profile_id || null,
         default_credential_profile_ids: tplForm.default_credential_profile_ids,
+        default_mcp_server_ids: tplForm.default_mcp_server_ids,
+        default_skill_ids: tplForm.default_skill_ids,
         image_repo: tplForm.image_repo.trim(),
         image_tag: tplForm.image_tag.trim(),
         default_cpu_limit: parseFloat(tplForm.default_cpu_limit) || 2.0,
@@ -689,8 +738,8 @@ export function AdminConsoleView({
           <button
             type="button"
             onClick={() => {
-              setActiveTab('ops')
-              setOpsSubTab('plugins')
+              setActiveTab('capabilities')
+              setCapSubTab('plugins')
             }}
             className="hidden md:inline-flex items-center gap-1.5 hover:text-zinc-200 transition-colors cursor-pointer"
           >
@@ -790,19 +839,40 @@ export function AdminConsoleView({
         </div>
       )}
 
-      {/* Consolidated Admin Section 2: LLM Gateway & Credential Vault */}
+      {/* Consolidated Admin Section 2: LLM Gateway */}
       {activeTab === 'llm' && (
         <LlmAndVaultTab
           llmProfiles={llmProfiles}
-          credentialProfiles={credentialProfiles}
           sandboxes={sandboxes}
-          templates={templates}
+          onOpenCapabilities={(subTab) => {
+            setCapSubTab(subTab)
+            setActiveTab('capabilities')
+          }}
           onRefresh={refreshAll}
           notify={notify}
         />
       )}
 
-      {/* Consolidated Admin Section 3: Users, Admins & SSO/Branding */}
+      {/* Consolidated Admin Section 3: Unified Capability Center (Plugins, Credentials, MCP, Skills) */}
+      {activeTab === 'capabilities' && (
+        <CapabilitiesView
+          activeSubTab={capSubTab}
+          onSelectSubTab={setCapSubTab}
+          pluginsData={pluginsData}
+          credentialProfiles={credentialProfiles}
+          credentialPresets={credentialPresets}
+          mcpServers={mcpServers}
+          skills={skills}
+          sandboxes={sandboxes}
+          templates={templates}
+          copiedKey={copiedKey}
+          onCopy={copyText}
+          onRefresh={refreshAll}
+          notify={notify}
+        />
+      )}
+
+      {/* Consolidated Admin Section 4: Users, Admins & SSO/Branding */}
       {activeTab === 'access' && (
         <div className="space-y-4">
           <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
@@ -859,13 +929,12 @@ export function AdminConsoleView({
         </div>
       )}
 
-      {/* Consolidated Admin Section 4: Platform Operations (Plugins, Notifications, Audit) */}
+      {/* Consolidated Admin Section 5: Platform Operations (Notifications, Audit) */}
       {activeTab === 'ops' && (
         <div className="space-y-4">
           <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
             {(
               [
-                ['plugins', t('admin.subtab.plugins')],
                 ['notifications', t('admin.subtab.notifications')],
                 ['audit', t('admin.subtab.audit')],
               ] as const
@@ -885,16 +954,6 @@ export function AdminConsoleView({
               </button>
             ))}
           </div>
-
-          {opsSubTab === 'plugins' && pluginsData && (
-            <PluginsTab
-              pluginsData={pluginsData}
-              copiedKey={copiedKey}
-              onCopy={copyText}
-              onRefresh={refreshAll}
-              notify={notify}
-            />
-          )}
 
           {opsSubTab === 'notifications' && (
             <NotificationsTab sandboxes={sandboxes} notify={notify} />
@@ -917,6 +976,8 @@ export function AdminConsoleView({
         templates={templates}
         llmProfiles={llmProfiles}
         credentialProfiles={credentialProfiles}
+        mcpServers={mcpServers}
+        skills={skills}
         effectiveAllowLocalUser={effectiveAllowLocalUser}
         plugins={pluginsData?.items ?? []}
       />
@@ -933,6 +994,8 @@ export function AdminConsoleView({
         overview={overview}
         plugins={pluginsData?.items ?? []}
         credentialProfiles={credentialProfiles}
+        mcpServers={mcpServers}
+        skills={skills}
       />
 
       <EditSandboxDialog
@@ -945,6 +1008,8 @@ export function AdminConsoleView({
         onRotateGatewayKey={handleRotateGatewayKey}
         llmProfiles={llmProfiles}
         credentialProfiles={credentialProfiles}
+        mcpServers={mcpServers}
+        skills={skills}
       />
 
       <WorkforceInspectorDialog

@@ -45,7 +45,7 @@ function loadYaml() {
 function atomicWrite(filePath, content, mode) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`
-  fs.writeFileSync(tmp, content, mode ? { encoding: 'utf8', mode } : 'utf8')
+  fs.writeFileSync(tmp, content, Buffer.isBuffer(content) ? { mode: mode || 0o644 } : (mode ? { encoding: 'utf8', mode } : 'utf8'))
   if (mode) {
     try { fs.chmodSync(tmp, mode) } catch {}
   }
@@ -350,6 +350,83 @@ function syncTheme() {
   console.log('THEME_SYNC_OK')
 }
 
+function syncMcp() {
+  const yaml = loadYaml()
+  const cfg = JSON.parse(process.env.MCP_SYNC_PAYLOAD || '{}')
+  fs.mkdirSync(PROFILE_DIR, { recursive: true })
+  const entries = readPatchEntries(yaml)
+  let mcpEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'mcp-manager')
+  if (!mcpEntry) {
+    mcpEntry = { id: 'mcp-manager', name: '@deepseek-ai/dsh-mcp-manager', config: { servers: {} } }
+    entries.push(mcpEntry)
+  }
+  if (!mcpEntry.name) mcpEntry.name = '@deepseek-ai/dsh-mcp-manager'
+  if (!mcpEntry.config || typeof mcpEntry.config !== 'object') mcpEntry.config = {}
+  if (!mcpEntry.config.servers || typeof mcpEntry.config.servers !== 'object') mcpEntry.config.servers = {}
+  for (const slug of cfg.remove || []) {
+    delete mcpEntry.config.servers[slug]
+  }
+  for (const [slug, raw] of Object.entries(cfg.upsert || {})) {
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(slug) || !raw || typeof raw !== 'object') continue
+    mcpEntry.config.servers[slug] = raw
+  }
+  writePatchEntries(yaml, entries)
+  console.log(`MCP_SYNC_OK:${Object.keys(mcpEntry.config.servers).length}`)
+}
+
+function syncSkills() {
+  const cfg = JSON.parse(process.env.SKILL_SYNC_PAYLOAD || '{}')
+  const skillsRoot = path.join(DSH_HOME, 'skills')
+  const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+  fs.mkdirSync(skillsRoot, { recursive: true })
+  for (const slug of cfg.remove || []) {
+    if (!SLUG_RE.test(slug)) continue
+    const targetDir = path.resolve(skillsRoot, slug)
+    if (targetDir.startsWith(skillsRoot + path.sep) && fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true, force: true })
+    }
+  }
+  for (const item of cfg.upsert || []) {
+    const slug = String((item && item.slug) || '')
+    if (!SLUG_RE.test(slug)) continue
+    const skillDir = path.resolve(skillsRoot, slug)
+    if (!skillDir.startsWith(skillsRoot + path.sep)) continue
+    fs.mkdirSync(skillDir, { recursive: true })
+    const extras = (item.extraFiles && typeof item.extraFiles === 'object') ? item.extraFiles : {}
+    const expected = new Set(['SKILL.md'])
+    const staged = []
+    for (const [relPath, fileBody] of Object.entries(extras)) {
+      const cleanRel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '')
+      if (!cleanRel || cleanRel.toLowerCase() === 'skill.md' || cleanRel.split('/').includes('..')) continue
+      const absExtra = path.resolve(skillDir, cleanRel)
+      if (!absExtra.startsWith(skillDir + path.sep)) continue
+      expected.add(cleanRel)
+      staged.push([cleanRel, absExtra, fileBody])
+    }
+    const walkPrune = (cur, prefix) => {
+      for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+        const full = path.join(cur, entry.name)
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+        if (entry.isDirectory()) {
+          walkPrune(full, rel)
+          try { if (fs.readdirSync(full).length === 0) fs.rmdirSync(full) } catch {}
+        } else if (!expected.has(rel)) {
+          try { fs.unlinkSync(full) } catch {}
+        }
+      }
+    }
+    walkPrune(skillDir, '')
+    atomicWrite(path.join(skillDir, 'SKILL.md'), String(item.skillMd || ''), 0o644)
+    for (const [cleanRel, absExtra, fileBody] of staged) {
+      const raw = String(fileBody || '')
+      const buf = raw.startsWith('base64:') ? Buffer.from(raw.slice(7), 'base64') : Buffer.from(raw, 'utf8')
+      const isExec = cleanRel.startsWith('scripts/') || /\.(sh|bash|zsh|py)$/i.test(cleanRel) || raw.startsWith('#!')
+      atomicWrite(absExtra, buf, isExec ? 0o755 : 0o644)
+    }
+  }
+  console.log('SKILL_SYNC_OK')
+}
+
 const [cmd, flag] = process.argv.slice(2)
 if (cmd === 'sync-market') {
   syncMarket()
@@ -357,7 +434,11 @@ if (cmd === 'sync-market') {
   syncLlm(flag === '--boot-only')
 } else if (cmd === 'sync-theme') {
   syncTheme()
+} else if (cmd === 'sync-mcp') {
+  syncMcp()
+} else if (cmd === 'sync-skills') {
+  syncSkills()
 } else {
-  console.error('Usage: metis-dsh-config <sync-market|sync-llm [--boot-only]|sync-theme>')
+  console.error('Usage: metis-dsh-config <sync-market|sync-llm [--boot-only]|sync-theme|sync-mcp|sync-skills>')
   process.exit(1)
 }

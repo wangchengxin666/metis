@@ -101,6 +101,12 @@ class SandboxTemplate(Base):
     default_credential_profile_ids_json: Mapped[str | None] = mapped_column(
         Text, default="[]", nullable=True
     )
+    default_mcp_server_ids_json: Mapped[str | None] = mapped_column(
+        Text, default="[]", nullable=True
+    )
+    default_skill_ids_json: Mapped[str | None] = mapped_column(
+        Text, default="[]", nullable=True
+    )
     image_repo: Mapped[str] = mapped_column(String(255), default="dsh-sandbox")
     image_tag: Mapped[str] = mapped_column(String(128), default="latest")
     default_cpu_limit: Mapped[float] = mapped_column(Float, default=2.0)
@@ -119,6 +125,14 @@ class SandboxTemplate(Base):
     @property
     def default_credential_profile_ids(self) -> list[str]:
         return _parse_id_list(self.default_credential_profile_ids_json)
+
+    @property
+    def default_mcp_server_ids(self) -> list[str]:
+        return _parse_id_list(self.default_mcp_server_ids_json)
+
+    @property
+    def default_skill_ids(self) -> list[str]:
+        return _parse_id_list(self.default_skill_ids_json)
 
 
 class Sandbox(Base):
@@ -163,6 +177,12 @@ class Sandbox(Base):
     credential_profile_ids_json: Mapped[str | None] = mapped_column(
         Text, default="[]", nullable=True
     )
+    mcp_server_ids_json: Mapped[str | None] = mapped_column(
+        Text, default="[]", nullable=True
+    )
+    skill_ids_json: Mapped[str | None] = mapped_column(
+        Text, default="[]", nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), default="creating")
     llm_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("llm_profiles.id"), nullable=True
@@ -186,6 +206,14 @@ class Sandbox(Base):
     @property
     def credential_profile_ids(self) -> list[str]:
         return _parse_id_list(self.credential_profile_ids_json)
+
+    @property
+    def mcp_server_ids(self) -> list[str]:
+        return _parse_id_list(self.mcp_server_ids_json)
+
+    @property
+    def skill_ids(self) -> list[str]:
+        return _parse_id_list(self.skill_ids_json)
 
     @property
     def maintainer_emails(self) -> list[str]:
@@ -256,11 +284,22 @@ class CredentialProfile(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(Unicode(128), unique=True)
+    preset_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default="custom")
+    description: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
     git_user_name: Mapped[str | None] = mapped_column(Unicode(128), nullable=True)
     git_user_email: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
     git_host: Mapped[str] = mapped_column(Unicode(255), default="github.com")
+    github_auth_mode: Mapped[str] = mapped_column(String(32), default="pat")
+    github_api_base_url: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    github_app_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    github_app_installation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    github_tls_verify: Mapped[bool] = mapped_column(Boolean, default=True)
     git_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
     ssh_private_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    github_app_private_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    github_app_cached_token_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    github_app_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     env_vars_ciphertext: Mapped[str] = mapped_column(Text, default="")
     mcp_servers_json: Mapped[str | None] = mapped_column(Text, default="{}", nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -277,8 +316,113 @@ class CredentialProfile(Base):
         return bool(self.ssh_private_key_ciphertext)
 
     @property
+    def has_github_app_private_key(self) -> bool:
+        return bool(self.github_app_private_key_ciphertext)
+
+    @property
+    def has_github_app_cached_token(self) -> bool:
+        return bool(self.github_app_cached_token_ciphertext)
+
+    @property
     def has_env_vars(self) -> bool:
         return bool(self.env_vars_ciphertext)
+
+    @property
+    def env_var_keys(self) -> list[str]:
+        if not self.env_vars_ciphertext:
+            return []
+        try:
+            from .security import decrypt_secret
+
+            parsed = json.loads(decrypt_secret(self.env_vars_ciphertext))
+            if isinstance(parsed, dict):
+                return sorted(str(k) for k in parsed.keys() if str(k).strip())
+        except Exception:
+            pass
+        return []
+
+
+class McpServer(Base):
+    __tablename__ = "mcp_servers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(Unicode(128))
+    description: Mapped[str | None] = mapped_column(Unicode(600), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default="custom")
+    transport: Mapped[str] = mapped_column(String(32), default="stdio")  # stdio|streamable-http
+    command: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    args_json: Mapped[str] = mapped_column(Text, default="[]")
+    env_json: Mapped[str] = mapped_column(Text, default="{}")
+    cwd: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    url: Mapped[str | None] = mapped_column(Unicode(1024), nullable=True)
+    headers_json: Mapped[str] = mapped_column(Text, default="{}")
+    tool_loading: Mapped[str] = mapped_column(String(32), default="eager")  # eager|on-demand
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    required_credentials_json: Mapped[str] = mapped_column(Text, default="[]")
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+    @property
+    def args(self) -> list[str]:
+        try:
+            parsed = json.loads(self.args_json or "[]")
+            return [str(x) for x in parsed] if isinstance(parsed, list) else []
+        except Exception:
+            return []
+
+    @property
+    def env(self) -> dict[str, str]:
+        try:
+            parsed = json.loads(self.env_json or "{}")
+            return {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    @property
+    def headers(self) -> dict[str, str]:
+        try:
+            parsed = json.loads(self.headers_json or "{}")
+            return {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    @property
+    def required_credentials(self) -> list[str]:
+        return _parse_id_list(self.required_credentials_json)
+
+
+class SkillItem(Base):
+    __tablename__ = "skills"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(Unicode(128))
+    description: Mapped[str] = mapped_column(Unicode(600))
+    when_to_use: Mapped[str | None] = mapped_column(Unicode(600), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default="custom")
+    content: Mapped[str] = mapped_column(Text, default="")
+    extra_files_json: Mapped[str] = mapped_column(Text, default="{}")
+    disable_model_invocation: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_invocable: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+    @property
+    def extra_files(self) -> dict[str, str]:
+        try:
+            parsed = json.loads(self.extra_files_json or "{}")
+            return {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
 
 
 class WorkspaceSnapshot(Base):

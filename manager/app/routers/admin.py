@@ -23,6 +23,7 @@ from ..schemas import (
     CredentialProfileCreate,
     CredentialProfileOut,
     CredentialProfilePushRequest,
+    CredentialProfileRefreshAppRequest,
     CredentialProfileUpdate,
     LlmProfileCreate,
     LlmProfileOut,
@@ -37,6 +38,7 @@ from ..schemas import (
 )
 from ..security import encrypt_secret, hash_password
 from ..services.llm_gateway import generate_sandbox_gateway_key
+from ..services.vault import refresh_github_app_profile_token
 from ..services import (
     ROLE_TEMPLATE_PRESETS,
     NotFoundError,
@@ -48,10 +50,13 @@ from ..services import (
     deactivate_platform_admin,
     delete_credential_profile,
     delete_template,
+    list_credential_presets,
     list_credential_profiles,
     list_platform_admins,
     list_templates,
     push_credential_profile,
+    resolve_push_target_sandboxes,
+    seed_credential_presets,
     seed_role_template_presets,
     update_credential_profile,
     update_llm_profile,
@@ -476,6 +481,25 @@ def api_list_credential_profiles(
     return list_credential_profiles(db)
 
 
+@router.get("/api/credential-profiles/presets")
+def api_list_credential_presets(
+    _: None = Depends(require_admin_api),
+):
+    return {"items": list_credential_presets()}
+
+
+@router.post("/api/credential-profiles/seed-presets", response_model=list[CredentialProfileOut])
+def api_seed_credential_presets(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    return seed_credential_presets(
+        db,
+        actor=session_email(request) or settings.manager_admin_email,
+    )
+
+
 @router.post("/api/credential-profiles", response_model=CredentialProfileOut, status_code=201)
 def api_create_credential_profile(
     payload: CredentialProfileCreate,
@@ -546,22 +570,41 @@ def api_push_credential_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="凭据配置不存在")
     req = payload or CredentialProfilePushRequest()
-    query = select(Sandbox).where(Sandbox.deleted_at.is_(None))
-    if req.sandbox_ids:
-        query = query.where(Sandbox.id.in_(req.sandbox_ids))
-    elif req.template_keys:
-        clean_tpls = [k.strip() for k in req.template_keys if k.strip()]
-        query = query.where(
-            Sandbox.template.in_(clean_tpls),
-            Sandbox.status == "running",
-        )
-    else:
-        query = query.where(Sandbox.status == "running")
-    targets = list(db.scalars(query.order_by(Sandbox.created_at)).all())
-    return push_credential_profile(
-        db,
-        resolve_docker(),
-        profile,
-        targets,
-        actor=session_email(request) if request is not None else None,
+    targets = resolve_push_target_sandboxes(
+        db, sandbox_ids=req.sandbox_ids, template_keys=req.template_keys
     )
+    try:
+        return push_credential_profile(
+            db,
+            resolve_docker(),
+            profile,
+            targets,
+            actor=session_email(request) if request is not None else None,
+        )
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.post("/api/credential-profiles/{profile_id}/refresh-github-app")
+def api_refresh_github_app_credential(
+    profile_id: str,
+    payload: CredentialProfileRefreshAppRequest | None = Body(default=None),
+    request: Request = None,  # type: ignore[assignment]
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    """Force-mint a fresh GitHub App Installation Access Token and optionally hot-push to bound sandboxes."""
+    profile = db.get(CredentialProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="凭据配置不存在")
+    req = payload or CredentialProfileRefreshAppRequest()
+    try:
+        return refresh_github_app_profile_token(
+            db,
+            resolve_docker(),
+            profile,
+            push_to_bound=req.push_to_bound,
+            actor=session_email(request) if request is not None else None,
+        )
+    except Exception as exc:
+        raise _manager_error(exc) from exc

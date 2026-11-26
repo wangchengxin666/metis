@@ -260,7 +260,7 @@ export function DeliverablesView({
           </div>
           {allTeams.length > 0 && (
             <Select
-              className="h-9 text-xs w-auto min-w-[140px]"
+              className="h-9 text-xs w-auto min-w-[150px] max-w-full sm:max-w-[320px]"
               value={teamFilter}
               onChange={(e) => setTeamFilter(e.target.value)}
             >
@@ -274,7 +274,7 @@ export function DeliverablesView({
           )}
           {activeTab === 'apps' && (
             <Select
-              className="h-9 text-xs w-auto min-w-[140px]"
+              className="h-9 text-xs w-auto min-w-[150px] max-w-full sm:max-w-[280px]"
               value={visFilter}
               onChange={(e) => setVisFilter(e.target.value)}
             >

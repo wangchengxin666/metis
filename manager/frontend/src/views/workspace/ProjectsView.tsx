@@ -769,11 +769,11 @@ export function ProjectsView({
                   )}
 
                   {selectedProject.can_manage && availableSandboxesToAttach.length > 0 && (
-                    <div className="flex items-center gap-2 pt-2 border-t border-zinc-800/70">
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-zinc-800/70">
                       <Select
                         value={attachSandboxId}
                         onChange={(e) => setAttachSandboxId(e.target.value)}
-                        className="h-8 text-xs flex-1"
+                        className="h-8 text-xs flex-1 min-w-[200px]"
                       >
                         <option value="">{t('projects.selectEmployeePlaceholder')}</option>
                         {availableSandboxesToAttach.map((s) => (
@@ -853,7 +853,7 @@ export function ProjectsView({
                       <Select
                         value={memberRole}
                         onChange={(e) => setMemberRole(e.target.value as 'member' | 'lead')}
-                        className="h-8 text-xs w-28"
+                        className="h-8 text-xs w-auto min-w-[120px]"
                       >
                         <option value="member">{t('projects.roleMember')}</option>
                         <option value="lead">{t('projects.roleLead')}</option>

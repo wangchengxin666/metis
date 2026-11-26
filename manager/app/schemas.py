@@ -96,6 +96,8 @@ class TemplateCreate(BaseModel):
     role_sop: str | None = Field(default=None, max_length=8000)
     default_llm_profile_id: str | None = None
     default_credential_profile_ids: list[str] = Field(default_factory=list)
+    default_mcp_server_ids: list[str] = Field(default_factory=list)
+    default_skill_ids: list[str] = Field(default_factory=list)
     image_repo: str = "dsh-sandbox"
     image_tag: str = "latest"
     default_cpu_limit: float = Field(default=2.0, gt=0, le=64)
@@ -118,6 +120,8 @@ class TemplateUpdate(BaseModel):
     role_sop: str | None = Field(default=None, max_length=8000)
     default_llm_profile_id: str | None = None
     default_credential_profile_ids: list[str] | None = None
+    default_mcp_server_ids: list[str] | None = None
+    default_skill_ids: list[str] | None = None
     image_repo: str | None = None
     image_tag: str | None = None
     default_cpu_limit: float | None = Field(default=None, gt=0, le=64)
@@ -145,6 +149,8 @@ class TemplateOut(BaseModel):
     sop_version: int = 1
     default_llm_profile_id: str | None = None
     default_credential_profile_ids: list[str] = Field(default_factory=list)
+    default_mcp_server_ids: list[str] = Field(default_factory=list)
+    default_skill_ids: list[str] = Field(default_factory=list)
     image_repo: str
     image_tag: str
     default_cpu_limit: float
@@ -178,6 +184,8 @@ class SandboxCreate(BaseModel):
     auto_install_plugins: str | None = None
     llm_profile_id: str | None = None
     credential_profile_ids: list[str] | None = None
+    mcp_server_ids: list[str] | None = None
+    skill_ids: list[str] | None = None
     cpu_limit: float | None = Field(default=None, gt=0, le=64)
     memory_limit: str | None = None
     auto_sleep_exempt: bool = False
@@ -206,6 +214,8 @@ class SandboxPatch(BaseModel):
     image_tag: str | None = None
     llm_profile_id: str | None = None
     credential_profile_ids: list[str] | None = None
+    mcp_server_ids: list[str] | None = None
+    skill_ids: list[str] | None = None
     cpu_limit: float | None = Field(default=None, gt=0, le=64)
     memory_limit: str | None = None
     auto_sleep_exempt: bool | None = None
@@ -247,6 +257,8 @@ class SandboxOut(BaseModel):
     llm_profile_id: str | None = None
     llm_profile_name: str | None = None
     credential_profile_ids: list[str] = Field(default_factory=list)
+    mcp_server_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list)
     cpu_limit: float | None
     memory_limit: str | None
     auto_sleep_exempt: bool = False
@@ -276,6 +288,7 @@ class PluginSyncRequest(BaseModel):
     mode: Literal["market_only", "reinstall_builtin", "reinstall_selected"] = "market_only"
     plugins: list[str] = Field(default_factory=list)
     sandbox_ids: list[str] | None = None
+    template_keys: list[str] | None = None
 
 
 class PluginIndexSourceIn(BaseModel):
@@ -718,22 +731,57 @@ class WebhookEventPayload(BaseModel):
     wake_if_sleeping: bool = True
 
 
+def _validate_optional_http_url(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    cleaned = raw.strip().rstrip("/")
+    if not cleaned:
+        return None
+    if not (cleaned.startswith("http://") or cleaned.startswith("https://")):
+        raise ValueError("URL must start with http:// or https://")
+    return cleaned
+
+
 class CredentialProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
+    preset_key: str | None = Field(default=None, max_length=64)
+    category: str = Field(default="custom", max_length=32)
+    description: str | None = Field(default=None, max_length=512)
     git_user_name: str | None = Field(default=None, max_length=128)
     git_user_email: str | None = Field(default=None, max_length=255)
     git_host: str = Field(default="github.com", max_length=255)
+    github_auth_mode: Literal["pat", "github_app"] = "pat"
+    github_api_base_url: str | None = Field(default=None, max_length=512)
+    github_app_id: str | None = Field(default=None, max_length=64)
+    github_app_installation_id: str | None = Field(default=None, max_length=64)
+    github_app_private_key: str = ""
+    github_tls_verify: bool = True
     git_token: str = ""
     ssh_private_key: str = ""
     env_vars_json: str = "{}"
     mcp_servers_json: str = "{}"
 
+    @field_validator("github_api_base_url")
+    @classmethod
+    def check_github_api_base_url(cls, value: str | None) -> str | None:
+        return _validate_optional_http_url(value)
+
 
 class CredentialProfileUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
+    preset_key: str | None = Field(default=None, max_length=64)
+    category: str | None = Field(default=None, max_length=32)
+    description: str | None = Field(default=None, max_length=512)
     git_user_name: str | None = Field(default=None, max_length=128)
     git_user_email: str | None = Field(default=None, max_length=255)
     git_host: str | None = Field(default=None, max_length=255)
+    github_auth_mode: Literal["pat", "github_app"] | None = None
+    github_api_base_url: str | None = Field(default=None, max_length=512)
+    github_app_id: str | None = Field(default=None, max_length=64)
+    github_app_installation_id: str | None = Field(default=None, max_length=64)
+    github_app_private_key: str | None = None
+    clear_github_app_private_key: bool = False
+    github_tls_verify: bool | None = None
     git_token: str | None = None
     clear_git_token: bool = False
     ssh_private_key: str | None = None
@@ -741,18 +789,35 @@ class CredentialProfileUpdate(BaseModel):
     env_vars_json: str | None = None
     mcp_servers_json: str | None = None
 
+    @field_validator("github_api_base_url")
+    @classmethod
+    def check_github_api_base_url(cls, value: str | None) -> str | None:
+        return _validate_optional_http_url(value)
+
 
 class CredentialProfileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     name: str
+    preset_key: str | None = None
+    category: str = "custom"
+    description: str | None = None
     git_user_name: str | None = None
     git_user_email: str | None = None
     git_host: str = "github.com"
+    github_auth_mode: str = "pat"
+    github_api_base_url: str | None = None
+    github_app_id: str | None = None
+    github_app_installation_id: str | None = None
+    github_tls_verify: bool = True
     has_git_token: bool = False
     has_ssh_key: bool = False
+    has_github_app_private_key: bool = False
+    has_github_app_cached_token: bool = False
+    github_app_token_expires_at: datetime | None = None
     has_env_vars: bool = False
+    env_var_keys: list[str] = Field(default_factory=list)
     mcp_servers_json: str | None = "{}"
     created_at: datetime
     updated_at: datetime
@@ -761,6 +826,189 @@ class CredentialProfileOut(BaseModel):
 class CredentialProfilePushRequest(BaseModel):
     sandbox_ids: list[str] | None = None
     template_keys: list[str] | None = None
+
+
+class CredentialProfileRefreshAppRequest(BaseModel):
+    push_to_bound: bool = True
+
+
+MCP_TRANSPORTS = Literal["stdio", "streamable-http"]
+MCP_TOOL_LOADING = Literal["eager", "on-demand"]
+_MCP_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_SKILL_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _validate_safe_extra_files(files: dict[str, str] | None) -> dict[str, str]:
+    if not files:
+        return {}
+    if len(files) > 200:
+        raise ValueError("too many skill resource files (max 200)")
+    cleaned: dict[str, str] = {}
+    for raw_path, content in files.items():
+        rel = str(raw_path or "").strip().replace("\\", "/").lstrip("/")
+        parts = [p for p in rel.split("/") if p]
+        if (
+            not rel
+            or not parts
+            or any(p in {".", ".."} for p in parts)
+            or rel.lower() == "skill.md"
+        ):
+            raise ValueError(f"invalid skill extra file path: {raw_path}")
+        normalized = "/".join(parts)
+        if not re.fullmatch(r"[A-Za-z0-9 ._@+()/-]{1,180}", normalized):
+            raise ValueError(f"unsupported skill extra file path: {raw_path}")
+        cleaned[normalized] = str(content or "")
+    return cleaned
+
+
+class McpServerCreate(BaseModel):
+    slug: str = Field(pattern=r"^[A-Za-z0-9_-]{1,32}$")
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=600)
+    category: str = Field(default="custom", max_length=32)
+    transport: MCP_TRANSPORTS = "stdio"
+    command: str | None = Field(default=None, max_length=512)
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str | None = Field(default=None, max_length=512)
+    url: str | None = Field(default=None, max_length=1024)
+    headers: dict[str, str] = Field(default_factory=dict)
+    tool_loading: MCP_TOOL_LOADING = "eager"
+    enabled: bool = True
+    required_credentials: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_transport_fields(self) -> McpServerCreate:
+        if self.transport == "stdio":
+            if not (self.command or "").strip():
+                raise ValueError("stdio MCP server requires a non-empty command")
+        else:
+            normalized = _normalize_optional_http_url(self.url, "url")
+            if not normalized:
+                raise ValueError("streamable-http MCP server requires a valid http(s) url")
+            self.url = normalized
+        return self
+
+
+class McpServerUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=600)
+    category: str | None = Field(default=None, max_length=32)
+    transport: MCP_TRANSPORTS | None = None
+    command: str | None = Field(default=None, max_length=512)
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    cwd: str | None = Field(default=None, max_length=512)
+    url: str | None = Field(default=None, max_length=1024)
+    headers: dict[str, str] | None = None
+    tool_loading: MCP_TOOL_LOADING | None = None
+    enabled: bool | None = None
+    required_credentials: list[str] | None = None
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        return _normalize_optional_http_url(value, "url")
+
+
+class McpServerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    slug: str
+    name: str
+    description: str | None = None
+    category: str = "custom"
+    transport: str = "stdio"
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str | None = None
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    tool_loading: str = "eager"
+    enabled: bool = True
+    required_credentials: list[str] = Field(default_factory=list)
+    is_builtin: bool = False
+    created_by: str | None = None
+    pushed_sandbox_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class McpServerImportRequest(BaseModel):
+    content: str = Field(min_length=2, max_length=100000)
+    overwrite: bool = False
+
+
+class SkillCreate(BaseModel):
+    slug: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=600)
+    when_to_use: str | None = Field(default=None, max_length=600)
+    category: str = Field(default="custom", max_length=32)
+    content: str = Field(min_length=1, max_length=200000)
+    extra_files: dict[str, str] = Field(default_factory=dict)
+    disable_model_invocation: bool = False
+    user_invocable: bool = True
+
+    @field_validator("extra_files")
+    @classmethod
+    def validate_extra_files(cls, value: dict[str, str]) -> dict[str, str]:
+        return _validate_safe_extra_files(value)
+
+
+class SkillUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, min_length=1, max_length=600)
+    when_to_use: str | None = Field(default=None, max_length=600)
+    category: str | None = Field(default=None, max_length=32)
+    content: str | None = Field(default=None, min_length=1, max_length=200000)
+    extra_files: dict[str, str] | None = None
+    disable_model_invocation: bool | None = None
+    user_invocable: bool | None = None
+
+    @field_validator("extra_files")
+    @classmethod
+    def validate_extra_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        return _validate_safe_extra_files(value)
+
+
+class SkillOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    slug: str
+    name: str
+    description: str
+    when_to_use: str | None = None
+    category: str = "custom"
+    content: str
+    extra_files: dict[str, str] = Field(default_factory=dict)
+    disable_model_invocation: bool = False
+    user_invocable: bool = True
+    is_builtin: bool = False
+    created_by: str | None = None
+    pushed_sandbox_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillImportRequest(BaseModel):
+    markdown: str = Field(min_length=10, max_length=200000)
+    slug: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=64)
+    name: str | None = Field(default=None, max_length=128)
+    category: str = Field(default="custom", max_length=32)
+    overwrite: bool = False
+
+
+class CapabilityPushRequest(BaseModel):
+    sandbox_ids: list[str] | None = None
+    template_keys: list[str] | None = None
+    action: Literal["push", "remove"] = "push"
+    item_ids: list[str] | None = None
 
 
 class ExposeAppRequest(BaseModel):

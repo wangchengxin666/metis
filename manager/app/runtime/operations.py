@@ -9,6 +9,7 @@ from typing import Any
 
 from ..models import Sandbox
 from .errors import SandboxRuntimeError
+from .github_mcp_shim import GITHUB_MCP_LAUNCHER_JS, GITHUB_MCP_PRELOAD_JS
 
 
 class WorkforceOperationsMixin:
@@ -1087,6 +1088,10 @@ function callLocalCli(token, bodyObj) {
         ssh_private_key: str = "",
         env_vars: dict[str, str] | None = None,
         mcp_servers: dict[str, Any] | None = None,
+        github_api_base_url: str | None = None,
+        git_auth_username: str = "oauth2",
+        github_tls_verify: bool = True,
+        is_github: bool = False,
     ) -> dict[str, Any]:
         """Hot-push Git credentials, SSH private key, environment variables, and MCP servers into a digital employee."""
         try:
@@ -1096,21 +1101,71 @@ function callLocalCli(token, bodyObj) {
         if st != "running":
             return {"slug": sandbox.slug, "ok": False, "skipped": True, "detail": f"status={st}"}
 
-        payload = {
+        clean_host = (git_host or "github.com").strip() or "github.com"
+        payload: dict[str, Any] = {
             "gitUserName": (git_user_name or "").strip(),
             "gitUserEmail": (git_user_email or "").strip(),
-            "gitHost": (git_host or "github.com").strip(),
+            "gitHost": clean_host,
+            "gitAuthUsername": (git_auth_username or "oauth2").strip() or "oauth2",
             "gitToken": (git_token or "").strip(),
             "sshPrivateKey": (ssh_private_key or "").strip(),
             "envVars": env_vars or {},
             "mcpServers": mcp_servers or {},
+            "isGithub": bool(is_github),
+            "githubApiBaseUrl": (github_api_base_url or "").strip(),
+            "githubTlsVerify": bool(github_tls_verify),
         }
+        if is_github or github_api_base_url:
+            payload["githubShim"] = {
+                "launcher": GITHUB_MCP_LAUNCHER_JS,
+                "preload": GITHUB_MCP_PRELOAD_JS,
+            }
         node_script = """
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 const cfg = JSON.parse(process.env.CRED_SYNC_PAYLOAD || '{}');
 const home = '/home/workspace';
+const dshHome = path.join(home, '.dsh');
+
+function loadYaml() {
+  for (const cand of ['/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml', '/usr/local/lib/node_modules/yaml', 'yaml']) {
+    try { return require(cand); } catch {}
+  }
+  return null;
+}
+
+function atomicWrite(filePath, content, mode) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = filePath + '.tmp.' + process.pid + '.' + Date.now();
+  fs.writeFileSync(tmp, content, mode ? { encoding: 'utf8', mode } : 'utf8');
+  if (mode) { try { fs.chmodSync(tmp, mode); } catch {} }
+  fs.renameSync(tmp, filePath);
+  if (mode) { try { fs.chmodSync(filePath, mode); } catch {} }
+}
+
+function normalizeMcpEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const transport = raw.transport === 'streamable-http' || (!raw.command && raw.url) ? 'streamable-http' : 'stdio';
+  const enabled = raw.enabled !== false;
+  const toolLoading = raw.toolLoading === 'on-demand' || raw.tool_loading === 'on-demand' ? 'on-demand' : 'eager';
+  if (transport === 'streamable-http') {
+    if (!raw.url) return null;
+    const headers = (raw.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers)) ? raw.headers : {};
+    return { transport: 'streamable-http', url: String(raw.url), headers, enabled, toolLoading };
+  }
+  if (!raw.command) return null;
+  const args = Array.isArray(raw.args) ? raw.args.map(String) : [];
+  const env = (raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)) ? raw.env : {};
+  const entry = { transport: 'stdio', command: String(raw.command), args, env, enabled, toolLoading };
+  if (raw.cwd) entry.cwd = String(raw.cwd);
+  return entry;
+}
+
+const rawHost = String(cfg.gitHost || 'github.com').trim();
+const scheme = rawHost.startsWith('http://') ? 'http' : (cfg.githubApiBaseUrl && cfg.githubApiBaseUrl.startsWith('http://') ? 'http' : 'https');
+const host = rawHost.replace(/^https?:\\/\\//, '').replace(/\\/.*$/, '') || 'github.com';
+const webOrigin = scheme + '://' + host;
 
 if (cfg.gitUserName) {
   try { cp.execFileSync('git', ['config', '--global', 'user.name', cfg.gitUserName]); } catch {}
@@ -1118,36 +1173,120 @@ if (cfg.gitUserName) {
 if (cfg.gitUserEmail) {
   try { cp.execFileSync('git', ['config', '--global', 'user.email', cfg.gitUserEmail]); } catch {}
 }
+if (cfg.githubTlsVerify === false) {
+  try { cp.execFileSync('git', ['config', '--global', 'http.' + webOrigin + '.sslVerify', 'false']); } catch {}
+} else {
+  try { cp.execFileSync('git', ['config', '--global', '--unset-all', 'http.' + webOrigin + '.sslVerify']); } catch {}
+}
 if (cfg.gitToken) {
   try { cp.execFileSync('git', ['config', '--global', 'credential.helper', 'store']); } catch {}
-  const host = cfg.gitHost.replace(/^https?:\\/\\//, '').replace(/\\/.*$/, '') || 'github.com';
-  const credLine = 'https://oauth2:' + encodeURIComponent(cfg.gitToken) + '@' + host + '\\n';
-  fs.writeFileSync(path.join(home, '.git-credentials'), credLine, { encoding: 'utf8', mode: 0o600 });
+  const authUser = encodeURIComponent(String(cfg.gitAuthUsername || 'oauth2'));
+  const credLine = scheme + '://' + authUser + ':' + encodeURIComponent(cfg.gitToken) + '@' + host;
+  const gitCredPath = path.join(home, '.git-credentials');
+  const existingLines = fs.existsSync(gitCredPath)
+    ? fs.readFileSync(gitCredPath, 'utf8').split(/\\r?\\n/).map((l) => l.trim()).filter(Boolean)
+    : [];
+  const filtered = existingLines.filter((line) => {
+    try {
+      return new URL(line).host !== host;
+    } catch {
+      return !line.endsWith('@' + host);
+    }
+  });
+  filtered.push(credLine);
+  atomicWrite(gitCredPath, filtered.join('\\n') + '\\n', 0o600);
 }
 if (cfg.sshPrivateKey) {
   const sshDir = path.join(home, '.ssh');
   fs.mkdirSync(sshDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(sshDir, 'id_ed25519'), cfg.sshPrivateKey + '\\n', { encoding: 'utf8', mode: 0o600 });
-  const sshCfg = 'Host *\\n  StrictHostKeyChecking accept-new\\n  IdentityFile ~/.ssh/id_ed25519\\n';
-  fs.writeFileSync(path.join(sshDir, 'config'), sshCfg, { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(sshDir, 0o700); } catch {}
+  const keyName = host === 'github.com' ? 'id_ed25519' : 'id_ed25519_' + host.replace(/[^A-Za-z0-9._-]/g, '_');
+  const keyPath = path.join(sshDir, keyName);
+  atomicWrite(keyPath, cfg.sshPrivateKey + '\\n', 0o600);
+  const sshConfigPath = path.join(sshDir, 'config');
+  const beginMark = '# BEGIN METIS ' + host;
+  const endMark = '# END METIS ' + host;
+  const sshHostOnly = host.split(':')[0];
+  const block = [
+    beginMark,
+    'Host ' + sshHostOnly,
+    '  HostName ' + sshHostOnly,
+    '  StrictHostKeyChecking accept-new',
+    '  IdentitiesOnly yes',
+    '  IdentityFile ~/.ssh/' + keyName,
+    endMark,
+  ].join('\\n');
+  let curSshCfg = fs.existsSync(sshConfigPath) ? fs.readFileSync(sshConfigPath, 'utf8') : '';
+  const escapedBegin = beginMark.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+  const escapedEnd = endMark.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+  curSshCfg = curSshCfg.replace(new RegExp(escapedBegin + '[\\\\s\\\\S]*?' + escapedEnd + '\\\\n?', 'g'), '').trim();
+  const nextSshCfg = (curSshCfg ? curSshCfg + '\\n\\n' : '') + block + '\\n';
+  atomicWrite(sshConfigPath, nextSshCfg, 0o600);
+}
+if (cfg.isGithub || cfg.githubApiBaseUrl) {
+  const sbxDir = path.join(home, '.dsh-sandbox');
+  const entPath = path.join(sbxDir, 'github-enterprise.json');
+  const entCfg = {
+    host,
+    webOrigin,
+    apiBaseUrl: cfg.githubApiBaseUrl || (host === 'github.com' ? 'https://api.github.com' : webOrigin + '/api/v3'),
+    tlsVerify: cfg.githubTlsVerify !== false,
+  };
+  atomicWrite(entPath, JSON.stringify(entCfg, null, 2) + '\\n', 0o644);
+  if (cfg.githubShim && cfg.githubShim.launcher && cfg.githubShim.preload) {
+    atomicWrite(path.join(sbxDir, 'github-mcp-preload.cjs'), cfg.githubShim.preload, 0o644);
+    atomicWrite(path.join(sbxDir, 'github-mcp-launcher.cjs'), cfg.githubShim.launcher, 0o755);
+  }
 }
 if (cfg.envVars && Object.keys(cfg.envVars).length > 0) {
   const sbxDir = path.join(home, '.dsh-sandbox');
   fs.mkdirSync(sbxDir, { recursive: true });
-  const envLines = Object.entries(cfg.envVars).map(([k, v]) => 'export ' + k + '=' + JSON.stringify(String(v))).join('\\n') + '\\n';
   const envFile = path.join(sbxDir, 'vault.env');
-  fs.writeFileSync(envFile, envLines, { encoding: 'utf8', mode: 0o600 });
+  const mergedEnv = {};
+  if (fs.existsSync(envFile)) {
+    for (const line of fs.readFileSync(envFile, 'utf8').split(/\\r?\\n/)) {
+      const m = /^export\\s+([A-Za-z_][A-Za-z0-9_]*)=(.+)$/.exec(line.trim());
+      if (m) {
+        try { mergedEnv[m[1]] = JSON.parse(m[2]); } catch {}
+      }
+    }
+  }
+  for (const [k, v] of Object.entries(cfg.envVars)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && v !== undefined && v !== null && String(v) !== '') {
+      mergedEnv[k] = String(v);
+    }
+  }
+  const envLines = Object.entries(mergedEnv).map(([k, v]) => 'export ' + k + '=' + JSON.stringify(String(v))).join('\\n') + '\\n';
+  atomicWrite(envFile, envLines, 0o600);
   const bashrc = path.join(home, '.bashrc');
   const hook = '[ -f ~/.dsh-sandbox/vault.env ] && . ~/.dsh-sandbox/vault.env';
   let rcContent = fs.existsSync(bashrc) ? fs.readFileSync(bashrc, 'utf8') : '';
   if (!rcContent.includes(hook)) {
     fs.writeFileSync(bashrc, rcContent + '\\n' + hook + '\\n', 'utf8');
   }
+  const yaml = loadYaml();
+  if (yaml) {
+    const credPath = path.join(dshHome, '.credentials.yaml');
+    let credDoc = { version: 1, refs: {} };
+    if (fs.existsSync(credPath)) {
+      try {
+        const parsedCred = yaml.parse(fs.readFileSync(credPath, 'utf8'));
+        if (parsedCred && typeof parsedCred === 'object' && !Array.isArray(parsedCred)) credDoc = parsedCred;
+      } catch {}
+    }
+    credDoc.version = 1;
+    if (!credDoc.refs || typeof credDoc.refs !== 'object' || Array.isArray(credDoc.refs)) credDoc.refs = {};
+    for (const [k, v] of Object.entries(cfg.envVars)) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && v !== undefined && v !== null && String(v) !== '') {
+        credDoc.refs[k] = String(v);
+      }
+    }
+    atomicWrite(credPath, yaml.stringify(credDoc), 0o600);
+  }
 }
 if (cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0) {
-  const dshDir = path.join(home, '.dsh');
-  fs.mkdirSync(dshDir, { recursive: true });
-  const mcpPath = path.join(dshDir, 'mcp.json');
+  fs.mkdirSync(dshHome, { recursive: true });
+  const mcpPath = path.join(dshHome, 'mcp.json');
   let mcpData = { mcpServers: {} };
   if (fs.existsSync(mcpPath)) {
     try {
@@ -1156,7 +1295,35 @@ if (cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0) {
     } catch {}
   }
   mcpData.mcpServers = { ...(mcpData.mcpServers || {}), ...cfg.mcpServers };
-  fs.writeFileSync(mcpPath, JSON.stringify(mcpData, null, 2) + '\\n', { encoding: 'utf8', mode: 0o600 });
+  atomicWrite(mcpPath, JSON.stringify(mcpData, null, 2) + '\\n', 0o600);
+
+  const yaml = loadYaml();
+  if (yaml) {
+    const patchPath = path.join(dshHome, 'profiles', 'web', 'cordis.patch.yml');
+    if (fs.existsSync(path.dirname(patchPath))) {
+      let entries = [];
+      if (fs.existsSync(patchPath)) {
+        try {
+          const parsed = yaml.parse(fs.readFileSync(patchPath, 'utf8'));
+          if (Array.isArray(parsed)) entries = parsed;
+        } catch {}
+      }
+      let mcpEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'mcp-manager');
+      if (!mcpEntry) {
+        mcpEntry = { id: 'mcp-manager', name: '@deepseek-ai/dsh-mcp-manager', config: { servers: {} } };
+        entries.push(mcpEntry);
+      }
+      if (!mcpEntry.name) mcpEntry.name = '@deepseek-ai/dsh-mcp-manager';
+      if (!mcpEntry.config || typeof mcpEntry.config !== 'object') mcpEntry.config = {};
+      if (!mcpEntry.config.servers || typeof mcpEntry.config.servers !== 'object') mcpEntry.config.servers = {};
+      for (const [srvName, srvCfg] of Object.entries(cfg.mcpServers)) {
+        if (!/^[A-Za-z0-9_-]{1,32}$/.test(srvName)) continue;
+        const norm = normalizeMcpEntry(srvCfg);
+        if (norm) mcpEntry.config.servers[srvName] = norm;
+      }
+      atomicWrite(patchPath, yaml.stringify(entries));
+    }
+  }
 }
 console.log('CRED_SYNC_OK');
 """
@@ -1171,6 +1338,252 @@ console.log('CRED_SYNC_OK');
         )
         detail = out.decode("utf-8", errors="replace").strip() if out else ""
         return {"slug": sandbox.slug, "ok": ec == 0, "skipped": False, "detail": detail[-200:]}
+
+    def sync_mcp_servers(
+        self,
+        sandbox: Sandbox,
+        *,
+        upsert_servers: dict[str, dict[str, Any]] | None = None,
+        remove_slugs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Hot-push or remove MCP servers in cordis.patch.yml (dsh-mcp-manager via HMR, zero restart)."""
+        try:
+            st = self._workload_status(sandbox)
+        except Exception:
+            st = "unknown"
+        if st != "running":
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": f"status={st}"}
+
+        payload: dict[str, Any] = {
+            "upsert": upsert_servers or {},
+            "remove": [s for s in (remove_slugs or []) if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", s)],
+        }
+        needs_github_shim = any(
+            isinstance(spec, dict)
+            and any("github-mcp-launcher.cjs" in str(arg) for arg in (spec.get("args") or []))
+            for spec in (upsert_servers or {}).values()
+        )
+        if needs_github_shim:
+            payload["githubShim"] = {
+                "launcher": GITHUB_MCP_LAUNCHER_JS,
+                "preload": GITHUB_MCP_PRELOAD_JS,
+            }
+        node_script = """
+const fs = require('fs');
+const path = require('path');
+const cfg = JSON.parse(process.env.MCP_SYNC_PAYLOAD || '{}');
+const dshHome = '/home/workspace/.dsh';
+const sbxDir = '/home/workspace/.dsh-sandbox';
+const patchPath = path.join(dshHome, 'profiles', 'web', 'cordis.patch.yml');
+
+let yaml = null;
+for (const cand of ['/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/yaml', '/usr/local/lib/node_modules/yaml', 'yaml']) {
+  try { yaml = require(cand); break; } catch {}
+}
+if (!yaml) {
+  console.error('yaml package not found');
+  process.exit(1);
+}
+
+function atomicWrite(filePath, content, mode) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = filePath + '.tmp.' + process.pid + '.' + Date.now();
+  fs.writeFileSync(tmp, content, mode ? { encoding: 'utf8', mode } : 'utf8');
+  if (mode) { try { fs.chmodSync(tmp, mode); } catch {} }
+  fs.renameSync(tmp, filePath);
+  if (mode) { try { fs.chmodSync(filePath, mode); } catch {} }
+}
+
+if (cfg.githubShim && cfg.githubShim.launcher && cfg.githubShim.preload) {
+  atomicWrite(path.join(sbxDir, 'github-mcp-preload.cjs'), cfg.githubShim.preload, 0o644);
+  atomicWrite(path.join(sbxDir, 'github-mcp-launcher.cjs'), cfg.githubShim.launcher, 0o755);
+}
+
+function normalizeEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const transport = raw.transport === 'streamable-http' ? 'streamable-http' : 'stdio';
+  const enabled = raw.enabled !== false;
+  const toolLoading = raw.toolLoading === 'on-demand' || raw.tool_loading === 'on-demand' ? 'on-demand' : 'eager';
+  if (transport === 'streamable-http') {
+    if (!raw.url) return null;
+    const headers = (raw.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers)) ? raw.headers : {};
+    return { transport: 'streamable-http', url: String(raw.url), headers, enabled, toolLoading };
+  }
+  if (!raw.command) return null;
+  const args = Array.isArray(raw.args) ? raw.args.map(String) : [];
+  const env = (raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)) ? raw.env : {};
+  const out = { transport: 'stdio', command: String(raw.command), args, env, enabled, toolLoading };
+  if (raw.cwd) out.cwd = String(raw.cwd);
+  return out;
+}
+
+let entries = [];
+if (fs.existsSync(patchPath)) {
+  const parsed = yaml.parse(fs.readFileSync(patchPath, 'utf8'));
+  if (Array.isArray(parsed)) entries = parsed;
+}
+let mcpEntry = entries.find((e) => e && typeof e === 'object' && e.id === 'mcp-manager');
+if (!mcpEntry) {
+  mcpEntry = { id: 'mcp-manager', name: '@deepseek-ai/dsh-mcp-manager', config: { servers: {} } };
+  entries.push(mcpEntry);
+}
+if (!mcpEntry.name) mcpEntry.name = '@deepseek-ai/dsh-mcp-manager';
+if (!mcpEntry.config || typeof mcpEntry.config !== 'object') mcpEntry.config = {};
+if (!mcpEntry.config.servers || typeof mcpEntry.config.servers !== 'object') mcpEntry.config.servers = {};
+
+for (const slug of cfg.remove || []) {
+  delete mcpEntry.config.servers[slug];
+}
+for (const [slug, raw] of Object.entries(cfg.upsert || {})) {
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(slug)) continue;
+  const clean = normalizeEntry(raw);
+  if (clean) mcpEntry.config.servers[slug] = clean;
+}
+atomicWrite(patchPath, yaml.stringify(entries));
+console.log('MCP_SYNC_OK:' + Object.keys(mcpEntry.config.servers).length);
+"""
+        ec, out = self.exec_command(
+            sandbox,
+            ["node", "-e", node_script],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "MCP_SYNC_PAYLOAD": json.dumps(payload, ensure_ascii=False),
+            },
+        )
+        detail = out.decode("utf-8", errors="replace").strip() if out else ""
+        return {
+            "slug": sandbox.slug,
+            "sandbox_id": sandbox.id,
+            "ok": ec == 0,
+            "skipped": False,
+            "detail": detail[-200:],
+        }
+
+    def sync_skills(
+        self,
+        sandbox: Sandbox,
+        *,
+        upsert_skills: list[dict[str, Any]] | None = None,
+        remove_slugs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Hot-push or remove Agent Skills under ~/.dsh/skills/<slug>/ (watched by dsh-skill-filesystem)."""
+        try:
+            st = self._workload_status(sandbox)
+        except Exception:
+            st = "unknown"
+        if st != "running":
+            return {"slug": sandbox.slug, "sandbox_id": sandbox.id, "ok": False, "skipped": True, "detail": f"status={st}"}
+
+        payload = {
+            "upsert": upsert_skills or [],
+            "remove": [s for s in (remove_slugs or []) if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", s)],
+        }
+        node_script = """
+const fs = require('fs');
+const path = require('path');
+const cfg = JSON.parse(process.env.SKILL_SYNC_PAYLOAD || '{}');
+const skillsRoot = '/home/workspace/.dsh/skills';
+fs.mkdirSync(skillsRoot, { recursive: true });
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function atomicWrite(filePath, content, mode) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = filePath + '.tmp.' + process.pid + '.' + Date.now();
+  fs.writeFileSync(tmp, content, { mode: mode || 0o644 });
+  try { fs.chmodSync(tmp, mode || 0o644); } catch {}
+  fs.renameSync(tmp, filePath);
+  try { fs.chmodSync(filePath, mode || 0o644); } catch {}
+}
+
+function decodeResourceContent(rawVal) {
+  const s = String(rawVal || '');
+  if (s.startsWith('base64:')) {
+    return Buffer.from(s.slice(7), 'base64');
+  }
+  return Buffer.from(s, 'utf8');
+}
+
+function isExecutableResource(relPath, rawVal) {
+  if (relPath.startsWith('scripts/') || /\\.(sh|bash|zsh|py)$/i.test(relPath)) return true;
+  if (typeof rawVal === 'string' && !rawVal.startsWith('base64:') && rawVal.startsWith('#!')) return true;
+  return false;
+}
+
+function reconcileSkillDir(skillDir, expectedRelSet) {
+  if (!fs.existsSync(skillDir)) return;
+  function walkAndPrune(curDir, relPrefix) {
+    for (const entry of fs.readdirSync(curDir, { withFileTypes: true })) {
+      const fullPath = path.join(curDir, entry.name);
+      const rel = relPrefix ? relPrefix + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) {
+        walkAndPrune(fullPath, rel);
+        try {
+          if (fs.readdirSync(fullPath).length === 0) fs.rmdirSync(fullPath);
+        } catch {}
+      } else if (!expectedRelSet.has(rel)) {
+        try { fs.unlinkSync(fullPath); } catch {}
+      }
+    }
+  }
+  walkAndPrune(skillDir, '');
+}
+
+let written = 0;
+let removed = 0;
+for (const slug of cfg.remove || []) {
+  if (!SLUG_RE.test(slug)) continue;
+  const targetDir = path.resolve(skillsRoot, slug);
+  if (targetDir.startsWith(skillsRoot + path.sep) && fs.existsSync(targetDir)) {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    removed++;
+  }
+}
+
+for (const item of cfg.upsert || []) {
+  const slug = String(item && item.slug || '');
+  if (!SLUG_RE.test(slug)) continue;
+  const skillDir = path.resolve(skillsRoot, slug);
+  if (!skillDir.startsWith(skillsRoot + path.sep)) continue;
+  fs.mkdirSync(skillDir, { recursive: true });
+  const extras = (item.extraFiles && typeof item.extraFiles === 'object') ? item.extraFiles : {};
+  const expectedRel = new Set(['SKILL.md']);
+  const stagedExtras = [];
+  for (const [relPath, fileBody] of Object.entries(extras)) {
+    const cleanRel = String(relPath || '').replace(/\\\\/g, '/').replace(/^\\/+/, '');
+    if (!cleanRel || cleanRel.toLowerCase() === 'skill.md' || cleanRel.split('/').includes('..')) continue;
+    const absExtra = path.resolve(skillDir, cleanRel);
+    if (!absExtra.startsWith(skillDir + path.sep)) continue;
+    expectedRel.add(cleanRel);
+    stagedExtras.push([cleanRel, absExtra, fileBody]);
+  }
+  reconcileSkillDir(skillDir, expectedRel);
+  atomicWrite(path.join(skillDir, 'SKILL.md'), Buffer.from(String(item.skillMd || ''), 'utf8'), 0o644);
+  for (const [cleanRel, absExtra, fileBody] of stagedExtras) {
+    const mode = isExecutableResource(cleanRel, fileBody) ? 0o755 : 0o644;
+    atomicWrite(absExtra, decodeResourceContent(fileBody), mode);
+  }
+  written++;
+}
+console.log('SKILL_SYNC_OK:written=' + written + ',removed=' + removed);
+"""
+        ec, out = self.exec_command(
+            sandbox,
+            ["node", "-e", node_script],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "SKILL_SYNC_PAYLOAD": json.dumps(payload, ensure_ascii=False),
+            },
+        )
+        detail = out.decode("utf-8", errors="replace").strip() if out else ""
+        return {
+            "slug": sandbox.slug,
+            "sandbox_id": sandbox.id,
+            "ok": ec == 0,
+            "skipped": False,
+            "detail": detail[-200:],
+        }
 
     def sync_shared_project_file(
         self,

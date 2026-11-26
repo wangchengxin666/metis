@@ -129,14 +129,23 @@ export const Textarea = React.forwardRef<
 ))
 Textarea.displayName = 'Textarea'
 
+const SELECT_CHEVRON_BG =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")"
+
 export const Select = React.forwardRef<
   HTMLSelectElement,
   React.SelectHTMLAttributes<HTMLSelectElement>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, style, ...props }, ref) => (
   <select
     ref={ref}
+    style={{
+      backgroundImage: SELECT_CHEVRON_BG,
+      backgroundPosition: 'right 0.5rem center',
+      backgroundSize: '0.875rem 0.875rem',
+      ...style,
+    }}
     className={cn(
-      'flex h-10 w-full rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 px-3.5 py-2 text-sm text-zinc-100 shadow-xs brand-ring',
+      'appearance-none block h-10 w-full min-w-0 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 bg-no-repeat pl-3 pr-7 py-0 text-sm leading-normal text-zinc-100 shadow-xs brand-ring disabled:cursor-not-allowed disabled:opacity-50',
       className,
     )}
     {...props}

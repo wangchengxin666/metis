@@ -17,7 +17,12 @@ from ..deps import (
 )
 from ..models import Sandbox
 from ..schemas import PluginIndexSourcesUpdate, PluginSyncRequest
-from ..services import audit, get_extra_plugin_indexes, set_extra_plugin_indexes
+from ..services import (
+    audit,
+    get_extra_plugin_indexes,
+    resolve_push_target_sandboxes,
+    set_extra_plugin_indexes,
+)
 
 router = APIRouter()
 
@@ -210,10 +215,12 @@ def api_sync_plugins_to_sandboxes(
     _: None = Depends(require_admin_api),
 ):
     req = payload or PluginSyncRequest()
-    query = select(Sandbox).where(Sandbox.deleted_at.is_(None))
-    if req.sandbox_ids:
-        query = query.where(Sandbox.id.in_(req.sandbox_ids))
-    sandboxes = list(db.scalars(query).all())
+    sandboxes = resolve_push_target_sandboxes(
+        db,
+        sandbox_ids=req.sandbox_ids,
+        template_keys=req.template_keys,
+        include_stopped_explicit=True,
+    )
 
     reinstall_plugins = (
         req.plugins if req.mode == "reinstall_selected" and req.plugins else None

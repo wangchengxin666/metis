@@ -62,6 +62,7 @@ from ..services.teams import (
     get_sandbox_teams_map,
     list_accessible_sandboxes,
 )
+from ..services.capabilities import sync_bound_mcp_servers, sync_bound_skills
 from ..services.vault import sync_bound_credentials
 from .auth import verify_sandbox_access
 
@@ -347,6 +348,8 @@ def create_sandbox_endpoint(
             daily_cost_limit=payload.daily_cost_limit,
             budget_action=payload.budget_action,
             credential_profile_ids=payload.credential_profile_ids,
+            mcp_server_ids=payload.mcp_server_ids,
+            skill_ids=payload.skill_ids,
         )
     except Exception as exc:
         raise _manager_error(exc) from exc
@@ -445,6 +448,16 @@ def recreate_sandbox_endpoint(
                 sync_bound_credentials(db, docker, sandbox)
             except Exception:
                 pass
+        if sandbox.mcp_server_ids and hasattr(docker, "sync_mcp_servers"):
+            try:
+                sync_bound_mcp_servers(db, docker, sandbox)
+            except Exception:
+                pass
+        if sandbox.skill_ids and hasattr(docker, "sync_skills"):
+            try:
+                sync_bound_skills(db, docker, sandbox)
+            except Exception:
+                pass
         audit(db, "sandbox.recreate", target=sandbox.id, detail=f"slug={sandbox.slug}")
         db.commit()
         db.refresh(sandbox)
@@ -466,6 +479,8 @@ def patch_sandbox(
         and payload.image_tag is None
         and payload.llm_profile_id is None
         and payload.credential_profile_ids is None
+        and payload.mcp_server_ids is None
+        and payload.skill_ids is None
         and payload.cpu_limit is None
         and payload.memory_limit is None
         and payload.auto_sleep_exempt is None
@@ -487,6 +502,8 @@ def patch_sandbox(
         need_recreate = False
         role_updated = False
         creds_updated = False
+        mcp_updated = False
+        skills_updated = False
         gateway_key_rotated = False
         if payload.display_name is not None:
             sandbox.display_name = payload.display_name.strip() or None
@@ -553,6 +570,32 @@ def patch_sandbox(
                 "sandbox.credential_bind",
                 target=sandbox.id,
                 detail=f"slug={sandbox.slug},profiles={len(clean_cids)}",
+            )
+            db.commit()
+        if payload.mcp_server_ids is not None:
+            clean_mids = list(
+                dict.fromkeys(str(x).strip() for x in payload.mcp_server_ids if str(x).strip())
+            )
+            sandbox.mcp_server_ids_json = json.dumps(clean_mids)
+            mcp_updated = True
+            audit(
+                db,
+                "sandbox.mcp_bind",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},mcps={len(clean_mids)}",
+            )
+            db.commit()
+        if payload.skill_ids is not None:
+            clean_sids = list(
+                dict.fromkeys(str(x).strip() for x in payload.skill_ids if str(x).strip())
+            )
+            sandbox.skill_ids_json = json.dumps(clean_sids)
+            skills_updated = True
+            audit(
+                db,
+                "sandbox.skill_bind",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},skills={len(clean_sids)}",
             )
             db.commit()
         if payload.preview_auth_mode is not None:
@@ -674,6 +717,20 @@ def patch_sandbox(
         ):
             try:
                 sync_bound_credentials(db, resolve_docker(), sandbox)
+            except Exception:
+                pass
+        if (mcp_updated or need_recreate) and sandbox.mcp_server_ids and hasattr(
+            resolve_docker(), "sync_mcp_servers"
+        ):
+            try:
+                sync_bound_mcp_servers(db, resolve_docker(), sandbox)
+            except Exception:
+                pass
+        if (skills_updated or need_recreate) and sandbox.skill_ids and hasattr(
+            resolve_docker(), "sync_skills"
+        ):
+            try:
+                sync_bound_skills(db, resolve_docker(), sandbox)
             except Exception:
                 pass
         if llm_to_sync is None and gateway_key_rotated and sandbox.llm_profile and getattr(

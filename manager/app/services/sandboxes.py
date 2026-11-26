@@ -25,6 +25,7 @@ from .common import (
 from .llm_gateway import generate_sandbox_gateway_key
 from .policies import get_branding_config, get_extra_plugin_indexes
 from .templates import get_template_by_key
+from .capabilities import sync_bound_mcp_servers, sync_bound_skills
 from .vault import sync_bound_credentials
 
 
@@ -79,6 +80,8 @@ def create_sandbox(
     maintainer_emails: list[str] | None = None,
     team_ids: list[str] | None = None,
     credential_profile_ids: list[str] | None = None,
+    mcp_server_ids: list[str] | None = None,
+    skill_ids: list[str] | None = None,
     set_new_user_display_name: bool = True,
 ) -> Sandbox:
     email = email.strip().lower()
@@ -102,6 +105,16 @@ def create_sandbox(
         list(dict.fromkeys(str(x).strip() for x in credential_profile_ids if str(x).strip()))
         if credential_profile_ids is not None
         else (tpl_obj.default_credential_profile_ids if tpl_obj else [])
+    )
+    resolved_mcp_ids = (
+        list(dict.fromkeys(str(x).strip() for x in mcp_server_ids if str(x).strip()))
+        if mcp_server_ids is not None
+        else (tpl_obj.default_mcp_server_ids if tpl_obj else [])
+    )
+    resolved_skill_ids = (
+        list(dict.fromkeys(str(x).strip() for x in skill_ids if str(x).strip()))
+        if skill_ids is not None
+        else (tpl_obj.default_skill_ids if tpl_obj else [])
     )
     llm_profile: LlmProfile | None = None
     if effective_llm_id:
@@ -205,6 +218,8 @@ def create_sandbox(
             budget_action if budget_action in {"block", "downgrade", "warn"} else "block"
         ),
         credential_profile_ids_json=json.dumps(resolved_cred_ids),
+        mcp_server_ids_json=json.dumps(resolved_mcp_ids),
+        skill_ids_json=json.dumps(resolved_skill_ids),
         llm_profile_id=llm_profile.id if llm_profile else None,
         status="creating",
     )
@@ -255,6 +270,18 @@ def create_sandbox(
     if resolved_cred_ids and hasattr(docker, "sync_credential_profile"):
         try:
             sync_bound_credentials(db, docker, sandbox)
+        except Exception:
+            pass
+
+    if resolved_mcp_ids and hasattr(docker, "sync_mcp_servers"):
+        try:
+            sync_bound_mcp_servers(db, docker, sandbox)
+        except Exception:
+            pass
+
+    if resolved_skill_ids and hasattr(docker, "sync_skills"):
+        try:
+            sync_bound_skills(db, docker, sandbox)
         except Exception:
             pass
 
@@ -540,6 +567,8 @@ def clone_sandbox(
         maintainer_emails=source.maintainer_emails,
         budget_action=getattr(source, "budget_action", "block") or "block",
         credential_profile_ids=source.credential_profile_ids,
+        mcp_server_ids=source.mcp_server_ids,
+        skill_ids=source.skill_ids,
     )
     if source.status == "running":
         tmp = tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024)

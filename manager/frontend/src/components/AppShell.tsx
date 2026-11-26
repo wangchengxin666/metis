@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import {
+  Blocks,
   Bot,
   ChevronDown,
   FolderKanban,
@@ -79,6 +80,7 @@ export function AppShell({
         { route: 'analytics', label: t('nav.analytics'), icon: TrendingUp },
         { route: 'admin-workforce', label: t('nav.adminWorkforce'), icon: Layers },
         { route: 'admin-llm', label: t('nav.adminLlm'), icon: KeyRound },
+        { route: 'admin-capabilities', label: t('nav.adminCapabilities'), icon: Blocks },
         { route: 'admin-access', label: t('nav.adminAccess'), icon: Users },
         { route: 'admin-ops', label: t('nav.adminOps'), icon: SlidersHorizontal },
       ]

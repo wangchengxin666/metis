@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Edit3, KeyRound, Plus, Send, Trash2 } from 'lucide-react'
+import { ArrowRight, Blocks, Edit3, KeyRound, Plus, Send, Trash2 } from 'lucide-react'
 import {
   Badge,
   Button,
@@ -16,13 +16,8 @@ import {
 import { apiFetch } from '../../lib/client.ts'
 import { localizeStatus } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type {
-  CredentialProfileItem,
-  LlmProfileItem,
-  SandboxItem,
-  TemplateItem,
-} from '../../types'
-import { CredentialVaultSection } from './CredentialVaultSection'
+import type { LlmProfileItem, SandboxItem } from '../../types'
+import type { CapabilitySubTab } from './CapabilitiesView'
 
 const EMPTY_LLM_FORM = {
   name: '',
@@ -43,18 +38,16 @@ const EMPTY_LLM_FORM = {
 
 export interface LlmAndVaultTabProps {
   llmProfiles: LlmProfileItem[]
-  credentialProfiles: CredentialProfileItem[]
   sandboxes: SandboxItem[]
-  templates?: TemplateItem[]
+  onOpenCapabilities?: (subTab: CapabilitySubTab) => void
   onRefresh: () => Promise<void>
   notify: (msg: string, type?: 'success' | 'error') => void
 }
 
 export function LlmAndVaultTab({
   llmProfiles,
-  credentialProfiles,
   sandboxes,
-  templates = [],
+  onOpenCapabilities,
   onRefresh,
   notify,
 }: LlmAndVaultTabProps) {
@@ -277,13 +270,52 @@ export function LlmAndVaultTab({
         </CardContent>
       </Card>
 
-      <CredentialVaultSection
-        credentialProfiles={credentialProfiles}
-        sandboxes={sandboxes}
-        templates={templates}
-        onRefresh={onRefresh}
-        notify={notify}
-      />
+      {onOpenCapabilities && (
+        <Card className="border-zinc-800/80 bg-zinc-900/45">
+          <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-indigo-500/30 bg-indigo-500/10">
+                <Blocks className="h-4 w-4 text-indigo-400" />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-zinc-100">
+                  {t('admin.llm.capShortcutTitle')}
+                </div>
+                <div className="text-xs text-zinc-400">{t('admin.llm.capShortcutDesc')}</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onOpenCapabilities('credentials')}
+              >
+                {t('admin.llm.goCredsBtn')}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onOpenCapabilities('mcp')}
+              >
+                {t('admin.llm.goMcpBtn')}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onOpenCapabilities('skills')}
+              >
+                {t('admin.llm.goSkillsBtn')}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Create / Edit LLM Profile Modal */}
       <Dialog

@@ -101,3 +101,11 @@ body {
 .brand-accent-border {
   border-color: color-mix(in srgb, var(--brand-primary) 38%, transparent);
 }
+
+select {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] select {
+  color-scheme: light;
+}

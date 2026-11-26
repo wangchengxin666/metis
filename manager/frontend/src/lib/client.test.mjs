@@ -46,6 +46,10 @@ test('resolveInitialRoute and project path helpers enforce 3+5 Project-centric R
   assert.equal(resolveInitialRoute({ authenticated: true, admin: true }, '/'), 'projects')
   assert.equal(resolveInitialRoute({ authenticated: true, admin: true }, '/admin'), 'admin-workforce')
   assert.equal(resolveInitialRoute({ authenticated: true, admin: true }, '/admin/llm'), 'admin-llm')
+  assert.equal(
+    resolveInitialRoute({ authenticated: true, admin: true }, '/admin/capabilities'),
+    'admin-capabilities',
+  )
   assert.equal(resolveInitialRoute({ authenticated: true, admin: true }, '/admin/access'), 'admin-access')
   assert.equal(resolveInitialRoute({ authenticated: true, admin: true }, '/admin/ops'), 'admin-ops')
 
@@ -56,6 +60,7 @@ test('resolveInitialRoute and project path helpers enforce 3+5 Project-centric R
   assert.equal(isAdminRoute('admin-ops'), true)
   assert.equal(isAdminRoute('projects'), false)
   assert.equal(adminSectionFromRoute('admin-access'), 'access')
+  assert.equal(adminSectionFromRoute('admin-capabilities'), 'capabilities')
   assert.equal(routeFromAdminSection('ops'), 'admin-ops')
 
   assert.equal(resolveInitialView({ authenticated: false, admin: false }, '/admin'), 'login')

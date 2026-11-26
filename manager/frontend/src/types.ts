@@ -93,6 +93,8 @@ export interface SandboxItem {
   llm_profile_id: string | null
   llm_profile_name: string | null
   credential_profile_ids?: string[]
+  mcp_server_ids?: string[]
+  skill_ids?: string[]
   cpu_limit: number
   memory_limit: string
   auto_sleep_exempt?: boolean
@@ -139,6 +141,8 @@ export interface TemplateItem {
   sop_version?: number
   default_llm_profile_id?: string | null
   default_credential_profile_ids?: string[]
+  default_mcp_server_ids?: string[]
+  default_skill_ids?: string[]
   image_repo: string
   image_tag: string
   default_cpu_limit: number
@@ -255,13 +259,80 @@ export interface SnapshotItem {
 export interface CredentialProfileItem {
   id: string
   name: string
+  preset_key?: string | null
+  category?: string
+  description?: string | null
   git_user_name?: string | null
   git_user_email?: string | null
   git_host: string
+  github_auth_mode?: 'pat' | 'github_app' | string
+  github_api_base_url?: string | null
+  github_app_id?: string | null
+  github_app_installation_id?: string | null
+  github_tls_verify?: boolean
   has_git_token: boolean
   has_ssh_key: boolean
+  has_github_app_private_key?: boolean
+  has_github_app_cached_token?: boolean
+  github_app_token_expires_at?: string | null
   has_env_vars: boolean
+  env_var_keys?: string[]
   mcp_servers_json?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CredentialPresetItem {
+  preset_key: string
+  name: string
+  category: string
+  description: string
+  git_user_name?: string
+  git_user_email?: string
+  git_host: string
+  github_auth_mode?: 'pat' | 'github_app'
+  github_api_base_url?: string
+  github_tls_verify?: boolean
+  suggested_env_keys: string[]
+}
+
+export interface McpServerItem {
+  id: string
+  slug: string
+  name: string
+  description?: string | null
+  category: string
+  transport: 'stdio' | 'streamable-http'
+  command?: string | null
+  args: string[]
+  env: Record<string, string>
+  cwd?: string | null
+  url?: string | null
+  headers: Record<string, string>
+  tool_loading: 'eager' | 'on-demand'
+  enabled: boolean
+  required_credentials: string[]
+  is_builtin: boolean
+  created_by?: string | null
+  pushed_sandbox_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillItem {
+  id: string
+  slug: string
+  name: string
+  description: string
+  when_to_use?: string | null
+  category: string
+  content: string
+  extra_files: Record<string, string>
+  disable_model_invocation: boolean
+  user_invocable: boolean
+  is_builtin: boolean
+  created_by?: string | null
+  pushed_sandbox_ids: string[]
   created_at: string
   updated_at: string
 }

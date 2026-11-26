@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Check, Copy, Download, GitBranch, Globe, Package, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Check, Copy, Download, GitBranch, Globe, Package, Plus, RefreshCw, Send, Trash2 } from 'lucide-react'
+import { PushTargetDialog, type PushTargetSpec } from '../../components/PushTargetDialog'
 import {
   Badge,
   Button,
@@ -15,7 +16,7 @@ import {
 import { apiFetch } from '../../lib/client.ts'
 import { pickLocalizedText } from '../../lib/i18n.ts'
 import { useI18n } from '../../lib/i18nContext'
-import type { PluginIndexSource, PluginItem } from '../../types'
+import type { PluginIndexSource, PluginItem, SandboxItem, TemplateItem } from '../../types'
 
 export interface PluginsRegistryData {
   index_url: string
@@ -28,6 +29,8 @@ export interface PluginsRegistryData {
 
 export interface PluginsTabProps {
   pluginsData: PluginsRegistryData
+  sandboxes: SandboxItem[]
+  templates?: TemplateItem[]
   copiedKey: string | null
   onCopy: (key: string, text: string) => void
   onRefresh: () => Promise<void>
@@ -36,6 +39,8 @@ export interface PluginsTabProps {
 
 export function PluginsTab({
   pluginsData,
+  sandboxes,
+  templates = [],
   copiedKey,
   onCopy,
   onRefresh,
@@ -48,12 +53,18 @@ export function PluginsTab({
   const [newUrl, setNewUrl] = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [syncOnSave, setSyncOnSave] = useState(true)
+  const [pushRequest, setPushRequest] = useState<{
+    mode: 'market_only' | 'reinstall_builtin' | 'reinstall_selected'
+    plugins: string[]
+    title: string
+  } | null>(null)
 
   const extraIndexes = pluginsData.extra_indexes ?? []
 
   const handleSyncPlugins = async (
     mode: 'market_only' | 'reinstall_builtin' | 'reinstall_selected',
     plugins: string[] = [],
+    targetSpec?: PushTargetSpec,
   ) => {
     setSyncingPlugins(true)
     try {
@@ -62,9 +73,15 @@ export function PluginsTab({
           ? t('admin.pluginsSyncing')
           : t('admin.pluginsReinstalling'),
       )
-      const res = await apiFetch<{ synced: number }>('/api/plugins/sync-sandboxes', {
+      const body: Record<string, unknown> = { mode, plugins }
+      if (targetSpec?.sandbox_ids) body.sandbox_ids = targetSpec.sandbox_ids
+      if (targetSpec?.template_keys) body.template_keys = targetSpec.template_keys
+      const res = await apiFetch<{
+        synced: number
+        results?: Array<{ slug: string; ok: boolean; skipped?: boolean; detail?: string }>
+      }>('/api/plugins/sync-sandboxes', {
         method: 'POST',
-        body: JSON.stringify({ mode, plugins }),
+        body: JSON.stringify(body),
       })
       notify(
         mode === 'market_only'
@@ -72,8 +89,10 @@ export function PluginsTab({
           : t('admin.pluginsReinstalled', { count: res.synced }),
       )
       await onRefresh()
+      return res
     } catch (err: any) {
       notify(err.message || t('admin.pluginsSyncFailed'), 'error')
+      throw err
     } finally {
       setSyncingPlugins(false)
     }
@@ -155,11 +174,17 @@ export function PluginsTab({
           <Button
             variant="default"
             size="sm"
-            disabled={syncingPlugins}
-            onClick={() => handleSyncPlugins('reinstall_builtin')}
+            disabled={syncingPlugins || sandboxes.length === 0}
+            onClick={() =>
+              setPushRequest({
+                mode: 'reinstall_builtin',
+                plugins: [],
+                title: t('admin.plugins.reinstallAllBtn'),
+              })
+            }
           >
-            <Package className="h-4 w-4" />
-            {t('admin.plugins.reinstallAllBtn')}
+            <Send className="h-4 w-4" />
+            {t('admin.plugins.pushToEmployeesBtn')}
           </Button>
         </div>
       </div>
@@ -273,11 +298,26 @@ export function PluginsTab({
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={syncingPlugins || sandboxes.length === 0}
+                  onClick={() =>
+                    setPushRequest({
+                      mode: 'reinstall_selected',
+                      plugins: [plg.slug],
+                      title: `${pickLocalizedText(locale, plg.display_name_zh, plg.display_name_en, plg.slug)}`,
+                    })
+                  }
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  {t('cap.push.pushToEmployeesBtn')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={syncingPlugins}
                   onClick={() => handleSyncPlugins('reinstall_selected', [plg.slug])}
+                  title={t('admin.plugins.reinstallOneBtn')}
                 >
                   <RefreshCw className={cn('h-3.5 w-3.5', syncingPlugins && 'animate-spin')} />
-                  {t('admin.plugins.reinstallOneBtn')}
                 </Button>
                 <Button
                   variant="ghost"
@@ -392,6 +432,19 @@ export function PluginsTab({
           </div>
         </form>
       </Dialog>
+
+      <PushTargetDialog
+        open={!!pushRequest}
+        onOpenChange={(o) => !o && setPushRequest(null)}
+        title={t('cap.push.dialogTitle', { name: pushRequest?.title ?? '' })}
+        description={t('admin.plugins.pushDialogDesc')}
+        sandboxes={sandboxes}
+        templates={templates}
+        onConfirm={async (spec) => {
+          if (!pushRequest) return
+          return await handleSyncPlugins(pushRequest.mode, pushRequest.plugins, spec)
+        }}
+      />
     </div>
   )
 }

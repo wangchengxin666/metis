@@ -180,7 +180,7 @@ export function MemoryHubSection({
               <Select
                 value={selectedSbxId}
                 onChange={(e) => setSelectedSbxId(e.target.value)}
-                className="h-9 text-xs w-52"
+                className="h-9 text-xs w-auto min-w-[210px] max-w-full sm:max-w-[340px]"
               >
                 <option value="">{t('memoryHub.selectEmployee')}</option>
                 {inspectable.map((s) => (

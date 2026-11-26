@@ -4,7 +4,7 @@ export interface AuthSummary {
   is_team_lead?: boolean
 }
 
-export type AdminSection = 'workforce' | 'llm' | 'access' | 'ops'
+export type AdminSection = 'workforce' | 'llm' | 'capabilities' | 'access' | 'ops'
 
 export type AppRoute =
   | 'login'
@@ -14,6 +14,7 @@ export type AppRoute =
   | 'analytics'
   | 'admin-workforce'
   | 'admin-llm'
+  | 'admin-capabilities'
   | 'admin-access'
   | 'admin-ops'
 
@@ -23,6 +24,7 @@ const ADMIN_PATH_TO_ROUTE: Record<string, AppRoute> = {
   '/admin': 'admin-workforce',
   '/admin/workforce': 'admin-workforce',
   '/admin/llm': 'admin-llm',
+  '/admin/capabilities': 'admin-capabilities',
   '/admin/access': 'admin-access',
   '/admin/ops': 'admin-ops',
 }
@@ -35,6 +37,7 @@ export const ROUTE_TO_PATH: Record<AppRoute, string> = {
   analytics: '/analytics',
   'admin-workforce': '/admin/workforce',
   'admin-llm': '/admin/llm',
+  'admin-capabilities': '/admin/capabilities',
   'admin-access': '/admin/access',
   'admin-ops': '/admin/ops',
 }
@@ -45,6 +48,7 @@ export function isAdminRoute(route: AppRoute): boolean {
 
 export function adminSectionFromRoute(route: AppRoute): AdminSection {
   if (route === 'admin-llm') return 'llm'
+  if (route === 'admin-capabilities') return 'capabilities'
   if (route === 'admin-access') return 'access'
   if (route === 'admin-ops') return 'ops'
   return 'workforce'
@@ -138,13 +142,14 @@ export function resolveInitialView(auth: AuthSummary, pathname: string): PortalV
 }
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData
   const res = await fetch(url, {
     credentials: 'same-origin',
+    ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(init?.headers || {}),
     },
-    ...init,
   })
   if (!res.ok) {
     let msg = `HTTP ${res.status}`

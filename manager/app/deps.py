@@ -44,9 +44,20 @@ OIDC_PROMPT_LOGIN_COOKIE = "dsh_oidc_prompt_login"
 oidc_registry = OidcClientRegistry()
 
 
+def _resolve_registry_auth(image_ref: str) -> dict[str, str] | None:
+    try:
+        from .db import SessionLocal
+        from .services.images import resolve_auth_config_for_image
+
+        with SessionLocal() as db:
+            return resolve_auth_config_for_image(db, image_ref)
+    except Exception:
+        return None
+
+
 @lru_cache
 def _default_get_docker() -> BaseSandboxRuntime:
-    return create_runtime(settings)
+    return create_runtime(settings, auth_resolver=_resolve_registry_auth)
 
 
 @lru_cache
@@ -379,7 +390,7 @@ def _resolve_display_name(
         admin_row = db.scalar(
             select(PlatformAdmin).where(PlatformAdmin.email == email)
         )
-        if admin_row and admin_row.display_name:
+        if admin_row and admin_row.display_name and admin_row.display_name != "bootstrap":
             return admin_row.display_name
     cleaned_session_name = (session_name or "").strip()
     if cleaned_session_name and (

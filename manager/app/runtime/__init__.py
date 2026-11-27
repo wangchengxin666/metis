@@ -18,11 +18,11 @@ from .docker_runtime import DockerSandboxRuntime, DockerService
 from .k8s_runtime import K8sWorkloadHandle, KubernetesSandboxRuntime
 
 
-def create_runtime(settings: Settings) -> BaseSandboxRuntime:
+def create_runtime(settings: Settings, auth_resolver=None) -> BaseSandboxRuntime:
     """Instantiate the configured sandbox container runtime ('docker' or 'kubernetes')."""
     if settings.sandbox_runtime == "kubernetes":
         return KubernetesSandboxRuntime(settings)
-    return DockerSandboxRuntime(settings)
+    return DockerSandboxRuntime(settings, auth_resolver=auth_resolver)
 
 
 __all__ = [

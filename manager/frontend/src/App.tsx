@@ -30,6 +30,7 @@ import {
 } from './lib/theme'
 import type { AuthMe, WorkspaceInboxData } from './types'
 import { LoginView } from './views/LoginView'
+import { SetupWizardView } from './views/SetupWizardView'
 import { UserPortalView } from './views/UserPortalView'
 import { AdminConsoleView } from './views/admin/AdminConsoleView'
 import { AnalyticsView } from './views/workspace/AnalyticsView'
@@ -235,7 +236,14 @@ export default function App() {
     </div>
   )
 
-  if (route === 'login' || !auth?.authenticated) {
+  const showSetupWizard =
+    (auth !== null && auth.setup_completed === false) ||
+    (window.location.pathname === '/setup' &&
+      auth?.authenticated === true &&
+      auth?.admin === true &&
+      auth?.onboarding_step !== 'done')
+
+  if (showSetupWizard || route === 'login' || !auth?.authenticated) {
     return (
       <LocaleContext.Provider value={i18nValue}>
         <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
@@ -266,25 +274,39 @@ export default function App() {
             </div>
           </header>
           <main className="flex-1 mx-auto w-full brand-container px-5 py-7 sm:px-8">
-            <LoginView
-              auth={auth}
-              onSuccess={async (isAdmin) => {
-                const nextPath = resolveSafeNextPath(
-                  new URLSearchParams(window.location.search).get('next'),
-                )
-                if (nextPath && nextPath.startsWith('/s/')) {
-                  window.location.assign(nextPath)
-                  return
-                }
-                const target =
-                  nextPath && (isAdmin || !nextPath.startsWith('/admin'))
-                    ? nextPath
-                    : '/projects'
-                window.history.pushState({}, '', target)
-                await loadAuth()
-              }}
-              notify={notify}
-            />
+            {showSetupWizard ? (
+              <SetupWizardView
+                onSetupCompleted={async () => {
+                  window.history.pushState({}, '', '/setup')
+                  await loadAuth()
+                }}
+                onDone={async () => {
+                  window.history.pushState({}, '', '/admin/workforce')
+                  await loadAuth()
+                }}
+                notify={notify}
+              />
+            ) : (
+              <LoginView
+                auth={auth}
+                onSuccess={async (isAdmin) => {
+                  const nextPath = resolveSafeNextPath(
+                    new URLSearchParams(window.location.search).get('next'),
+                  )
+                  if (nextPath && nextPath.startsWith('/s/')) {
+                    window.location.assign(nextPath)
+                    return
+                  }
+                  const target =
+                    nextPath && (isAdmin || !nextPath.startsWith('/admin'))
+                      ? nextPath
+                      : '/projects'
+                  window.history.pushState({}, '', target)
+                  await loadAuth()
+                }}
+                notify={notify}
+              />
+            )}
           </main>
         </div>
       </LocaleContext.Provider>

@@ -126,7 +126,7 @@ def is_platform_admin(db: Session, email: str) -> bool:
 def ensure_bootstrap_admin(db: Session, email: str) -> None:
     email = email.strip().lower()
     if db.get(PlatformAdmin, email) is None:
-        db.add(PlatformAdmin(email=email, display_name="bootstrap", active=True))
+        db.add(PlatformAdmin(email=email, display_name=None, active=True))
         try:
             db.commit()
         except IntegrityError:

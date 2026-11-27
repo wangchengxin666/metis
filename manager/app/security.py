@@ -24,6 +24,11 @@ def _fernet() -> Fernet:
     return Fernet(key)
 
 
+def clear_fernet_cache() -> None:
+    """Clear the cached Fernet cipher when runtime secret resolution updates SECRET_KEY."""
+    _fernet.cache_clear()
+
+
 def encrypt_secret(value: str) -> str:
     return _fernet().encrypt(value.encode("utf-8")).decode("ascii")
 

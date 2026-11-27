@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -36,7 +38,7 @@ from ..schemas import (
     UserOut,
     UserUpdate,
 )
-from ..security import encrypt_secret, hash_password
+from ..security import decrypt_secret, encrypt_secret, hash_password
 from ..services.llm_gateway import generate_sandbox_gateway_key
 from ..services.vault import refresh_github_app_profile_token
 from ..services import (
@@ -483,6 +485,92 @@ def push_llm_profile_to_sandboxes(
         "total": len(results),
         "results": results,
     }
+
+
+@router.post("/api/llm-profiles/{profile_id}/test")
+def test_llm_profile_connectivity(
+    profile_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    """Probe upstream LLM endpoint connectivity using stored encrypted API key."""
+    profile = db.get(LlmProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="LLM 配置不存在")
+
+    api_key = ""
+    if profile.api_key_ciphertext:
+        try:
+            api_key = decrypt_secret(profile.api_key_ciphertext)
+        except Exception as exc:
+            return {"ok": False, "status_code": None, "latency_ms": 0, "detail": str(exc)}
+
+    base = (profile.base_url or "").strip().rstrip("/")
+    proto = (profile.api_protocol or "openai-completions").strip().lower()
+    headers: dict[str, str] = {}
+    if proto == "anthropic-messages":
+        if api_key:
+            headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+    started = time.monotonic()
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            if proto == "anthropic-messages":
+                target = base if base.endswith("/messages") else f"{base}/v1/messages"
+                res = client.post(
+                    target,
+                    headers=headers,
+                    json={
+                        "model": profile.model,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                )
+            else:
+                models_url = base if base.endswith("/models") else f"{base}/models"
+                res = client.get(models_url, headers=headers)
+                if res.status_code in {404, 405}:
+                    chat_url = (
+                        f"{base}/responses"
+                        if proto == "openai-responses"
+                        else f"{base}/chat/completions"
+                    )
+                    res = client.post(
+                        chat_url,
+                        headers=headers,
+                        json={
+                            "model": profile.model,
+                            "max_tokens": 1,
+                            "messages": [{"role": "user", "content": "ping"}],
+                        },
+                    )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if 200 <= res.status_code < 300:
+            return {
+                "ok": True,
+                "status_code": res.status_code,
+                "latency_ms": elapsed_ms,
+                "detail": f"HTTP {res.status_code} ({elapsed_ms} ms)",
+            }
+        snippet = res.text.strip().replace("\n", " ")[:200]
+        return {
+            "ok": False,
+            "status_code": res.status_code,
+            "latency_ms": elapsed_ms,
+            "detail": f"HTTP {res.status_code}: {snippet or 'upstream rejected request'}",
+        }
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return {
+            "ok": False,
+            "status_code": None,
+            "latency_ms": elapsed_ms,
+            "detail": str(exc),
+        }
 
 
 @router.get("/api/credential-profiles", response_model=list[CredentialProfileOut])

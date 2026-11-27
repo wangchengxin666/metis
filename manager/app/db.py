@@ -324,6 +324,28 @@ def migrate_schema(target_engine: Engine) -> None:
             add_missing("credential_profiles", cred_columns, "github_app_cached_token_ciphertext", text_type)
             add_missing("credential_profiles", cred_columns, "github_app_token_expires_at", ts_type)
 
+        if "container_registries" in table_names:
+            reg_cols = {col["name"] for col in inspector.get_columns("container_registries")}
+            add_missing("container_registries", reg_cols, "tls_verify", f"{bool_type} NOT NULL DEFAULT {bool_true}")
+            add_missing("container_registries", reg_cols, "is_default", f"{bool_type} NOT NULL DEFAULT {bool_false}")
+            add_missing("container_registries", reg_cols, "k8s_secret_name", "VARCHAR(128)")
+            add_missing("container_registries", reg_cols, "last_test_ok", bool_type)
+            add_missing("container_registries", reg_cols, "last_tested_at", ts_type)
+            add_missing("container_registries", reg_cols, "last_error", vchar(512))
+
+        if "image_build_jobs" in table_names:
+            job_cols = {col["name"] for col in inspector.get_columns("image_build_jobs")}
+            add_missing("image_build_jobs", job_cols, "base_image", "VARCHAR(255)")
+            add_missing("image_build_jobs", job_cols, "install_browser", f"{bool_type} NOT NULL DEFAULT {bool_false}")
+            add_missing("image_build_jobs", job_cols, "network_preset", "VARCHAR(32) NOT NULL DEFAULT 'direct'")
+            add_missing("image_build_jobs", job_cols, "packages_json", text_type)
+            add_missing("image_build_jobs", job_cols, "custom_dockerfile", text_type)
+            add_missing("image_build_jobs", job_cols, "push_registry_id", "VARCHAR(36)")
+            add_missing("image_build_jobs", job_cols, "progress_stage", "VARCHAR(128) NOT NULL DEFAULT 'queued'")
+            add_missing("image_build_jobs", job_cols, "error_message", vchar(512))
+            add_missing("image_build_jobs", job_cols, "image_id", "VARCHAR(128)")
+            add_missing("image_build_jobs", job_cols, "size_bytes", "BIGINT")
+
 
 def init_db(target_engine: Engine | None = None) -> None:
     from . import models  # noqa: F401

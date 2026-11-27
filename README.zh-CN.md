@@ -1,182 +1,271 @@
 <p align="center">
-  <img src="manager/frontend/public/favicon.svg" alt="Metis Logo" width="72" height="72" />
+  <img src="manager/frontend/public/favicon.svg" alt="Metis Logo" width="76" height="76" />
 </p>
 
 <h1 align="center">Metis</h1>
 
 <p align="center">
-  <strong>自托管企业级数字员工云与多智能体协同平台。</strong><br/>
-  取名自古希腊实用智慧与谋略女神 Metis —— 面向研发、产品、测试、运维、财务、法务、HR、运营与数据分析等全公司岗位。
+  <strong>自托管企业级数字员工云与多智能体协同平台</strong><br/>
+  让 AI 从“单点聊天工具”进化为可编排、可协同、有审批、可计费的企业数字团队 —— 两条命令开箱启动，浏览器内 3 步完成全套初始化。
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/Onboarding-%E9%9B%B6%E9%85%8D%E7%BD%AE%E5%87%BA%E5%8E%82%E5%90%91%E5%AF%BC-7c3aed" alt="零配置向导" />
   <img src="https://img.shields.io/badge/Gateway-Traefik%20v3.7-24a1c1" alt="Gateway: Traefik v3.7" />
-  <img src="https://img.shields.io/badge/Runtime-Docker%20%7C%20Remote%20Docker%20%7C%20Kubernetes-326ce5" alt="Runtime: Docker / K8s" />
-  <img src="https://img.shields.io/badge/Database-SQLite%20%7C%20PostgreSQL%20%7C%20MySQL-009688" alt="Database: SQLite / Postgres / MySQL" />
-  <img src="https://img.shields.io/badge/Console-React%2019%20%2B%20Tailwind%20v4-61dafb" alt="Console: React 19" />
+  <img src="https://img.shields.io/badge/Runtime-Docker%20%7C%20Remote%20TLS%20%7C%20Kubernetes-326ce5" alt="Runtime: Docker / K8s" />
+  <img src="https://img.shields.io/badge/Database-PostgreSQL%20%7C%20SQL%20Server%20%7C%20SQLite-009688" alt="Database: PostgreSQL / SQL Server / SQLite" />
+  <img src="https://img.shields.io/badge/Control%20Plane-FastAPI%20%2B%20Redis%20%2B%20React%2019-10b981" alt="Control Plane: FastAPI + Redis + React 19" />
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.md">English</a> · <strong>简体中文</strong>
+</p>
+
+<p align="center">
+  <a href="#为什么选择-metis">为什么选择 Metis</a> ·
+  <a href="#产品界面预览">产品界面预览</a> ·
+  <a href="#60-秒开箱体验">60 秒开箱体验</a> ·
+  <a href="#核心产品能力">核心产品能力</a> ·
+  <a href="#系统架构">系统架构</a> ·
+  <a href="#自动化测试">自动化测试</a>
 </p>
 
 ---
 
-**Metis** 用于为企业编排相互隔离、数据持久化、可自主协作的**数字员工云工位**，通过单端口 **Traefik v3.7** 动态网关与模块化 **FastAPI + React 19** 控制平面，为全公司不同岗位提供统一的岗位画像与私有 SOP、多模型热推送、企业凭据与 MCP 保险箱、任务派发与人工审批、入站事件 Webhook 自动唤醒、在线预览发布、Token 预算治理以及服务端一键快照回滚。
+<p align="center">
+  <img src="docs/images/hero-project-workflow.png" alt="Metis 项目空间与多角色协作流实战界面" width="100%" />
+</p>
 
-## 架构概览
+<p align="center">
+  <sub>在 Metis 项目空间中运行的多角色敏捷交付流：架构师（@pulse-lead）设计方案并经人工审批，全栈研发（@pulse-dev）与测试专家（@pulse-qa）自动接力完成代码实现与质量验收。</sub>
+</p>
 
-```text
-                        ┌──────────────────────────────────────────────────────┐
-                        │            Traefik v3.7 统一网关 (:9000)             │
-                        │       单域名动态 HTTP Provider 路由 + ForwardAuth     │
-                        └───────────┬──────────────────────────────┬───────────┘
-                                    │                              │
-            /, /admin, /my,         │                              │ /s/<slug>/*
-            /api/*, /plugins/*      ▼                              ▼
-                 ┌──────────────────────────────────┐   ┌─────────────────────────────────┐
-                 │ Metis 管理控制平面 (:9000)       │   │ 数字员工独立容器 / Pod           │
-                 │ FastAPI（模块化路由与领域服务）  │   │ 本地 Docker / 远程 TLS / K8s    │
-                 │ SQLite / PostgreSQL / MySQL      │   │ Caddy + Agent OS (Gateway Auth) │
-                 │ React 19 控制台 & 个人门户       │   │ 用户级 supervisord + cron + mesh│
-                 │ 内置插件仓库 + 服务端快照中心    │   │ /home/workspace 持久化存储卷    │
-                 └──────────────────────────────────┘   └─────────────────────────────────┘
+---
+
+## 为什么选择 Metis
+
+普通的单机 AI 助手往往各自为战：上下文无法共享、明文存放 API Key、缺少高危操作审批边界，也很难在团队内标准化推广。**Metis** 为企业打造了一套即开即用的数字员工操作系统与协同控制平面：
+
+- **真正开箱即用，告别繁琐命令行运维**：无需手写 `.env` 密钥或预先打包镜像，直接 `docker compose up -d` 即可拉起整套平台。内置 **3 步引导向导**，自动完成管理员初始化、国内加速源切换、基础环境下载/构建，以及首个大模型连通性测试；后续在界面即可定制岗位专属环境并接入私有仓库。
+- **跨角色项目空间与自动化协作流程**：一键将多名数字员工组成项目组，自动建立加密互信（`sandbox-mesh`）与共享知识目录，支持并行阶段、前置依赖、超时自动重试/打回返工、定时排班与外部事件触发。
+- **零信任大模型网关 + 敏感防护 + ROI 看板**：上游 API Key 永不进入数字员工运行环境。精准计量流式 Token 与缓存读写成本，支持多 Key 池与异常自动熔断切换、外发敏感信息自动脱敏/拦截、按日/月美元预算限额，并一键导出管理层 ROI 月报。
+- **企业级安全与多节点协同**：统一单入口登录自动按角色分流，支持多企业单点登录（SSO）、敏感操作人工审批、GitHub App 短期令牌自动续期、MCP 与 Skill 技能包热分发，以及 PostgreSQL / SQL Server / Redis 多 Worker 高可用架构。
+
+---
+
+## 产品界面预览
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/images/digital-workforce.png"><img src="docs/images/digital-workforce.png" alt="数字员工编排与实时监控" width="100%" /></a>
+      <br />
+      <strong>数字员工编排与实时监控</strong><br />
+      <sub>直观查看在岗状态、CPU/内存/磁盘负载、绑定模型与闲置自动休眠策略，一键唤醒并进入数字员工工位或交付中心。</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/images/inbox-tasks.png"><img src="docs/images/inbox-tasks.png" alt="全局收件箱与审批中心" width="100%" /></a>
+      <br />
+      <strong>全局收件箱与审批中心</strong><br />
+      <sub>按主任务、项目或员工聚合跨角色协同进度，集中审批关键交付节点、阻塞求助与敏感工具调用请求。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/images/finops-ledger.png"><img src="docs/images/finops-ledger.png" alt="FinOps 算力账单与预算治理" width="100%" /></a>
+      <br />
+      <strong>算力账单与预算保护</strong><br />
+      <sub>按天、按员工、按模型实时追踪真实 Token 消耗与美元成本，支持每分钟请求/令牌限流以及超限自动停用或降级备选模型。</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/images/roi-scorecard.png"><img src="docs/images/roi-scorecard.png" alt="效能与 ROI 经营看板" width="100%" /></a>
+      <br />
+      <strong>效能评估与 ROI 经营看板</strong><br />
+      <sub>量化呈现任务完成率、审批一次通过率、节省人时与综合算力回报率（ROI），支持一键导出 CSV 与 Markdown 月报。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/images/capabilities-center.png"><img src="docs/images/capabilities-center.png" alt="能力中心：插件、凭证、MCP 与 Skill" width="100%" /></a>
+      <br />
+      <strong>统一能力中心（插件 / 凭证 / MCP / Skill）</strong><br />
+      <sub>一站式管理 6 个内置协同插件、加密凭证库、10 套内置 MCP 工具、Skill 技能压缩包与敏感操作审批规则，实时热下发零重启生效。</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/images/environment-builder.png"><img src="docs/images/environment-builder.png" alt="界面化环境定制与私有仓库管理" width="100%" /></a>
+      <br />
+      <strong>全界面环境定制与私有仓库管理</strong><br />
+      <sub>在后台实时切换网络下载源、加密托管私有容器仓库账号、一键构建基础环境或按岗位定制工具环境，修改即刻同步至全部节点。</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary><strong>点击查看统一登录入口（支持企业单点登录 + 邮箱密码）</strong></summary>
+<p align="center">
+  <img src="docs/images/unified-login.png" alt="Metis 统一登录入口与企业单点登录" width="76%" />
+</p>
+</details>
+
+---
+
+## 60 秒开箱体验
+
+### 零配置快速启动（推荐）
+
+无需提前生成随机密钥，也无需先手动构建员工镜像：
+
+```bash
+git clone https://github.com/wangchengxin666/metis.git
+cd metis/manager
+docker compose up -d --build
 ```
 
-### 多运行时与零端口暴露隔离
+> **国内网络环境建议开启镜像加速构建：**
+> ```bash
+> APT_MIRROR=https://mirrors.aliyun.com \
+> PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+> NPM_REGISTRY=https://registry.npmmirror.com \
+> docker compose up -d --build
+> ```
 
-- **多容器调度后端（`SANDBOX_RUNTIME`）**：
-  - **本地 Docker**：通过宿主机 `/var/run/docker.sock` 运行在内网桥接网络中，零宿主机端口暴露。
-  - **远程 Docker（TLS / SSH）**：配置 `DOCKER_HOST` 与 `DOCKER_PUBLIC_HOST` 即可跨机编排，自动映射临时端口并由 Traefik HTTP Provider 动态路由。
-  - **Kubernetes（`SANDBOX_RUNTIME=kubernetes`）**：为每位数字员工编排 `StatefulSet` + `PVC` + `Service`，无缝对接 Traefik 动态路由或 CRD。
-- **多关系型数据库（`DATABASE_URL`）**：单机开箱即用 SQLite，生产环境无缝切换 PostgreSQL / MySQL（支持自动 Schema 迁移与连接池）。
-- **精细化访问边界（Traefik ForwardAuth + `@metis/gateway-auth`）**：
-  - 数字员工工位（`/s/<slug>/`、`/s/<slug>/dsh/*`）通过 HMAC 签名网关头严格校验仅归属人或平台管理员可访问（零重定向直达 DSH）。
-  - 发布的预览应用（`/s/<slug>/apps/<name>/`）支持按员工独立切换 **公开免登（Public）** 或 **仅登录成员（Authenticated）**，同时保留 `sandbox-mesh` 跨员工加密协同通信（`/s/<slug>/p/4090`）。
+1. 查看控制台日志获取一次性 **Setup Code**（同时保存在 `/data/INITIAL_SETUP_CODE.txt`）：
+   ```bash
+   docker compose logs manager | grep "Setup Code"
+   ```
+2. 浏览器访问 **`http://localhost:9000`**。
+3. 跟随 **3 步引导向导** 即可启用全部功能：
+   - **第 1 步**：输入 Setup Code，设置平台管理员邮箱与密码，配置品牌名称与网络加速预设。
+   - **第 2 步**：直接在界面一键拉取或从本地源码构建数字员工基础环境。
+   - **第 3 步**：接入首个大模型（支持 OpenAI、Anthropic、Gemini 或本地 SGLang / vLLM），测试连通性通过后直接进入工作台。
 
-## 企业全链路核心能力
+### 可选企业级外部基础设施对接（`manager/.env`）
 
-### 1. 岗位体系、团队协同与白标定制
-- **14 套全公司标准岗位模板**：一键导入覆盖**研发产研**（架构师/Tech Lead、全栈、前端、后端、QA 测试、DevOps/SRE、产品经理、安全审计）与**职能业务**（行政高管助理、财务经营分析、法务合规审查、HR 招聘专员、市场内容运营、商业数据分析 BI），内置职责名片与私有作业规范（SOP）。
-- **一键组建跨岗位项目组 + 共享知识目录**：自动完成组内成员两两加密互信配对（`sandbox-mesh`）、指定统筹主持人（Moderator）建群，并在每位成员的 `/home/workspace/shared/` 下自动写入 `TEAM_README.md` 与项目背景文档 `PROJECT_BRIEF.md`。
-- **一键克隆数字员工**：完整复制镜像、岗位画像、SOP、模型配置以及 `/home/workspace` 代码文件与长期记忆。
-- **白标品牌与主题设计 Token**：支持在控制台实时修改品牌名称、**上传/粘贴左上角自定义 Logo SVG**、**自定义浏览器 Favicon**（服务端严格 SVG 安全清洗防 XSS），以及配置全站 **主题与 Brand Design Tokens**（Dark / Light / Slate 三套基调、5 套企业预设、主色/强调色、圆角风格、字号缩放、可视宽度，支持实时预览与顶栏明暗快捷切换）。
+仅当需要连接外部数据库、Kubernetes 集群或远程 Docker 宿主机时，复制 [manager/.env.example](manager/.env.example) 为 `manager/.env` 按需覆盖即可：
 
-### 2. 需求接入、人工审批与外部事件驱动
-- **可视化任务派发 & 人工审批中心**：可在 `/admin` 或 `/my` 的「数字员工运行态与交付中心」直接派发带优先级与审批开关的任务，并对关键节点一键 **批准 / 驳回**。
-- **入站事件 Webhook（`/api/webhooks/sandboxes/{slug}`）**：对接 GitHub、GitLab、飞书、企微、CI/CD 告警等外部事件，支持自动唤醒休眠中的数字员工并下发任务，支持后台一键重置密钥。
+- **多关系型数据库（`DATABASE_URL`）**：默认内置 PostgreSQL 17，支持 **Microsoft SQL Server**（`mssql+pymssql://...` / `mssql://...`）、MySQL 以及单机 SQLite（`ALLOW_SQLITE=true`）。
+- **Kubernetes 集群调度（`SANDBOX_RUNTIME=kubernetes`）**：为每位数字员工自动编排 `StatefulSet` + `PVC` + `Service`，并自动同步私有仓库 `ImagePullSecret`，详见 [deploy/kubernetes](deploy/kubernetes)。
+- **远程 Docker 宿主机（`DOCKER_HOST=tcp://...`）**：支持基于 TLS 证书跨机安全编排，并由 Traefik 动态路由。
 
-### 3. 研发与办公提效
-- **企业凭据与 MCP 保险箱**：Fernet 加密存储 Git 身份、Git PAT、SSH 私钥（`id_ed25519`）、公共环境变量（`~/.dsh-sandbox/vault.env`）以及 MCP Servers 配置（`~/.dsh/mcp.json`），一键热下发至所有在岗数字员工，无需重建容器。
-- **多协议大模型中枢**：统一管理 OpenAI Completions / Responses、Anthropic Messages、Google Gemini 等模型配置并热推送至运行中的数字员工。
-- **在线预览发布、常驻服务与定时排班 CRUD**：在控制台直接新增/删除/启停 `sandbox-service` 服务并在线查看日志，一键发布/下线 `sandbox-expose` Web 预览端口，在线增删持久化 `sandbox-cron` 值守排班。
+---
 
-### 4. 安全治理、FinOps 与灾难恢复
-- **多 OIDC 企业单点登录 & 混合认证**：后台可视化管理一个或多个 OIDC 提供方（Keycloak、Okta、Auth0、Authentik、飞书/企微 OIDC），支持 Discovery 连通性测试、邮箱域名白名单及本地密码开关。
-- **Token 用量 FinOps 与自动休眠唤醒**：实时统计估算 Token 消耗、会话与协同消息数，支持为员工设置每日预算上限（`daily_token_limit`），配合闲置自动休眠与访问即秒级唤醒大幅节省算力。
-- **服务端工作区快照中心**：秒级创建服务端工作区快照点并一键回滚（支持合并覆盖或清空重置），同时保留流式 `.tar` 导出与本地上传恢复。
-- **自托管能力插件仓库（`@metis/*`）**：热挂载 `plugins/` 目录，自动提供 `/plugins/index.json`、`.tgz` 分发与只读 npm 仓库，默认预装全套 `@metis/*` 内置插件（`@metis/file-manager`、`@metis/workspace-user`、`@metis/custom-theme`、`@metis/sandbox-mesh`、`@metis/sandbox-memory` 与 **`@metis/work-delivery`** —— 只读优先的工作与交付中心，支持搜索筛选、折叠详情与分页浏览，通过 AI 对话直接创建交付物）。
+## 核心产品能力
 
-## 仓库目录结构
+### 1. 项目协同空间与自动化协作流程
+- **14+ 覆盖全公司的标准岗位模板**：涵盖**研发产研**（架构师/Tech Lead、全栈、前端、后端、QA 测试、DevOps/SRE、产品经理、安全审计）与**职能业务**（高管助理、财务分析、法务合规、HR 专员、市场运营、BI 数据分析），开箱即带岗位职责名片与作业规范（SOP）。
+- **可视化多阶段协作流程**：支持表单化启动、并行分组、前置依赖编排、条件跳过、阶段超时自动重试与打回返工路由、跨员工文件产物自动中继、定时触发计划以及签名回调链接。
+- **组织记忆与知识检索**：沉淀优秀数字员工的长期记忆，审核晋升为团队共享知识文档或标准 SOP，并在流程执行前自动检索关联经验注入上下文。
+
+### 2. 零信任模型网关与经营成本治理
+- **多协议模型统一托管**：同时兼容 OpenAI Completions / Responses、Anthropic Messages 与 Google Gemini 接口，真实密钥隔离保管于控制平面。
+- **高可用调度与安全防护**：支持多上游密钥池加权轮询、429/5xx 故障熔断切换、流式 Token 与缓存命中精准计费、外发敏感信息自动脱敏或阻断，以及日/月预算上限保护。
+
+### 3. 全链路安全与团队管理
+- **统一单入口登录与企业单点登录（SSO）**：支持对接多个企业 SSO（Keycloak、Okta、Authentik、飞书、企微等），按账号权限自动分流至项目工作空间或治理台，支持邮箱域名白名单与连通性验证。
+- **敏感操作人工审批防线**：基于通配符与参数正则匹配拦截高危命令或工具调用（如 `git push`、`rm -rf`、`DROP TABLE`），支持在收件箱或飞书/企微/Slack 内一键放行或拒绝。
+- **开发凭证库与 GitHub App**：加密保管代码仓库 PAT、SSH 私钥、环境变量与 GitHub App 凭据（后台自动签发并续期短期令牌）；提供 10 套内置 MCP 与支持 `.zip` 附属资源的 Skill 管理。
+
+### 4. 免命令行运维与环境定制
+- **配置热同步**：全局默认资源配额、默认预装能力与下载镜像源修改后，通过 Redis 版本号实时广播至所有控制面 Worker 与后续员工实例。
+- **私有仓库加密凭据与环境工厂**：支持 Docker Hub、GHCR、阿里云 ACR、Harbor 及私有 Registry v2 加密登录验证，可在界面一键拉取基础环境、构建全量基础镜像或秒级构建岗位定制环境并推送私有仓库。
+
+---
+
+## 系统架构
+
+```text
+                        ┌──────────────────────────────────────────────────────────┐
+                        │            Traefik v3.7 统一网关 (:9000)                 │
+                        │          单域名动态 HTTP Provider + ForwardAuth           │
+                        └────────────┬────────────────────────────────┬────────────┘
+                                     │                                │
+         /, /projects, /inbox,       │                                │ /s/<slug>/*
+         /admin/*, /api/*, /v1/*     ▼                                ▼
+         ┌────────────────────────────────────────┐    ┌───────────────────────────────────┐
+         │ Metis 控制平面（多 Worker，:9000）     │    │ 数字员工独立环境（容器 / Pod）    │
+         │ · FastAPI 领域路由 + 零信任模型网关     │    │ · Docker / 远程 TLS / Kubernetes  │
+         │ · PostgreSQL / SQL Server / SQLite     │    │ · Caddy + Agent OS（网关鉴权）     │
+         │ · Redis 分布式协同、调度锁与限流       │    │ · 用户级守护进程 + 定时任务 + Mesh│
+         │ · React 19 + Tailwind v4 产品控制台    │    │ · /home/workspace 持久化磁盘      │
+         │ · 插件仓库、加密凭证库与快照中心       │    │ · 全程不暴露真实上游模型密钥       │
+         └────────────────────────────────────────┘    └───────────────────────────────────┘
+```
+
+### 仓库结构
 
 ```text
 .
 ├── LICENSE                         # MIT 开源协议
 ├── README.md                       # 英文文档
 ├── README.zh-CN.md                 # 中文文档
-├── sandbox/                        # 数字员工运行时镜像、Caddy、supervisord 与内置工具链
-│   ├── Dockerfile                  # 参数化运行时镜像构建
-│   ├── toolchain/                  # 可插拔构建期工具链 (/opt/toolchain)
-│   ├── docs/                       # 架构、运维、OIDC、安全与故障排查文档
-│   ├── tests/                      # Token 辅助脚本单测与容器内脚本测试
-│   └── rootfs/                     # 启动脚本、Caddy 渲染器、CLI 与 Agent Skills
+├── docs/images/                    # 产品界面高清截图
+├── deploy/kubernetes/              # Kubernetes 部署编排与说明
 ├── manager/                        # Metis 控制平面、Traefik 网关与 React 19 前端
 │   ├── app/
-│   │   ├── main.py                 # FastAPI 入口、生命周期、中间件与 SPA 路由
-│   │   ├── deps.py                 # 鉴权守卫、序列化器与自动唤醒工具
-│   │   ├── config.py / db.py / models.py / schemas.py / security.py / oidc.py / scheduler.py
-│   │   ├── routers/                # 领域路由（system, auth, plugins, admin, sandboxes, workforce）
-│   │   ├── services/               # 领域服务包（common, templates, sandboxes, policies, vault）
-│   │   └── runtime/                # 多运行时抽象（base, traefik, sync, workforce, operations, docker, k8s）
+│   │   ├── main.py                 # FastAPI 入口、生命周期、调度器与前端托管
+│   │   ├── runtime_secrets.py      # 多 Worker 自动密钥生成与共享持久化
+│   │   ├── routers/                # system, auth, setup, images, plugins, admin, sandboxes, workforce, llm_gateway
+│   │   ├── services/               # bootstrap, images, playbooks, gateway, policies, memory, vault, audit
+│   │   └── runtime/                # Docker、远程 TLS Docker、Kubernetes、Traefik HTTP Provider
 │   ├── frontend/                   # React 19 + TypeScript + Vite 7 + Tailwind v4 SPA
-│   │   ├── public/favicon.svg      # 默认 Metis 徽标
-│   │   └── src/
-│   │       ├── App.tsx / types.ts  # 应用主壳层与公共类型
-│   │       ├── lib/                # API 客户端、格式化工具、国际化与中英文词典
-│   │       ├── components/         # UI 基础组件、BrandMark、备份快照与运行态交付中心
-│   │       └── views/              # 登录页、个人门户与模块化管理台 views/admin/*
-│   ├── tests/                      # 完整 pytest 测试套件
-│   ├── docker-compose.yml          # Traefik v3.7 网关 + Metis 控制平面编排
-│   └── .env.example                # 环境变量模板（Docker / 远程 Docker / K8s / SQLite / PG / MySQL）
-└── plugins/                        # 热挂载内置插件与索引元数据
-    ├── file-manager/               # 服务端文件管理器
-    ├── workspace-user/             # 用户身份与快捷入口栏
-    ├── custom-theme/               # 主题与品牌定制插件
-    ├── sandbox-mesh/               # 跨员工加密互联、主持人项目群聊、任务板与人工审批
-    └── sandbox-memory/             # 低 Token 环境感知与长期记忆中心
+│   ├── tests/                      # 完整 pytest 自动化测试套件（86 项用例）
+│   ├── docker-compose.yml          # 开箱即用编排（Traefik + Manager + PostgreSQL 17 + Redis 7）
+│   └── .env.example                # 可选基础设施配置模板
+├── sandbox/                        # 数字员工基础镜像、Caddy、内置工具链与脚本
+└── plugins/                        # 热挂载内置 @metis/* 插件（文件管理、协同空间、记忆中心、工作交付等）
 ```
 
-## 快速开始
+---
 
-### 1. 构建运行时镜像
+## 更多文档
 
-```bash
-cd sandbox
-cp .env.example .env
-docker compose build
-```
+| 主题 | 文档链接 |
+| --- | --- |
+| 控制面与多后端部署 | [manager/README.md](manager/README.md) |
+| Kubernetes 集群部署 | [deploy/kubernetes](deploy/kubernetes) |
+| 数字员工运行时与工具链 | [sandbox/README.md](sandbox/README.md) · [sandbox/toolchain/README.md](sandbox/toolchain/README.md) |
+| 系统架构与流量路径 | [sandbox/docs/architecture.md](sandbox/docs/architecture.md) |
+| 构建与日常运维 | [sandbox/docs/operations.md](sandbox/docs/operations.md) |
+| 在线服务与预览发布 | [sandbox/docs/services.md](sandbox/docs/services.md) |
+| 企业 OIDC / SSO 对接 | [sandbox/docs/OIDC.md](sandbox/docs/OIDC.md) |
+| 安全模型与权限边界 | [sandbox/docs/security.md](sandbox/docs/security.md) |
+| 内置 `@metis/*` 插件 | [plugins/README.md](plugins/README.md) |
 
-如需启用国内镜像源或安装 `sandbox/toolchain/toolchain.d/*.sh` 自定义工具链：
-
-```bash
-docker build \
-  --build-arg APT_MIRROR=https://mirrors.aliyun.com \
-  --build-arg NODE_MIRROR=https://mirrors.aliyun.com/nodejs-release \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-  --build-arg INSTALL_TOOLCHAIN=true \
-  -t dsh-sandbox:latest ./sandbox
-```
-
-### 2. 启动 Metis 网关与管理控制台
-
-```bash
-cd manager
-cp .env.example .env
-# 修改 SECRET_KEY（建议 openssl rand -hex 32）与 MANAGER_ADMIN_TOKEN（或在控制台配置 OIDC）
-# 可选：配置 DATABASE_URL 切换 PostgreSQL/MySQL，或配置 SANDBOX_RUNTIME=kubernetes / DOCKER_HOST
-docker compose up -d --build
-```
-
-访问入口：
-
-- 管理控制台：`http://localhost:9000/admin`
-- 员工个人门户：`http://localhost:9000/my`
-- 健康检查：`http://localhost:9000/healthz`
-- 插件发现索引：`http://localhost:9000/plugins/index.json`
+---
 
 ## 自动化测试
 
+### 后端测试（`pytest`）
+
 ```bash
-# 1. Manager 后端测试（pytest）
-cd manager && python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt && pytest -v
-
-# 2. Manager 前端类型检查、单测与构建（Yarn 4）
-cd manager/frontend && corepack yarn install --immutable && corepack yarn typecheck && corepack yarn test && corepack yarn build
-
-# 3. Sandbox 辅助脚本与容器测试
-node --test sandbox/tests/test_gateway_auth.mjs sandbox/tests/test_metis_dsh_config.mjs
-docker run --rm --entrypoint /bin/bash -v "$PWD:/repo:ro" dsh-sandbox:latest /repo/sandbox/tests/test_sandbox_scripts.sh /repo
-
-# 4. 内置插件测试
-for p in file-manager workspace-user custom-theme sandbox-mesh sandbox-memory work-delivery; do
-  docker run --rm --entrypoint bash -v "$PWD/plugins:/work/plugins" \
-    -w "/work/plugins/$p" dsh-sandbox:latest -c "node .test/run.mjs"
-done
+cd manager
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+pytest -v
 ```
+
+### 前端检查与构建（`Yarn 4` + `Node >= 24`）
+
+```bash
+cd manager/frontend
+corepack yarn install --immutable
+corepack yarn typecheck
+corepack yarn test
+corepack yarn build
+```
+
+### 运行时与插件测试
+
+```bash
+node --test sandbox/tests/test_gateway_auth.mjs sandbox/tests/test_metis_dsh_config.mjs
+docker run --rm --entrypoint /bin/bash -v "$PWD:/repo:ro" dsh-sandbox:latest \
+  /repo/sandbox/tests/test_sandbox_scripts.sh /repo
+```
+
+---
 
 ## 开源协议
 
-本项目基于 [MIT License](LICENSE) 开源。
+基于 [MIT License](LICENSE) 开源。

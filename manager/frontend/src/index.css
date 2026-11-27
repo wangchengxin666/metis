@@ -102,10 +102,27 @@ body {
   border-color: color-mix(in srgb, var(--brand-primary) 38%, transparent);
 }
 
-select {
+select,
+select.dsh-select {
   color-scheme: dark;
 }
 
-:root[data-theme="light"] select {
+select.dsh-select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+select.dsh-select::-ms-expand {
+  display: none;
+}
+
+select.dsh-select::picker-icon {
+  display: none;
+  content: "";
+}
+
+:root[data-theme="light"] select,
+:root[data-theme="light"] select.dsh-select {
   color-scheme: light;
 }

@@ -78,10 +78,17 @@ class Settings(BaseSettings):
     snapshots_dir: str = ""
 
     # Authentication modes:
-    # - 'token' (default): built-in admin token + local user password + internal multi-OIDC SSO
+    # - 'auto' (default): Out-of-the-box mode; runs Setup Wizard when uninitialized, then supports admin token/password, local user password & OIDC SSO
+    # - 'token': admin token (+ optional admin password) + local user password + internal multi-OIDC SSO
     # - 'oidc': OIDC-first mode (auto-seeds legacy OIDC_* env vars into DB, defaults local user login off)
     # - 'none': passwordless local dev
-    manager_auth_mode: Literal["oidc", "token", "none"] = "token"
+    manager_auth_mode: Literal["auto", "oidc", "token", "none"] = "auto"
+
+    # Optional zero-config bootstrap controls
+    allow_setup_wizard: bool = True
+    manager_setup_code: str = ""
+    runtime_secrets_file: str = ""
+    sandbox_src_dir: str = ""
 
     # Optional legacy/bootstrap OIDC settings (one-time seeded into DB on first start if configured).
     # Recommended: manage one or multiple OIDC providers directly in Admin Console -> Auth / SSO.
@@ -110,7 +117,7 @@ class Settings(BaseSettings):
     llm_gateway_circuit_breaker_threshold: int = 3
     llm_gateway_circuit_breaker_cooldown_seconds: int = 60
     llm_gateway_concurrent_limit: int = 32
-    secret_key: str = "change-me-in-production"
+    secret_key: str = "auto"
 
     # Self-hosted plugin index & registry settings
     plugins_dir: str = ""

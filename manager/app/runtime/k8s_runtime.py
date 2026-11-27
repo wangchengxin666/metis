@@ -94,6 +94,7 @@ class KubernetesSandboxRuntime(BaseSandboxRuntime):
         self._apps_v1: Any = None
         self._custom_objects: Any = None
         self._api_loaded = False
+        self._synced_registry_secret_name: str | None = None
 
     @property
     def namespace(self) -> str:
@@ -251,6 +252,56 @@ class KubernetesSandboxRuntime(BaseSandboxRuntime):
                     raise SandboxRuntimeError(
                         f"failed to create namespace {self.namespace}: {create_exc}"
                     ) from create_exc
+
+    def sync_registry_secrets(
+        self,
+        auths: dict[str, dict[str, str]],
+        secret_name: str = "dsh-registry-creds",
+    ) -> str | None:
+        """Create/update or delete the managed Kubernetes dockerconfigjson pull secret."""
+        import json as _json
+
+        self._ensure_namespace()
+        if not auths:
+            try:
+                self.core_v1.delete_namespaced_secret(
+                    name=secret_name, namespace=self.namespace
+                )
+            except Exception as exc:
+                if not self._is_not_found(exc):
+                    raise SandboxRuntimeError(
+                        f"failed to remove registry pull secret {secret_name}: {exc}"
+                    ) from exc
+            self._synced_registry_secret_name = None
+            return None
+
+        dockerconfig = _json.dumps({"auths": auths}, ensure_ascii=False).encode("utf-8")
+        encoded = base64.b64encode(dockerconfig).decode("ascii")
+        body = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": secret_name,
+                "namespace": self.namespace,
+                "labels": {"app.kubernetes.io/managed-by": "dsh-manager"},
+            },
+            "type": "kubernetes.io/dockerconfigjson",
+            "data": {".dockerconfigjson": encoded},
+        }
+        try:
+            self.core_v1.read_namespaced_secret(name=secret_name, namespace=self.namespace)
+            self.core_v1.replace_namespaced_secret(
+                name=secret_name, namespace=self.namespace, body=body
+            )
+        except Exception as exc:
+            if self._is_not_found(exc):
+                self.core_v1.create_namespaced_secret(namespace=self.namespace, body=body)
+            else:
+                raise SandboxRuntimeError(
+                    f"failed to upsert registry pull secret {secret_name}: {exc}"
+                ) from exc
+        self._synced_registry_secret_name = secret_name
+        return secret_name
 
     def _upsert_env_secret(self, sandbox: Sandbox) -> None:
         name = self.secret_name(sandbox)
@@ -468,9 +519,17 @@ class KubernetesSandboxRuntime(BaseSandboxRuntime):
             ],
             "volumes": volumes,
         }
-        pull_secret = (self.settings.k8s_image_pull_secret or "").strip()
-        if pull_secret:
-            pod_spec["imagePullSecrets"] = [{"name": pull_secret}]
+        pull_secrets: list[dict[str, str]] = []
+        seen_secrets: set[str] = set()
+        for cand in (
+            (self.settings.k8s_image_pull_secret or "").strip(),
+            (self._synced_registry_secret_name or "").strip(),
+        ):
+            if cand and cand not in seen_secrets:
+                seen_secrets.add(cand)
+                pull_secrets.append({"name": cand})
+        if pull_secrets:
+            pod_spec["imagePullSecrets"] = pull_secrets
 
         return {
             "apiVersion": "apps/v1",

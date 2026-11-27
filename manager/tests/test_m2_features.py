@@ -21,7 +21,7 @@ def _login_admin(client) -> None:
     client.post("/api/auth/logout")
     res = client.post(
         "/api/auth/login",
-        json={"email": "admin@example.com", "token": "test-admin-token", "mode": "admin"},
+        json={"email": "admin@example.com", "token": "test-admin-token"},
     )
     assert res.status_code == 200, res.text
 
@@ -36,7 +36,7 @@ def _create_user_and_login(client, email: str, password: str = "Pass1234!", disp
     client.post("/api/auth/logout")
     login_res = client.post(
         "/api/auth/login",
-        json={"email": email, "password": password, "mode": "user"},
+        json={"email": email, "password": password},
     )
     assert login_res.status_code == 200, login_res.text
 
@@ -45,7 +45,7 @@ def _login_user(client, email: str, password: str = "Pass1234!") -> None:
     client.post("/api/auth/logout")
     res = client.post(
         "/api/auth/login",
-        json={"email": email, "password": password, "mode": "user"},
+        json={"email": email, "password": password},
     )
     assert res.status_code == 200, res.text
 

@@ -810,16 +810,13 @@ export function InboxView({
     <div className="space-y-5">
       {/* Compact Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800/80 pb-4">
-        <div>
+        <div className="flex items-baseline gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">{t('inbox.title')}</h1>
-          <p className="text-sm text-zinc-400 mt-1">
-            {t('inbox.subtitleV2')}
-            {summary?.last_synced_at && (
-              <span className="ml-2 text-xs text-zinc-500 font-mono">
-                · {t('inbox.lastSynced', { time: new Date(summary.last_synced_at).toLocaleTimeString() })}
-              </span>
-            )}
-          </p>
+          {summary?.last_synced_at && (
+            <span className="text-xs text-zinc-500 font-mono">
+              {t('inbox.lastSynced', { time: new Date(summary.last_synced_at).toLocaleTimeString() })}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -1098,7 +1095,7 @@ export function InboxView({
                           <div className="space-y-1.5 min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <Badge variant="outline" className="border-indigo-500/40 text-indigo-300 text-[11px]">
-                                Playbook · {t('inbox.stageBadge', { n: item.stage_index + 1, name: item.stage_name })}
+                                {t('inbox.stageBadge', { n: item.stage_index + 1, name: item.stage_name })}
                               </Badge>
                               <span className="font-semibold text-sm text-zinc-100">{item.run_title}</span>
                             </div>
@@ -1480,7 +1477,7 @@ export function InboxView({
                     {emp.doneCount}/{emp.tasks.length}
                   </span>
                   {emp.blockedCount > 0 && (
-                    <Badge variant="destructive">{emp.blockedCount} blocked</Badge>
+                    <Badge variant="destructive">{t('inbox.blockedCount', { count: emp.blockedCount })}</Badge>
                   )}
                 </div>
                 <Button

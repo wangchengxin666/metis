@@ -52,11 +52,15 @@ from ..services import (
     delete_oidc_provider,
     get_allow_local_user_login,
     get_branding_config,
+    get_onboarding_step,
     get_oidc_provider_by_slug,
+    has_admin_password,
     is_platform_admin,
+    is_setup_completed,
     list_oidc_providers,
     load_sandbox_by_slug,
     set_allow_local_user_login,
+    sync_runtime_settings_if_stale,
     touch_sandbox_activity,
     update_oidc_provider,
 )
@@ -73,9 +77,8 @@ router = APIRouter()
 
 class LoginPayload(BaseModel):
     email: str
-    token: str | None = None
     password: str | None = None
-    mode: str = "admin"
+    token: str | None = None
 
 
 
@@ -89,6 +92,7 @@ def auth_me(
     db: Session = Depends(get_db),
 ):
     response.headers["Cache-Control"] = "no-store"
+    sync_runtime_settings_if_stale(db, settings)
     email = session_email(request)
     admin = _is_authenticated_admin(request, db)
     user_row = (
@@ -152,6 +156,9 @@ def auth_me(
         "oidc_provider_name": request.session.get("oidc_provider_name"),
         "allow_local_user_login": allow_local_user,
         "admin_token_configured": bool(settings.manager_admin_token),
+        "admin_password_configured": has_admin_password(db),
+        "setup_completed": is_setup_completed(db, settings),
+        "onboarding_step": get_onboarding_step(db, settings),
         "oidc_providers": [
             {
                 "slug": p.slug,
@@ -353,6 +360,25 @@ a.btn{{display:inline-block;background:#27272a;color:#f4f4f5;text-decoration:non
     )
 
 
+def _set_local_login_session(
+    request: Request,
+    email: str,
+    *,
+    is_admin: bool,
+    auth_method: str,
+) -> dict[str, object]:
+    request.session["email"] = email
+    request.session["role"] = "admin" if is_admin else "user"
+    request.session["auth_method"] = auth_method
+    request.session.pop("oidc_provider_slug", None)
+    request.session.pop("oidc_provider_name", None)
+    return {
+        "authenticated": True,
+        "email": email,
+        "admin": is_admin,
+    }
+
+
 @router.post("/api/auth/login")
 def api_auth_login(
     payload: LoginPayload,
@@ -363,34 +389,56 @@ def api_auth_login(
     if not clean_email or "@" not in clean_email:
         raise HTTPException(status_code=400, detail="请输入有效的邮箱地址")
 
+    is_admin = is_platform_admin(db, clean_email)
     if settings.manager_auth_mode == "none":
-        is_admin = is_platform_admin(db, clean_email)
-        request.session["email"] = clean_email
-        request.session["role"] = "admin" if is_admin else "user"
-        request.session["auth_method"] = "none"
-        request.session.pop("oidc_provider_slug", None)
-        request.session.pop("oidc_provider_name", None)
-        return {
-            "authenticated": True,
-            "email": clean_email,
-            "admin": is_admin,
-        }
+        return _set_local_login_session(
+            request, clean_email, is_admin=is_admin, auth_method="none"
+        )
 
-    if payload.mode == "user":
-        if not get_allow_local_user_login(db, settings):
+    secret = (
+        payload.password if payload.password is not None else payload.token
+    ) or ""
+    user = db.scalar(select(User).where(User.email == clean_email))
+    allow_local_user = get_allow_local_user_login(db, settings)
+    has_admin_secret = bool(settings.manager_admin_token) or has_admin_password(db)
+
+    def _verify_admin_login() -> dict[str, object]:
+        if not has_admin_secret:
+            raise HTTPException(
+                status_code=400,
+                detail="未配置管理员口令或密码，请先完成初始化引导或通过 OIDC 登录",
+            )
+        if not is_admin:
+            raise HTTPException(
+                status_code=403, detail=f"邮箱 {clean_email} 不是平台管理员"
+            )
+        if user is not None and user.status != "active":
+            raise HTTPException(
+                status_code=403, detail="该管理员账号已被禁用，请联系平台管理员"
+            )
+        token_ok = bool(
+            settings.manager_admin_token
+            and secret
+            and hmac.compare_digest(secret.strip(), settings.manager_admin_token)
+        )
+        password_ok = bool(
+            user is not None
+            and user.password_hash
+            and secret
+            and verify_password(secret, user.password_hash)
+        )
+        if not token_ok and not password_ok:
+            raise HTTPException(status_code=401, detail="管理员口令或密码错误")
+        return _set_local_login_session(
+            request, clean_email, is_admin=True, auth_method="local"
+        )
+
+    def _verify_user_login() -> dict[str, object]:
+        if not allow_local_user:
             raise HTTPException(
                 status_code=403,
                 detail="当前已禁用普通用户本地密码登录，请通过 OIDC 单点登录",
             )
-        if is_platform_admin(db, clean_email):
-            raise HTTPException(
-                status_code=401,
-                detail="管理员账号请切换至“管理员控制台”并输入 Admin Token 登录",
-            )
-        user = db.scalar(select(User).where(User.email == clean_email))
-        secret = (
-            payload.password if payload.password is not None else payload.token
-        ) or ""
         if not user:
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
         if user.status != "active":
@@ -404,40 +452,19 @@ def api_auth_login(
             )
         if not verify_password(secret, user.password_hash):
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
-        request.session["email"] = clean_email
-        request.session["role"] = "user"
-        request.session["auth_method"] = "local"
-        request.session.pop("oidc_provider_slug", None)
-        request.session.pop("oidc_provider_name", None)
-        return {
-            "authenticated": True,
-            "email": clean_email,
-            "admin": False,
-        }
+        return _set_local_login_session(
+            request, clean_email, is_admin=False, auth_method="local"
+        )
 
-    if not settings.manager_admin_token:
+    # Unified single-entry login dispatches automatically by DB role
+    if is_admin:
+        return _verify_admin_login()
+    if not allow_local_user and not has_admin_secret and payload.password is None:
         raise HTTPException(
             status_code=400,
-            detail="未配置管理员口令 (MANAGER_ADMIN_TOKEN)，请通过 OIDC 登录",
+            detail="未配置管理员口令或密码，请通过 OIDC 登录",
         )
-    if not payload.token or not hmac.compare_digest(
-        payload.token.strip(), settings.manager_admin_token
-    ):
-        raise HTTPException(status_code=401, detail="管理员口令 (Admin Token) 错误")
-    if not is_platform_admin(db, clean_email):
-        raise HTTPException(
-            status_code=403, detail=f"邮箱 {clean_email} 不是平台管理员"
-        )
-    request.session["email"] = clean_email
-    request.session["role"] = "admin"
-    request.session["auth_method"] = "local"
-    request.session.pop("oidc_provider_slug", None)
-    request.session.pop("oidc_provider_name", None)
-    return {
-        "authenticated": True,
-        "email": clean_email,
-        "admin": True,
-    }
+    return _verify_user_login()
 
 
 

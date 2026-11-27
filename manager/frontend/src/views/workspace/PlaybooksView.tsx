@@ -519,12 +519,9 @@ export function PlaybooksView({
       {/* Header */}
       {!projectId && !isAdminCatalog ? (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-5">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-              {t('playbooks.title')}
-            </h1>
-            <p className="text-sm text-zinc-400 mt-1">{t('playbooks.subtitle')}</p>
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+            {t('playbooks.title')}
+          </h1>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void loadAll()}>
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />

@@ -1438,5 +1438,340 @@ class MemoryKnowledgeCreate(BaseModel):
     team_id: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# M6: Zero-Config Onboarding, Dynamic Runtime Settings, Registries, Image Factory
+# ---------------------------------------------------------------------------
+
+NETWORK_PRESETS = Literal["direct", "cn-aliyun", "custom"]
+IMAGE_JOB_KINDS = Literal["pull", "base", "variant", "push"]
+
+
+class SetupStatusOut(BaseModel):
+    setup_completed: bool
+    needs_setup: bool
+    onboarding_step: str = "done"  # account|images|llm|done
+    setup_code_configured: bool = False
+    setup_code_file_hint: str | None = None
+    default_admin_email: str
+    default_image_repo: str
+    default_image_tag: str
+    base_image_present: bool = False
+    has_llm_profile: bool = False
+    database_backend: str = "postgresql"
+    sandbox_runtime: str = "docker"
+    sandbox_src_available: bool = False
+
+
+class SetupCompleteRequest(BaseModel):
+    setup_code: str = Field(min_length=4, max_length=128)
+    admin_email: str = Field(min_length=3, max_length=255)
+    admin_password: str = Field(min_length=8, max_length=256)
+    admin_display_name: str | None = Field(default=None, max_length=128)
+    brand_name_zh: str | None = Field(default=None, max_length=128)
+    brand_name_en: str | None = Field(default=None, max_length=128)
+    network_preset: NETWORK_PRESETS = "direct"
+    docker_registry_mirror: str | None = Field(default=None, max_length=255)
+    apt_mirror: str | None = Field(default=None, max_length=255)
+    node_mirror: str | None = Field(default=None, max_length=255)
+    npm_registry: str | None = Field(default=None, max_length=255)
+    pip_index_url: str | None = Field(default=None, max_length=255)
+    allow_local_user_login: bool = True
+
+    @field_validator("admin_email")
+    @classmethod
+    def validate_admin_email(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if "@" not in clean or " " in clean:
+            raise ValueError("请输入有效的管理员邮箱地址")
+        return clean
+
+
+class SetupCompleteOut(BaseModel):
+    setup_completed: bool
+    admin_email: str
+    onboarding_step: str
+    network_preset: str
+    base_image_present: bool
+
+
+class OnboardingStepUpdate(BaseModel):
+    onboarding_step: Literal["images", "llm", "done"]
+
+
+class PlatformRuntimeSettingsOut(BaseModel):
+    network_preset: NETWORK_PRESETS = "direct"
+    docker_registry_mirror: str = ""
+    apt_mirror: str = ""
+    node_mirror: str = ""
+    npm_registry: str = ""
+    pip_index_url: str = "https://pypi.org/simple/"
+    default_image_repo: str = "dsh-sandbox"
+    default_image_tag: str = "latest"
+    pull_missing_image: bool = False
+    default_cpus: float = 2.0
+    default_memory: str = "4g"
+    default_timezone: str = "UTC"
+    default_auto_install_plugins: str = ""
+    sandbox_src_available: bool = False
+    sandbox_src_path: str | None = None
+    updated_at: datetime | None = None
+
+
+class PlatformRuntimeSettingsUpdate(BaseModel):
+    network_preset: NETWORK_PRESETS | None = None
+    apply_preset_mirrors: bool = True
+    docker_registry_mirror: str | None = Field(default=None, max_length=255)
+    apt_mirror: str | None = Field(default=None, max_length=255)
+    node_mirror: str | None = Field(default=None, max_length=255)
+    npm_registry: str | None = Field(default=None, max_length=255)
+    pip_index_url: str | None = Field(default=None, max_length=255)
+    default_image_repo: str | None = Field(default=None, min_length=1, max_length=255)
+    default_image_tag: str | None = Field(default=None, min_length=1, max_length=128)
+    pull_missing_image: bool | None = None
+    default_cpus: float | None = Field(default=None, ge=0.25, le=64.0)
+    default_memory: str | None = Field(default=None, min_length=2, max_length=32)
+    default_timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    default_auto_install_plugins: str | None = Field(default=None, max_length=512)
+
+    @field_validator("default_memory")
+    @classmethod
+    def validate_mem(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip().lower()
+        if not re.fullmatch(r"\d+[mg]", clean):
+            raise ValueError("memory must look like '4g' or '2048m'")
+        return clean
+
+    @field_validator("default_image_repo")
+    @classmethod
+    def validate_repo(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip()
+        if not re.fullmatch(r"[a-zA-Z0-9._:/-]+", clean):
+            raise ValueError("invalid image repository format")
+        return clean
+
+    @field_validator("default_image_tag")
+    @classmethod
+    def validate_tag(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip()
+        if not re.fullmatch(r"[a-zA-Z0-9._-]+", clean):
+            raise ValueError("invalid image tag format")
+        return clean
+
+
+class ContainerRegistryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    registry_host: str = Field(min_length=1, max_length=255)
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=4096)
+    tls_verify: bool = True
+    is_default: bool = False
+
+    @field_validator("registry_host")
+    @classmethod
+    def normalize_host(cls, value: str) -> str:
+        clean = value.strip().lower()
+        for prefix in ("https://", "http://"):
+            if clean.startswith(prefix):
+                clean = clean[len(prefix) :]
+        clean = clean.rstrip("/")
+        if clean.startswith("index.docker.io"):
+            clean = "docker.io"
+        if not clean or "/" in clean or " " in clean:
+            raise ValueError("registry_host 需为主机名或 host:port 格式（例如 ghcr.io 或 127.0.0.1:5000）")
+        return clean
+
+
+class ContainerRegistryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    registry_host: str | None = Field(default=None, min_length=1, max_length=255)
+    username: str | None = Field(default=None, min_length=1, max_length=255)
+    password: str | None = Field(default=None, max_length=4096)
+    tls_verify: bool | None = None
+    is_default: bool | None = None
+
+    @field_validator("registry_host")
+    @classmethod
+    def normalize_host(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return ContainerRegistryCreate.normalize_host(value)
+
+
+class ContainerRegistryTestRequest(BaseModel):
+    registry_id: str | None = None
+    registry_host: str | None = Field(default=None, max_length=255)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=4096)
+    tls_verify: bool = True
+
+
+class ContainerRegistryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    registry_host: str
+    username: str
+    has_password: bool = False
+    tls_verify: bool = True
+    is_default: bool = False
+    k8s_secret_name: str | None = None
+    last_test_ok: bool | None = None
+    last_tested_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ContainerRegistryTestOut(BaseModel):
+    ok: bool
+    registry_host: str
+    detail: str
+    k8s_synced: bool = False
+
+
+_IMAGE_REPO_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,253}$")
+_IMAGE_TAG_RE = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
+_PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/@:+=~-]{0,127}$")
+
+
+class ImagePullRequest(BaseModel):
+    image_repo: str = Field(min_length=1, max_length=255)
+    image_tag: str = Field(default="latest", min_length=1, max_length=128)
+    registry_id: str | None = None
+
+    @field_validator("image_repo")
+    @classmethod
+    def validate_repo(cls, v: str) -> str:
+        clean = v.strip()
+        if not _IMAGE_REPO_RE.fullmatch(clean):
+            raise ValueError("invalid image_repo format")
+        return clean
+
+    @field_validator("image_tag")
+    @classmethod
+    def validate_tag(cls, v: str) -> str:
+        clean = v.strip()
+        if not _IMAGE_TAG_RE.fullmatch(clean):
+            raise ValueError("invalid image_tag format")
+        return clean
+
+
+class ImageBaseBuildRequest(BaseModel):
+    image_repo: str = Field(default="dsh-sandbox", min_length=1, max_length=255)
+    image_tag: str = Field(default="latest", min_length=1, max_length=128)
+    install_browser: bool = False
+    network_preset: NETWORK_PRESETS | None = None
+    nocache: bool = False
+    push_registry_id: str | None = None
+
+    @field_validator("image_repo")
+    @classmethod
+    def validate_repo(cls, v: str) -> str:
+        clean = v.strip()
+        if not _IMAGE_REPO_RE.fullmatch(clean):
+            raise ValueError("invalid image_repo format")
+        return clean
+
+    @field_validator("image_tag")
+    @classmethod
+    def validate_tag(cls, v: str) -> str:
+        clean = v.strip()
+        if not _IMAGE_TAG_RE.fullmatch(clean):
+            raise ValueError("invalid image_tag format")
+        return clean
+
+
+class ImageVariantBuildRequest(BaseModel):
+    image_repo: str = Field(default="dsh-sandbox", min_length=1, max_length=255)
+    image_tag: str = Field(min_length=1, max_length=128)
+    base_image: str = Field(default="dsh-sandbox:latest", min_length=1, max_length=255)
+    apt_packages: list[str] = Field(default_factory=list, max_length=64)
+    pip_packages: list[str] = Field(default_factory=list, max_length=64)
+    npm_packages: list[str] = Field(default_factory=list, max_length=64)
+    install_ca_bundle: bool = True
+    network_preset: NETWORK_PRESETS | None = None
+    nocache: bool = False
+    push_registry_id: str | None = None
+    bind_template_key: str | None = Field(default=None, max_length=64)
+
+    @field_validator("image_repo")
+    @classmethod
+    def validate_repo(cls, v: str) -> str:
+        clean = v.strip()
+        if not _IMAGE_REPO_RE.fullmatch(clean):
+            raise ValueError("invalid image_repo format")
+        return clean
+
+    @field_validator("image_tag")
+    @classmethod
+    def validate_tag(cls, v: str) -> str:
+        clean = v.strip()
+        if not _IMAGE_TAG_RE.fullmatch(clean):
+            raise ValueError("invalid image_tag format")
+        return clean
+
+    @field_validator("apt_packages", "pip_packages", "npm_packages")
+    @classmethod
+    def validate_pkgs(cls, items: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in items:
+            clean = raw.strip()
+            if not clean:
+                continue
+            if not _PKG_NAME_RE.fullmatch(clean) or clean.startswith("-"):
+                raise ValueError(f"invalid package specifier: {clean}")
+            if clean not in seen:
+                seen.add(clean)
+                out.append(clean)
+        return out
+
+
+class ImagePushRequest(BaseModel):
+    source_image: str = Field(min_length=1, max_length=255)
+    target_repo: str = Field(min_length=1, max_length=255)
+    target_tag: str = Field(default="latest", min_length=1, max_length=128)
+    registry_id: str | None = None
+
+
+class ImageBuildJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    job_key: str
+    kind: str
+    image_repo: str
+    image_tag: str
+    base_image: str | None = None
+    install_browser: bool = False
+    network_preset: str = "direct"
+    packages: dict[str, list[str]] = Field(default_factory=lambda: {"apt": [], "pip": [], "npm": []})
+    custom_dockerfile: str | None = None
+    push_registry_id: str | None = None
+    status: str
+    progress_stage: str
+    log_text: str = ""
+    error_message: str | None = None
+    image_id: str | None = None
+    size_bytes: int | None = None
+    created_by: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ImagePruneOut(BaseModel):
+    reclaimed_bytes: int = 0
+    deleted_images: list[str] = Field(default_factory=list)
+
+
+
 
 

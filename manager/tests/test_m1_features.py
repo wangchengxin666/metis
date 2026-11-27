@@ -236,7 +236,7 @@ def test_workspace_inbox_dedupe_deliverables_and_tenant_isolation(api_env):
     # Regular user Alice login -> sees ONLY her own sandbox's apps/tasks (strict isolation)
     login = client.post(
         "/api/auth/login",
-        json={"email": "alice@example.com", "password": "password123", "mode": "user"},
+        json={"email": "alice@example.com", "password": "password123"},
     )
     assert login.status_code == 200
 
@@ -491,7 +491,7 @@ def test_team_preview_auth_mode_forward_auth(api_env):
     # Bob (same project team) -> 200 ALLOWED for preview, 403 DENIED for DSH IDE
     client.post(
         "/api/auth/login",
-        json={"email": "bob@example.com", "password": "password123", "mode": "user"},
+        json={"email": "bob@example.com", "password": "password123"},
     )
     assert client.get("/api/auth/verify-sandbox/alice", headers=preview_headers).status_code == 200
     assert (
@@ -502,7 +502,7 @@ def test_team_preview_auth_mode_forward_auth(api_env):
     # Carol (outside project team) -> 403 DENIED for team-restricted preview
     client.post(
         "/api/auth/login",
-        json={"email": "carol@example.com", "password": "password123", "mode": "user"},
+        json={"email": "carol@example.com", "password": "password123"},
     )
     assert client.get("/api/auth/verify-sandbox/alice", headers=preview_headers).status_code == 403
 

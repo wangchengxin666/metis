@@ -75,11 +75,11 @@ RUN pip install --index-url "${PIP_INDEX_URL}" -r /app/requirements.txt \
 
 COPY app /app/app
 COPY --from=frontend-builder /workspace/app/web_dist /app/app/web_dist
-RUN mkdir -p /data /app/plugins
+RUN mkdir -p /data /app/plugins /app/sandbox_src
 
 EXPOSE 9000
 
-HEALTHCHECK --interval=5s --timeout=3s --start-period=2s --retries=3 \
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/healthz')" || exit 1
 
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 9000 --workers ${MANAGER_WORKERS:-1}"]

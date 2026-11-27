@@ -113,7 +113,6 @@ export function AuditCenterTab({
               <span>{t('audit.title')}</span>
               <Badge variant="outline">{t('audit.totalCount', { total })}</Badge>
             </CardTitle>
-            <p className="text-xs text-zinc-400 mt-1">{t('audit.subtitle')}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void loadAudit()}>

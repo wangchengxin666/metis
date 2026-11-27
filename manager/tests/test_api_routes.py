@@ -262,13 +262,13 @@ def test_token_auth_admin_crud_backup_and_user_portal(api_env):
     # Login as Alice with password
     bad_login = client.post(
         "/api/auth/login",
-        json={"email": "alice@example.com", "password": "wrong", "mode": "user"},
+        json={"email": "alice@example.com", "password": "wrong"},
     )
     assert bad_login.status_code == 401
 
     good_login = client.post(
         "/api/auth/login",
-        json={"email": "alice@example.com", "password": "alice-password-123", "mode": "user"},
+        json={"email": "alice@example.com", "password": "alice-password-123"},
     )
     assert good_login.status_code == 200
     assert good_login.json()["admin"] is False
@@ -307,7 +307,7 @@ def test_token_auth_admin_crud_backup_and_user_portal(api_env):
     assert (
         client.post(
             "/api/auth/login",
-            json={"email": "alice@example.com", "password": "alice-new-password-456", "mode": "user"},
+            json={"email": "alice@example.com", "password": "alice-new-password-456"},
         ).status_code
         == 200
     )
@@ -439,7 +439,7 @@ def test_none_and_oidc_auth_modes(api_env, monkeypatch):
     # In oidc mode, local user login is disabled by default; when admin token is unset, admin login returns 400
     monkeypatch.setattr(main_mod.settings, "manager_admin_token", "")
     assert client.post("/api/auth/login", json={"email": "a@b.com", "token": "x"}).status_code == 400
-    assert client.post("/api/auth/login", json={"email": "sso-user@example.com", "password": "pw", "mode": "user"}).status_code == 403
+    assert client.post("/api/auth/login", json={"email": "sso-user@example.com", "password": "pw"}).status_code == 403
     monkeypatch.setattr(main_mod.settings, "manager_admin_token", "test-admin-token")
 
     unauth_verify = client.get(
@@ -610,7 +610,7 @@ def test_internal_multi_oidc_hybrid_auth_and_policies(api_env, monkeypatch):
     # Hybrid login: local user login works alongside OIDC and logs out locally (no IdP redirect)
     local_login = client.post(
         "/api/auth/login",
-        json={"email": "local@corp.com", "password": "local-password-1", "mode": "user"},
+        json={"email": "local@corp.com", "password": "local-password-1"},
     )
     assert local_login.status_code == 200
     assert client.get("/api/auth/me").json()["auth_method"] == "local"
@@ -693,11 +693,11 @@ def test_internal_multi_oidc_hybrid_auth_and_policies(api_env, monkeypatch):
     assert pol_res.json()["allow_local_user_login"] is False
     assert client.post(
         "/api/auth/login",
-        json={"email": "local@corp.com", "password": "local-password-1", "mode": "user"},
+        json={"email": "local@corp.com", "password": "local-password-1"},
     ).status_code == 403
     admin_fallback = client.post(
         "/api/auth/login",
-        json={"email": "admin@example.com", "token": "test-admin-token", "mode": "admin"},
+        json={"email": "admin@example.com", "token": "test-admin-token"},
     )
     assert admin_fallback.status_code == 200
     assert admin_fallback.json()["admin"] is True
@@ -836,7 +836,7 @@ def test_plugin_reinstall_disk_stats_backup_restore_and_auto_wake(api_env):
 
     login = client.post(
         "/api/auth/login",
-        json={"email": "alice@example.com", "password": "alice-password-123", "mode": "user"},
+        json={"email": "alice@example.com", "password": "alice-password-123"},
     )
     assert login.status_code == 200
 
@@ -1069,7 +1069,7 @@ def test_digital_workforce_branding_role_presets_team_assembly_clone_and_runtime
     # User Portal (/my) workforce inspection & service control with tenant isolation
     assert client.post(
         "/api/auth/login",
-        json={"email": "lead@example.com", "password": "lead-password-123", "mode": "user"},
+        json={"email": "lead@example.com", "password": "lead-password-123"},
     ).status_code == 200
 
     wf_my = client.get(f"/api/my/sandboxes/{lead_id}/workforce")
@@ -1337,7 +1337,7 @@ def test_enterprise_full_lifecycle_tasks_approvals_webhooks_vault_preview_auth_a
     assert (
         client.post(
             "/api/auth/login",
-            json={"email": "alice@example.com", "password": "alice-password-123", "mode": "user"},
+            json={"email": "alice@example.com", "password": "alice-password-123"},
         ).status_code
         == 200
     )

@@ -648,7 +648,7 @@ def test_batch_statuses_and_include_disk_stats(api_env):
     client, fake_docker, _registry = api_env
     login_resp = client.post(
         "/api/auth/login",
-        json={"email": "admin@example.com", "token": "test-admin-token", "mode": "admin"},
+        json={"email": "admin@example.com", "token": "test-admin-token"},
     )
     assert login_resp.status_code == 200
 

@@ -90,6 +90,9 @@ def create_sandbox(
     set_new_user_display_name: bool = True,
 ) -> Sandbox:
     email = email.strip().lower()
+    from .bootstrap import sync_runtime_settings_if_stale
+
+    sync_runtime_settings_if_stale(db, settings)
     clean_display_name = display_name.strip() if display_name and display_name.strip() else None
     pw_hash = hash_password(initial_password) if initial_password else None
     user = get_or_create_user(

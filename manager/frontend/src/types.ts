@@ -60,6 +60,9 @@ export interface AuthMe {
   oidc_provider_name?: string | null
   allow_local_user_login?: boolean
   admin_token_configured?: boolean
+  admin_password_configured?: boolean
+  setup_completed?: boolean
+  onboarding_step?: string
   oidc_providers?: PublicOidcProvider[]
   default_admin_email: string
   public_url: string
@@ -419,6 +422,11 @@ export interface OverviewData {
   admin_token_configured?: boolean
   default_image_repo: string
   default_image_tag: string
+  pull_missing_image?: boolean
+  network_preset?: string
+  sandbox_src_available?: boolean
+  setup_completed?: boolean
+  onboarding_step?: string
   default_cpus: number
   default_memory: string
   manager_auth_mode: string
@@ -1115,4 +1123,95 @@ export interface MemoryPromotionItem {
   rollout_synced_count: number
   promoted_by: string
   created_at?: string | null
+}
+
+export interface SetupStatusData {
+  setup_completed: boolean
+  needs_setup: boolean
+  onboarding_step: 'account' | 'images' | 'llm' | 'done' | string
+  setup_code_configured: boolean
+  setup_code_file_hint?: string | null
+  default_admin_email: string
+  default_image_repo: string
+  default_image_tag: string
+  base_image_present: boolean
+  has_llm_profile: boolean
+  database_backend: string
+  sandbox_runtime: string
+  sandbox_src_available: boolean
+}
+
+export interface PlatformRuntimeSettings {
+  network_preset: 'direct' | 'cn-aliyun' | 'custom'
+  docker_registry_mirror: string
+  apt_mirror: string
+  node_mirror: string
+  npm_registry: string
+  pip_index_url: string
+  default_image_repo: string
+  default_image_tag: string
+  pull_missing_image: boolean
+  default_cpus: number
+  default_memory: string
+  default_timezone: string
+  default_auto_install_plugins: string
+  sandbox_src_available: boolean
+  sandbox_src_path?: string | null
+  updated_at?: string | null
+}
+
+export interface ContainerRegistryItem {
+  id: string
+  name: string
+  registry_host: string
+  username: string
+  has_password: boolean
+  tls_verify: boolean
+  is_default: boolean
+  k8s_secret_name?: string | null
+  last_test_ok?: boolean | null
+  last_tested_at?: string | null
+  last_error?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ContainerRegistryTestResult {
+  ok: boolean
+  registry_host: string
+  detail: string
+  k8s_synced: boolean
+}
+
+export interface ImageBuildJobItem {
+  id: string
+  job_key: string
+  kind: 'pull' | 'base' | 'variant' | 'push' | string
+  image_repo: string
+  image_tag: string
+  base_image?: string | null
+  install_browser: boolean
+  network_preset: string
+  packages: {
+    apt: string[]
+    pip: string[]
+    npm: string[]
+  }
+  custom_dockerfile?: string | null
+  push_registry_id?: string | null
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | string
+  progress_stage: string
+  log_text: string
+  error_message?: string | null
+  image_id?: string | null
+  size_bytes?: number | null
+  created_by?: string | null
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface ImagePruneResult {
+  reclaimed_bytes: number
+  deleted_images: string[]
 }

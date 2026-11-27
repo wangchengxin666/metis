@@ -154,6 +154,7 @@ export function ProvisionSandboxDialog({
   skills = [],
   effectiveAllowLocalUser,
   plugins = [],
+  localImages = [],
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -170,6 +171,7 @@ export function ProvisionSandboxDialog({
   skills?: SkillItem[]
   effectiveAllowLocalUser: boolean
   plugins?: PluginItem[]
+  localImages?: Array<{ full_name: string; repo: string; tag: string; size_mb: number }>
 }) {
   const { t } = useI18n()
   return (
@@ -443,6 +445,39 @@ export function ProvisionSandboxDialog({
                   />
                 </div>
 
+                {localImages.length > 0 && (
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label>{t('dialog.template.localPickLabel')}</Label>
+                    <Select
+                      value={`${sbxForm.image_repo}:${sbxForm.image_tag}`}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        const idx = val.lastIndexOf(':')
+                        if (idx > 0) {
+                          setSbxForm({
+                            ...sbxForm,
+                            image_repo: val.slice(0, idx),
+                            image_tag: val.slice(idx + 1),
+                          })
+                        }
+                      }}
+                    >
+                      {!localImages.some(
+                        (img) => img.full_name === `${sbxForm.image_repo}:${sbxForm.image_tag}`,
+                      ) && (
+                        <option value={`${sbxForm.image_repo}:${sbxForm.image_tag}`}>
+                          {sbxForm.image_repo}:{sbxForm.image_tag}
+                        </option>
+                      )}
+                      {localImages.map((img) => (
+                        <option key={img.full_name} value={img.full_name}>
+                          {img.full_name} ({img.size_mb} MB)
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   <Label>{t('dialog.provision.repoLabel')}</Label>
                   <Input
@@ -698,9 +733,13 @@ export function TemplateEditorDialog({
                   value={`${tplForm.image_repo}:${tplForm.image_tag}`}
                   onChange={(e) => {
                     const val = e.target.value
-                    if (val.includes(':')) {
-                      const [r, tag] = val.split(':')
-                      setTplForm({ ...tplForm, image_repo: r, image_tag: tag })
+                    const idx = val.lastIndexOf(':')
+                    if (idx > 0) {
+                      setTplForm({
+                        ...tplForm,
+                        image_repo: val.slice(0, idx),
+                        image_tag: val.slice(idx + 1),
+                      })
                     }
                   }}
                 >

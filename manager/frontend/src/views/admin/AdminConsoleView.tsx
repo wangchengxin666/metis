@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Box,
   Cpu,
   Layers,
@@ -8,7 +9,7 @@ import {
   RefreshCw,
   Sparkles,
 } from 'lucide-react'
-import { Badge, Button, cn } from '../../components/ui'
+import { Button, cn } from '../../components/ui'
 import { BackupRestoreDialog } from '../../components/BackupRestoreDialog'
 import { WorkforceInspectorDialog } from '../../components/WorkforceInspectorDialog'
 import { type AdminSection, apiFetch } from '../../lib/client.ts'
@@ -35,6 +36,7 @@ import type {
 import { PlaybooksView } from '../workspace/PlaybooksView'
 import { AuditCenterTab } from './AuditCenterTab'
 import { CapabilitiesView, type CapabilitySubTab } from './CapabilitiesView'
+import { InfraAndImagesTab } from './InfraAndImagesTab'
 import { LlmAndVaultTab } from './LlmAndVaultTab'
 import { NotificationsTab } from './NotificationsTab'
 import {
@@ -83,7 +85,7 @@ export function AdminConsoleView({
   const [workforceSubTab, setWorkforceSubTab] = useState<'sandboxes' | 'templates' | 'playbooks'>('sandboxes')
   const [capSubTab, setCapSubTab] = useState<CapabilitySubTab>('plugins')
   const [accessSubTab, setAccessSubTab] = useState<'users' | 'sso'>('users')
-  const [opsSubTab, setOpsSubTab] = useState<'notifications' | 'audit'>('notifications')
+  const [opsSubTab, setOpsSubTab] = useState<'infra' | 'notifications' | 'audit'>('infra')
 
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [sandboxes, setSandboxes] = useState<SandboxItem[]>([])
@@ -752,9 +754,41 @@ export function AdminConsoleView({
   const enabledOidcCount = oidcProviders.filter((p) => p.enabled).length
   const effectiveAllowLocalUser =
     overview?.allow_local_user_login ?? overview?.manager_auth_mode !== 'oidc'
+  const expectedDefaultImage = overview
+    ? `${overview.default_image_repo}:${overview.default_image_tag}`
+    : null
+  const missingDefaultImage =
+    overview !== null &&
+    overview.sandbox_runtime !== 'kubernetes' &&
+    expectedDefaultImage !== null &&
+    !overview.local_images.some((img) => img.full_name === expectedDefaultImage)
 
   return (
     <div className="space-y-5">
+      {missingDefaultImage && expectedDefaultImage && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--brand-radius-md)] border border-amber-500/40 bg-amber-950/35 px-4 py-3 text-xs text-amber-100">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium">
+                {t('admin.missingImageTitle', { image: expectedDefaultImage })}
+              </div>
+              <div className="text-amber-200/80 mt-0.5">{t('admin.missingImageDesc')}</div>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setActiveTab('ops')
+              setOpsSubTab('infra')
+            }}
+          >
+            {t('admin.missingImageAction')}
+          </Button>
+        </div>
+      )}
+
       {/* Compact Single-Line Status Summary Strip */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-4 text-sm text-zinc-400">
@@ -774,35 +808,6 @@ export function AdminConsoleView({
               {overview?.allocated_cpus ?? 0} {t('admin.kpi.quotaUnit')}
             </strong>
           </span>
-          {overview?.database_backend && (
-            <>
-              <span className="text-zinc-700 hidden sm:inline">·</span>
-              <span className="inline-flex items-center gap-1.5 text-xs">
-                <Badge variant="outline" className="font-mono text-[11px] border-sky-500/40 text-sky-300">
-                  {overview.database_backend}
-                </Badge>
-                {overview.coordination && (
-                  <Badge
-                    variant="outline"
-                    className={
-                      overview.coordination.redis_connected
-                        ? 'text-[11px] border-emerald-500/40 text-emerald-300'
-                        : 'text-[11px] border-zinc-700 text-zinc-300'
-                    }
-                  >
-                    {overview.coordination.redis_connected
-                      ? t('admin.cluster.redisOk')
-                      : overview.coordination.mode === 'sql_lease'
-                        ? t('admin.cluster.dbLease')
-                        : t('admin.cluster.localOnly')}
-                    {' · '}
-                    {t('admin.cluster.workers', { count: overview.coordination.workers })}
-                    {overview.coordination.is_scheduler_leader ? ` · ${t('admin.cluster.leader')}` : ''}
-                  </Badge>
-                )}
-              </span>
-            </>
-          )}
           <span className="text-zinc-700 hidden sm:inline">·</span>
           <button
             type="button"
@@ -1010,12 +1015,13 @@ export function AdminConsoleView({
         </div>
       )}
 
-      {/* Consolidated Admin Section 5: Platform Operations (Notifications, Audit) */}
+      {/* Consolidated Admin Section 5: Platform Operations (Infra & Images, Notifications, Audit) */}
       {activeTab === 'ops' && (
         <div className="space-y-4">
           <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1">
             {(
               [
+                ['infra', t('admin.subtab.infra')],
                 ['notifications', t('admin.subtab.notifications')],
                 ['audit', t('admin.subtab.audit')],
               ] as const
@@ -1035,6 +1041,15 @@ export function AdminConsoleView({
               </button>
             ))}
           </div>
+
+          {opsSubTab === 'infra' && (
+            <InfraAndImagesTab
+              templates={templates}
+              localImages={overview?.local_images ?? []}
+              onRefreshAll={refreshAll}
+              notify={notify}
+            />
+          )}
 
           {opsSubTab === 'notifications' && (
             <NotificationsTab sandboxes={sandboxes} notify={notify} />
@@ -1061,6 +1076,7 @@ export function AdminConsoleView({
         skills={skills}
         effectiveAllowLocalUser={effectiveAllowLocalUser}
         plugins={pluginsData?.items ?? []}
+        localImages={overview?.local_images ?? []}
       />
 
       <TemplateEditorDialog

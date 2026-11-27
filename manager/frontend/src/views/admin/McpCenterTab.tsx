@@ -260,7 +260,6 @@ export function McpCenterTab({
             <h3 className="text-base font-semibold text-zinc-100">{t('admin.mcp.title')}</h3>
             <Badge variant="outline">{mcpServers.length}</Badge>
           </div>
-          <p className="text-xs text-zinc-400">{t('admin.mcp.subtitle')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {selectedIds.length > 0 && (

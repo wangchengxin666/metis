@@ -241,7 +241,6 @@ export function MemoryHubSection({
                 <Brain className="h-4 w-4 text-indigo-400" />
                 <span>{t('memoryHub.title')}</span>
               </CardTitle>
-              <p className="text-xs text-zinc-400 mt-1">{t('memoryHub.subtitle')}</p>
             </div>
             <div className="flex items-center gap-2">
               <Select
@@ -375,7 +374,6 @@ export function MemoryHubSection({
             <span>{t('memoryHub.ragTitle')}</span>
             <Badge variant="outline">{knowledgeItems.length}</Badge>
           </CardTitle>
-          <p className="text-xs text-zinc-400 mt-1">{t('memoryHub.ragSubtitle')}</p>
         </CardHeader>
         <CardContent className="space-y-4">
           <form onSubmit={handleRecallSearch} className="flex flex-col sm:flex-row gap-2">

@@ -35,10 +35,24 @@ services:
     expose:
       - "9000"
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dsh:dsh-secret-password@postgres:5432/dsh_manager}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MANAGER_WORKERS: ${MANAGER_WORKERS:-2}
+      MANAGER_AUTH_MODE: ${MANAGER_AUTH_MODE:-auto}
+      SECRET_KEY: ${SECRET_KEY:-auto}
+      MANAGER_ADMIN_TOKEN: ${MANAGER_ADMIN_TOKEN:-}
+      MANAGER_ADMIN_EMAIL: ${MANAGER_ADMIN_EMAIL:-admin@example.com}
+      MANAGER_PUBLIC_URL: ${MANAGER_PUBLIC_URL:-http://localhost:9000}
+      MANAGER_INTERNAL_URL: ${MANAGER_INTERNAL_URL:-http://dsh-manager:9000}
+      GATEWAY_INTERNAL_URL: ${GATEWAY_INTERNAL_URL:-http://dsh-gateway}
+      SANDBOX_SRC_DIR: /app/sandbox_src
     volumes:
       - manager-data:/data
       - ../plugins:/app/plugins:ro
+      - ../sandbox:/app/sandbox_src:ro
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     labels:
       - "traefik.enable=true"

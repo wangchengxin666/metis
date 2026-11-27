@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import json
+import os
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import docker
+from docker import auth as docker_auth
 from docker.errors import APIError, ImageNotFound, NotFound
 from docker.models.containers import Container
 
@@ -26,16 +29,21 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
 
     runtime_name = "docker"
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        auth_resolver: Callable[[str], dict[str, str] | None] | None = None,
+    ):
         super().__init__(settings)
         self._client: docker.DockerClient | None = None
+        self._auth_resolver = auth_resolver
 
     @property
     def is_remote_mode(self) -> bool:
         """True when sandboxes run on a remote Docker host accessed via published host ports."""
         return bool((self.settings.docker_public_host or "").strip())
 
-    def _build_client(self) -> docker.DockerClient:
+    def _build_client(self, timeout: int | None = None) -> docker.DockerClient:
         host = (self.settings.docker_host or "").strip()
         has_tls = bool(
             self.settings.docker_tls_verify
@@ -43,7 +51,7 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
             or self.settings.docker_tls_client_cert
         )
         if not host and not has_tls:
-            return docker.from_env()
+            return docker.from_env(timeout=timeout) if timeout else docker.from_env()
 
         tls_config: docker.tls.TLSConfig | bool = False
         if has_tls:
@@ -69,6 +77,8 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
             kwargs["base_url"] = host
         if tls_config:
             kwargs["tls"] = tls_config
+        if timeout:
+            kwargs["timeout"] = timeout
         return docker.DockerClient(**kwargs)
 
     @property
@@ -121,10 +131,253 @@ class DockerSandboxRuntime(BaseSandboxRuntime):
                 raise SandboxRuntimeError(
                     f"image {image} is not present; pull it or set PULL_MISSING_IMAGE=true"
                 ) from exc
-            self.client.images.pull(
-                repo or self.settings.dsh_image_repo,
-                tag=tag or self.settings.dsh_image_tag,
+            final_repo = repo or self.settings.dsh_image_repo
+            final_tag = tag or self.settings.dsh_image_tag
+            auth_cfg = self._auth_resolver(image) if self._auth_resolver else None
+            if auth_cfg:
+                self.client.images.pull(
+                    final_repo,
+                    tag=final_tag,
+                    auth_config=auth_cfg,
+                )
+            else:
+                self.client.images.pull(final_repo, tag=final_tag)
+
+    def test_registry_login(
+        self,
+        *,
+        registry_host: str,
+        login_server: str,
+        username: str,
+        password: str,
+    ) -> tuple[bool, str]:
+        """Verify registry credentials via an isolated ephemeral Docker client (zero host disk writes)."""
+        tmp_client: docker.DockerClient | None = None
+        try:
+            api = getattr(self.client, "api", None)
+            if callable(getattr(api, "login", None)) and isinstance(self.client, docker.DockerClient):
+                tmp_client = self._build_client()
+                res = tmp_client.api.login(
+                    username=username,
+                    password=password,
+                    registry=login_server,
+                    dockercfg_path=os.devnull,
+                    reauth=True,
+                )
+                status_msg = (res or {}).get("Status") or "Login Succeeded"
+                return True, f"{registry_host}: {status_msg}"
+            if callable(getattr(self.client, "login", None)):
+                res = self.client.login(
+                    username=username,
+                    password=password,
+                    registry=login_server,
+                    reauth=True,
+                )
+                status_msg = (res or {}).get("Status") if isinstance(res, dict) else "Login Succeeded"
+                return True, f"{registry_host}: {status_msg or 'Login Succeeded'}"
+            return True, f"{registry_host}: mock login ok"
+        except APIError as exc:
+            return False, str(exc)
+        except Exception as exc:
+            return False, str(exc)
+        finally:
+            if tmp_client is not None:
+                try:
+                    tmp_client.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _stream_docker_events(
+        stream,
+        on_log: Callable[[str], None] | None = None,
+    ) -> None:
+        for chunk in stream:
+            if isinstance(chunk, (bytes, str)):
+                text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+                for ln in text.splitlines():
+                    try:
+                        parsed = json.loads(ln)
+                    except Exception:
+                        if ln.strip() and on_log:
+                            on_log(ln)
+                        continue
+                    DockerSandboxRuntime._handle_stream_dict(parsed, on_log)
+            elif isinstance(chunk, dict):
+                DockerSandboxRuntime._handle_stream_dict(chunk, on_log)
+
+    @staticmethod
+    def _handle_stream_dict(
+        chunk: dict[str, Any], on_log: Callable[[str], None] | None = None
+    ) -> None:
+        if "errorDetail" in chunk or "error" in chunk:
+            err = chunk.get("error") or (chunk.get("errorDetail") or {}).get("message") or "docker error"
+            raise SandboxRuntimeError(str(err))
+        if on_log:
+            if "stream" in chunk:
+                txt = str(chunk["stream"]).rstrip("\r\n")
+                if txt:
+                    on_log(txt)
+            elif "status" in chunk:
+                cid = f"{chunk['id']}: " if chunk.get("id") else ""
+                prog = f" {chunk['progress']}" if chunk.get("progress") else ""
+                on_log(f"{cid}{chunk['status']}{prog}")
+            elif "aux" in chunk and isinstance(chunk["aux"], dict) and chunk["aux"].get("ID"):
+                on_log(f"Built image ID: {chunk['aux']['ID']}")
+
+    def pull_image_stream(
+        self,
+        repo: str,
+        tag: str,
+        *,
+        auth_config: dict[str, str] | None = None,
+        on_log: Callable[[str], None] | None = None,
+    ) -> None:
+        api = getattr(self.client, "api", None)
+        if callable(getattr(api, "pull", None)):
+            kwargs: dict[str, Any] = {"tag": tag, "stream": True, "decode": True}
+            if auth_config:
+                kwargs["auth_config"] = auth_config
+            try:
+                stream = api.pull(repo, **kwargs)
+                self._stream_docker_events(stream, on_log=on_log)
+                return
+            except APIError as exc:
+                raise SandboxRuntimeError(f"image pull failed: {exc}") from exc
+        # Fallback for mock Docker clients in tests
+        if auth_config:
+            self.client.images.pull(repo, tag=tag, auth_config=auth_config)
+        else:
+            self.client.images.pull(repo, tag=tag)
+        if on_log:
+            on_log(f"Pulled {repo}:{tag}")
+
+    def build_image_stream(
+        self,
+        tar_buf: io.BytesIO,
+        *,
+        tag: str,
+        buildargs: dict[str, str] | None = None,
+        nocache: bool = False,
+        auth_configs: dict[str, dict[str, str]] | None = None,
+        on_log: Callable[[str], None] | None = None,
+    ) -> None:
+        tar_buf.seek(0)
+        api = getattr(self.client, "api", None)
+        if callable(getattr(api, "build", None)) and isinstance(self.client, docker.DockerClient):
+            tmp_client = self._build_client(timeout=1800)
+            try:
+                if auth_configs:
+                    tmp_client.api._auth_configs = docker_auth.AuthConfig(
+                        {"auths": auth_configs}
+                    )
+                stream = tmp_client.api.build(
+                    fileobj=tar_buf,
+                    custom_context=True,
+                    tag=tag,
+                    rm=True,
+                    forcerm=True,
+                    nocache=nocache,
+                    decode=True,
+                    timeout=1800,
+                    buildargs=buildargs or {},
+                )
+                self._stream_docker_events(stream, on_log=on_log)
+                return
+            except APIError as exc:
+                raise SandboxRuntimeError(f"docker build failed: {exc}") from exc
+            finally:
+                try:
+                    tmp_client.close()
+                except Exception:
+                    pass
+
+        # Mock/lightweight fallback
+        if callable(getattr(self.client.images, "build", None)):
+            self.client.images.build(
+                fileobj=tar_buf,
+                custom_context=True,
+                tag=tag,
+                rm=True,
+                forcerm=True,
+                nocache=nocache,
+                buildargs=buildargs or {},
             )
+            if on_log:
+                on_log(f"Successfully built {tag}")
+            return
+        raise SandboxRuntimeError("docker build is unavailable in current client")
+
+    def tag_and_push_image(
+        self,
+        *,
+        source_image: str,
+        target_repo: str,
+        target_tag: str,
+        auth_config: dict[str, str] | None = None,
+        on_log: Callable[[str], None] | None = None,
+    ) -> None:
+        try:
+            img = self.client.images.get(source_image)
+        except ImageNotFound as exc:
+            raise SandboxRuntimeError(f"source image not found: {source_image}") from exc
+        full_target = f"{target_repo}:{target_tag}"
+        if source_image != full_target:
+            img.tag(target_repo, tag=target_tag)
+            if on_log:
+                on_log(f"Tagged {source_image} -> {full_target}")
+
+        api = getattr(self.client, "api", None)
+        if callable(getattr(api, "push", None)):
+            kwargs: dict[str, Any] = {"tag": target_tag, "stream": True, "decode": True}
+            if auth_config:
+                kwargs["auth_config"] = auth_config
+            try:
+                stream = api.push(target_repo, **kwargs)
+                self._stream_docker_events(stream, on_log=on_log)
+                return
+            except APIError as exc:
+                raise SandboxRuntimeError(f"docker push failed: {exc}") from exc
+        if callable(getattr(self.client.images, "push", None)):
+            if auth_config:
+                self.client.images.push(target_repo, tag=target_tag, auth_config=auth_config)
+            else:
+                self.client.images.push(target_repo, tag=target_tag)
+            if on_log:
+                on_log(f"Pushed {full_target}")
+            return
+        raise SandboxRuntimeError("docker push is unavailable in current client")
+
+    def inspect_image(self, full_tag: str) -> dict[str, Any]:
+        try:
+            img = self.client.images.get(full_tag)
+            attrs = getattr(img, "attrs", {}) or {}
+            short_id = (getattr(img, "short_id", None) or str(attrs.get("Id") or "")).removeprefix(
+                "sha256:"
+            )
+            size_val = attrs.get("Size")
+            return {
+                "id": short_id[:64] if short_id else None,
+                "size_bytes": int(size_val) if size_val is not None else None,
+            }
+        except Exception:
+            return {"id": None, "size_bytes": None}
+
+    def prune_images(self) -> dict[str, Any]:
+        try:
+            res = self.client.images.prune(filters={"dangling": True}) or {}
+            deleted = []
+            for item in res.get("ImagesDeleted") or []:
+                if isinstance(item, dict):
+                    val = item.get("Deleted") or item.get("Untagged")
+                    if val:
+                        deleted.append(str(val))
+            return {
+                "reclaimed_bytes": int(res.get("SpaceReclaimed") or 0),
+                "deleted_images": deleted,
+            }
+        except Exception as exc:
+            raise SandboxRuntimeError(f"docker image prune failed: {exc}") from exc
 
     def upstream_origin(self, sandbox: Sandbox) -> str:
         """Return http://<ip_or_container_name>:<port> reachable by Manager and Traefik."""

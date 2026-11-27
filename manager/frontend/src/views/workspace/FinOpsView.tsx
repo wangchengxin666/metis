@@ -95,10 +95,7 @@ export function FinOpsView({
         )}
       >
         {!compact ? (
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">{t('finops.title')}</h1>
-            <p className="text-sm text-zinc-400 mt-1">{t('finops.subtitle')}</p>
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">{t('finops.title')}</h1>
         ) : (
           <div />
         )}

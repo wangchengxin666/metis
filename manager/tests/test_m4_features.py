@@ -37,7 +37,7 @@ def _login_admin(client) -> None:
     client.post("/api/auth/logout")
     res = client.post(
         "/api/auth/login",
-        json={"email": "admin@example.com", "token": "test-admin-token", "mode": "admin"},
+        json={"email": "admin@example.com", "token": "test-admin-token"},
     )
     assert res.status_code == 200, res.text
 

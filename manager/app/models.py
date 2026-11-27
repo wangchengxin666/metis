@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -888,5 +889,79 @@ class ClusterLease(Base):
     updated_at: Mapped[datetime] = mapped_column(
         PORTABLE_DATETIME, default=utcnow, onupdate=utcnow
     )
+
+
+class ContainerRegistry(Base):
+    """Encrypted container registry credentials supporting Docker auth & K8s imagePullSecrets."""
+
+    __tablename__ = "container_registries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(Unicode(128), unique=True)
+    registry_host: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    username: Mapped[str] = mapped_column(Unicode(255), default="")
+    password_ciphertext: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    tls_verify: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    k8s_secret_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(PORTABLE_DATETIME, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(PORTABLE_DATETIME, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        PORTABLE_DATETIME, default=utcnow, onupdate=utcnow
+    )
+
+    @property
+    def has_password(self) -> bool:
+        return bool(self.password_ciphertext)
+
+
+class ImageBuildJob(Base):
+    """Persistent multi-worker digital employee image pull/build/push job state & logs."""
+
+    __tablename__ = "image_build_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_key: Mapped[str] = mapped_column(String(255), index=True)
+    kind: Mapped[str] = mapped_column(String(32), default="base")  # pull|base|variant|push
+    image_repo: Mapped[str] = mapped_column(String(255))
+    image_tag: Mapped[str] = mapped_column(String(128), default="latest")
+    base_image: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    install_browser: Mapped[bool] = mapped_column(Boolean, default=False)
+    network_preset: Mapped[str] = mapped_column(String(32), default="direct")
+    packages_json: Mapped[str] = mapped_column(LONG_TEXT, default="{}")
+    custom_dockerfile: Mapped[str | None] = mapped_column(LONG_TEXT, nullable=True)
+    push_registry_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending", index=True
+    )  # pending|running|succeeded|failed|cancelled
+    progress_stage: Mapped[str] = mapped_column(String(128), default="queued")
+    log_text: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    error_message: Mapped[str | None] = mapped_column(Unicode(512), nullable=True)
+    image_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(Unicode(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(PORTABLE_DATETIME, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(PORTABLE_DATETIME, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(PORTABLE_DATETIME, nullable=True)
+
+    @property
+    def packages(self) -> dict[str, list[str]]:
+        if not self.packages_json:
+            return {"apt": [], "pip": [], "npm": []}
+        try:
+            parsed = json.loads(self.packages_json)
+        except Exception:
+            return {"apt": [], "pip": [], "npm": []}
+        if not isinstance(parsed, dict):
+            return {"apt": [], "pip": [], "npm": []}
+        out: dict[str, list[str]] = {"apt": [], "pip": [], "npm": []}
+        for key in out:
+            raw = parsed.get(key)
+            if isinstance(raw, list):
+                out[key] = [str(item).strip() for item in raw if str(item).strip()]
+        return out
+
 
 

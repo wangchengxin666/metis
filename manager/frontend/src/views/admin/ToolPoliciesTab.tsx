@@ -144,7 +144,6 @@ export function ToolPoliciesTab({
             <ShieldAlert className="h-4 w-4 text-amber-400" />
             <span>{t('policies.title')}</span>
           </h3>
-          <p className="text-xs text-zinc-400 mt-0.5">{t('policies.subtitle')}</p>
         </div>
         <Button size="sm" onClick={() => setModalOpen(true)}>
           <Plus className="h-3.5 w-3.5" />

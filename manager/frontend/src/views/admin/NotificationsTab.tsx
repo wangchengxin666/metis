@@ -270,7 +270,6 @@ export function NotificationsTab({
                 <span>{t('notif.title')}</span>
                 <Badge variant="outline">{channels.length}</Badge>
               </CardTitle>
-              <p className="text-xs text-zinc-400 mt-1">{t('notif.subtitle')}</p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => void loadData()}>

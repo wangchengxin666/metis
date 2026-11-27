@@ -17,12 +17,9 @@ export function AnalyticsView({
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-5">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-            {t('analytics.title')}
-          </h1>
-          <p className="text-sm text-zinc-400 mt-1">{t('analytics.subtitle')}</p>
-        </div>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+          {t('analytics.title')}
+        </h1>
         <div className="inline-flex items-center gap-1 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/70 p-1 self-start">
           <button
             type="button"

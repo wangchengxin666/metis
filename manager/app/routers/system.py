@@ -39,9 +39,13 @@ from ..services import (
     get_allow_local_user_login,
     get_branding_config,
     get_idle_sleep_policy,
+    get_onboarding_step,
+    get_runtime_settings,
+    is_setup_completed,
     list_oidc_providers,
     set_branding_config,
     set_idle_sleep_policy,
+    sync_runtime_settings_if_stale,
 )
 from ..services.common import extract_audit_slug, infer_audit_category, query_audit_logs
 
@@ -124,6 +128,7 @@ def api_overview(
     db: Session = Depends(get_db),
     _: None = Depends(require_admin_api),
 ):
+    sync_runtime_settings_if_stale(db, settings)
     sandboxes = list(
         db.scalars(
             select(Sandbox).where(Sandbox.deleted_at.is_(None))
@@ -147,6 +152,7 @@ def api_overview(
     enabled_oidc_count = sum(1 for p in oidc_providers if p.enabled)
     allow_local_user = get_allow_local_user_login(db, settings)
     brand_cfg = get_branding_config(db)
+    runtime_cfg = get_runtime_settings(db, settings)
     return {
         "total_sandboxes": len(sandboxes),
         "running_sandboxes": running_count,
@@ -161,6 +167,11 @@ def api_overview(
         "admin_token_configured": bool(settings.manager_admin_token),
         "default_image_repo": settings.dsh_image_repo,
         "default_image_tag": settings.dsh_image_tag,
+        "pull_missing_image": settings.pull_missing_image,
+        "network_preset": runtime_cfg["network_preset"],
+        "sandbox_src_available": runtime_cfg["sandbox_src_available"],
+        "setup_completed": is_setup_completed(db, settings),
+        "onboarding_step": get_onboarding_step(db, settings),
         "default_cpus": settings.sandbox_cpus,
         "default_memory": settings.sandbox_memory,
         "manager_auth_mode": settings.manager_auth_mode,

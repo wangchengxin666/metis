@@ -241,7 +241,6 @@ export function CredentialVaultSection({
             <h3 className="text-base font-semibold text-zinc-100">{t('admin.vault.title')}</h3>
             <Badge variant="outline">{credentialProfiles.length}</Badge>
           </div>
-          <p className="text-xs text-zinc-400">{t('admin.vault.subtitle')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {credentialPresets.length > 0 && (

@@ -105,15 +105,15 @@ test('pickLocalizedText selects preferred language with fallback', () => {
 test('translate formats placeholders and preserves full key parity', () => {
   assert.equal(
     translate('zh-CN', 'admin.sandboxProvisioned', { email: 'alice@example.com' }),
-    '沙箱已成功分配给 alice@example.com',
+    '数字员工已分配给 alice@example.com',
   )
   assert.equal(
     translate('en', 'admin.sandboxProvisioned', { email: 'alice@example.com' }),
-    'Sandbox provisioned for alice@example.com',
+    'Digital employee provisioned for alice@example.com',
   )
   assert.equal(
     translate('en', 'admin.users.sandboxCount', { count: 3 }),
-    '3 sandbox(es)',
+    '3 employee(s)',
   )
 
   const zhKeys = Object.keys(translations['zh-CN']).sort()

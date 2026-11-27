@@ -30,6 +30,7 @@ from .routers import (
     admin,
     auth,
     capabilities,
+    images,
     integrations,
     llm_gateway,
     memory_hub,
@@ -38,22 +39,29 @@ from .routers import (
     plugins,
     sandboxes,
     scorecard,
+    setup,
     system,
     teams,
     workforce,
     workspace,
 )
+from .runtime_secrets import resolve_runtime_secret_key
 from .scheduler import BackgroundWorker
 from .services import (
+    apply_runtime_settings_to_settings,
     ensure_bootstrap_admin,
     ensure_bootstrap_oidc_provider,
+    ensure_bootstrap_setup_state,
     ensure_default_mcp_servers,
     ensure_default_skills,
     ensure_default_templates,
     list_oidc_providers,
 )
+from .services.images import sync_k8s_registry_secrets
 from .services.llm_gateway import ensure_sandbox_gateway_keys
 from .services.playbooks import ensure_default_playbooks
+
+resolve_runtime_secret_key(settings)
 
 # Backwards-compatible factory references (also monkeypatched in pytest suites)
 get_docker = _default_get_docker
@@ -106,6 +114,12 @@ async def lifespan(_app: FastAPI):
             ensure_default_skills(db)
             ensure_sandbox_gateway_keys(db)
             ensure_bootstrap_oidc_provider(db, settings)
+            ensure_bootstrap_setup_state(db, settings)
+            apply_runtime_settings_to_settings(db, settings)
+            try:
+                sync_k8s_registry_secrets(db, resolve_docker())
+            except Exception as exc:
+                logger.warning("Initial K8s registry secret sync skipped: %s", exc)
             if settings.manager_auth_mode == "oidc":
                 enabled_providers = list_oidc_providers(db, enabled_only=True)
                 if not enabled_providers and not settings.manager_admin_token:
@@ -150,6 +164,8 @@ if (WEB_DIST_DIR / "assets").is_dir():
 
 # Register domain routers (sandboxes last so /s/{slug}* sleeping fallback never shadows API routes)
 app.include_router(system.router)
+app.include_router(setup.router)
+app.include_router(images.router)
 app.include_router(plugins.router)
 app.include_router(auth.router)
 app.include_router(admin.router)
@@ -177,6 +193,7 @@ def _serve_spa():
 
 
 @app.get("/", include_in_schema=False)
+@app.get("/setup", include_in_schema=False)
 @app.get("/login", include_in_schema=False)
 @app.get("/auth/login", include_in_schema=False)
 @app.get("/projects", include_in_schema=False)

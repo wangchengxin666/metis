@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { AlertCircle, ShieldCheck } from 'lucide-react'
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label, cn } from '../components/ui'
+import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../components/ui'
 import { apiFetch, resolveSafeNextPath } from '../lib/client.ts'
 import { useI18n } from '../lib/i18nContext'
 import type { AuthMe } from '../types'
@@ -17,26 +17,15 @@ export function LoginView({
   const { t } = useI18n()
   const oidcProviders = auth?.oidc_providers ?? []
   const allowLocalUser = auth?.allow_local_user_login ?? auth?.auth_mode !== 'oidc'
-  const hasAdminToken = auth?.admin_token_configured ?? auth?.auth_mode === 'token'
-  const defaultAdminEmail = auth?.default_admin_email || 'admin@example.com'
-
-  const [mode, setMode] = useState<'admin' | 'user'>(() =>
-    hasAdminToken ? 'admin' : 'user',
+  const hasAdminLogin = Boolean(
+    auth?.admin_token_configured ||
+      auth?.admin_password_configured ||
+      auth?.auth_mode === 'token',
   )
-  const [email, setEmail] = useState(() => (hasAdminToken ? defaultAdminEmail : ''))
-  const [token, setToken] = useState('')
-  const [password, setPassword] = useState('')
-  const [submitting, setSubmitting] = useState(false)
 
-  useEffect(() => {
-    if (!allowLocalUser && hasAdminToken && mode !== 'admin') {
-      setMode('admin')
-      setEmail(defaultAdminEmail)
-    } else if (allowLocalUser && !hasAdminToken && mode !== 'user') {
-      setMode('user')
-      setEmail('')
-    }
-  }, [allowLocalUser, hasAdminToken, mode, defaultAdminEmail])
+  const [email, setEmail] = useState('')
+  const [secret, setSecret] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   const searchParams = new URLSearchParams(window.location.search)
   const urlError = searchParams.get('error')
@@ -63,9 +52,7 @@ export function LoginView({
         method: 'POST',
         body: JSON.stringify({
           email,
-          token: mode === 'admin' ? token : undefined,
-          password: mode === 'user' ? password : undefined,
-          mode,
+          password: secret,
         }),
       })
       notify(t('login.success'))
@@ -78,91 +65,39 @@ export function LoginView({
   }
 
   const localForm = (
-    <div className="space-y-4">
-      {hasAdminToken && allowLocalUser && (
-        <div className="grid grid-cols-2 gap-1 rounded-[var(--brand-radius-md)] bg-zinc-950 p-1 border border-zinc-800">
-          <button
-            type="button"
-            onClick={() => {
-              setMode('admin')
-              setEmail(defaultAdminEmail)
-            }}
-            className={cn(
-              'rounded-[var(--brand-radius-sm)] py-2 text-sm font-medium transition-colors cursor-pointer',
-              mode === 'admin'
-                ? 'brand-tab-active shadow-xs'
-                : 'text-zinc-400 hover:text-zinc-200',
-            )}
-          >
-            {t('login.modeAdmin')}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode('user')
-              if (email === defaultAdminEmail) {
-                setEmail('')
-              }
-            }}
-            className={cn(
-              'rounded-[var(--brand-radius-sm)] py-2 text-sm font-medium transition-colors cursor-pointer',
-              mode === 'user'
-                ? 'brand-tab-active shadow-xs'
-                : 'text-zinc-400 hover:text-zinc-200',
-            )}
-          >
-            {t('login.modeUser')}
-          </button>
-        </div>
-      )}
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-1.5">
+        <Label>{t('login.unifiedEmailLabel')}</Label>
+        <Input
+          type="email"
+          required
+          autoComplete="username"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="user@company.com"
+        />
+      </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label>
-            {mode === 'admin' ? t('login.adminEmailLabel') : t('login.userEmailLabel')}
-          </Label>
-          <Input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="user@example.com"
-          />
-        </div>
+      <div className="space-y-1.5">
+        <Label>
+          {hasAdminLogin ? t('login.unifiedSecretLabel') : t('login.passwordLabel')}
+        </Label>
+        <Input
+          type="password"
+          required
+          autoComplete="current-password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          placeholder={
+            hasAdminLogin ? t('login.unifiedSecretPh') : t('login.passwordPlaceholder')
+          }
+        />
+      </div>
 
-        {mode === 'admin' ? (
-          <div className="space-y-1.5">
-            <Label>{t('login.tokenLabel')}</Label>
-            <Input
-              type="password"
-              required
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder={t('login.tokenPlaceholder')}
-            />
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            <Label>{t('login.passwordLabel')}</Label>
-            <Input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t('login.passwordPlaceholder')}
-            />
-          </div>
-        )}
-
-        <Button type="submit" className="w-full" disabled={submitting}>
-          {submitting
-            ? t('login.submitting')
-            : mode === 'admin'
-              ? t('login.submitAdmin')
-              : t('login.submitUser')}
-        </Button>
-      </form>
-    </div>
+      <Button type="submit" className="w-full" disabled={submitting}>
+        {submitting ? t('login.submitting') : t('login.unifiedSubmit')}
+      </Button>
+    </form>
   )
 
   return (
@@ -206,14 +141,14 @@ export function LoginView({
             </div>
           )}
 
-          {oidcProviders.length > 0 && !allowLocalUser && hasAdminToken ? (
+          {oidcProviders.length > 0 && !allowLocalUser && hasAdminLogin ? (
             <details className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/50 p-3.5">
               <summary className="cursor-pointer text-sm text-zinc-400 hover:text-zinc-200 select-none">
                 {t('login.adminFallbackToggle')}
               </summary>
               <div className="mt-3">{localForm}</div>
             </details>
-          ) : allowLocalUser || hasAdminToken ? (
+          ) : allowLocalUser || hasAdminLogin ? (
             <>
               {oidcProviders.length > 0 && (
                 <div className="relative flex items-center py-0.5">

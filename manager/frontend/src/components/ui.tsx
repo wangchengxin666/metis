@@ -140,12 +140,12 @@ export const Select = React.forwardRef<
     ref={ref}
     style={{
       backgroundImage: SELECT_CHEVRON_BG,
-      backgroundPosition: 'right 0.5rem center',
+      backgroundPosition: 'right 0.65rem center',
       backgroundSize: '0.875rem 0.875rem',
       ...style,
     }}
     className={cn(
-      'appearance-none block h-10 w-full min-w-0 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 bg-no-repeat pl-3 pr-7 py-0 text-sm leading-normal text-zinc-100 shadow-xs brand-ring disabled:cursor-not-allowed disabled:opacity-50',
+      'dsh-select appearance-none block h-10 w-full min-w-0 truncate whitespace-nowrap overflow-hidden rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/90 bg-no-repeat pl-3 pr-8 py-0 text-sm leading-9 text-zinc-100 shadow-xs brand-ring disabled:cursor-not-allowed disabled:opacity-50',
       className,
     )}
     {...props}

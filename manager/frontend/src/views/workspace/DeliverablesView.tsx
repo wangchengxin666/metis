@@ -181,12 +181,9 @@ export function DeliverablesView({
       {/* Header */}
       {!compact ? (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-5">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-              {t('deliverables.title')}
-            </h1>
-            <p className="text-sm text-zinc-400 mt-1">{t('deliverables.subtitle')}</p>
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+            {t('deliverables.title')}
+          </h1>
           <Button
             variant="outline"
             size="sm"

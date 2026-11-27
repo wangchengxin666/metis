@@ -38,6 +38,10 @@ export interface PlaybookEditorFormData {
   input_fields: PlaybookInputField[]
   stages: PlaybookStageSpec[]
   deliverables_checklist: string[]
+  schedule_cron?: string | null
+  schedule_enabled?: boolean
+  schedule_timezone?: string
+  webhook_secret?: string
 }
 
 const DEFAULT_STAGE = (idx: number): PlaybookStageSpec => ({
@@ -46,6 +50,11 @@ const DEFAULT_STAGE = (idx: number): PlaybookStageSpec => ({
   role_hint: '',
   template_key_hint: '',
   parallel_group: null,
+  depends_on: [],
+  timeout_seconds: null,
+  max_retries: 0,
+  on_reject_goto: null,
+  skip_if: null,
   approval_required: false,
   prompt_template: '',
   deliverable_hint: '',
@@ -119,6 +128,10 @@ function createEmptyForm(): PlaybookEditorFormData {
       },
     ],
     deliverables_checklist: [],
+    schedule_cron: '',
+    schedule_enabled: false,
+    schedule_timezone: 'Asia/Shanghai',
+    webhook_secret: '',
   }
 }
 
@@ -140,8 +153,17 @@ export function playbookItemToForm(
     stages: (pb.stages || []).map((s) => ({
       ...s,
       parallel_group: s.parallel_group || null,
+      depends_on: Array.isArray(s.depends_on) ? [...s.depends_on] : [],
+      timeout_seconds: s.timeout_seconds ?? null,
+      max_retries: s.max_retries ?? 0,
+      on_reject_goto: s.on_reject_goto ?? null,
+      skip_if: s.skip_if ?? null,
     })),
     deliverables_checklist: [...(pb.deliverables_checklist || [])],
+    schedule_cron: pb.schedule_cron || '',
+    schedule_enabled: Boolean(pb.schedule_enabled),
+    schedule_timezone: pb.schedule_timezone || 'Asia/Shanghai',
+    webhook_secret: '',
   }
 }
 
@@ -329,6 +351,19 @@ export function PlaybookEditorDialog({
           role_hint: (s.role_hint || '').trim(),
           template_key_hint: (s.template_key_hint || '').trim(),
           parallel_group: (s.parallel_group || '').trim() || null,
+          depends_on: Array.isArray(s.depends_on)
+            ? s.depends_on.map((d) => d.trim()).filter((d) => d && d !== sid)
+            : [],
+          timeout_seconds:
+            s.timeout_seconds != null && Number(s.timeout_seconds) >= 10
+              ? Math.round(Number(s.timeout_seconds))
+              : null,
+          max_retries:
+            s.max_retries != null && Number(s.max_retries) > 0
+              ? Math.min(5, Math.round(Number(s.max_retries)))
+              : 0,
+          on_reject_goto: (s.on_reject_goto || '').trim() || null,
+          skip_if: (s.skip_if || '').trim() || null,
           approval_required: Boolean(s.approval_required),
           prompt_template: (s.prompt_template || sname).trim(),
           deliverable_hint: (s.deliverable_hint || '').trim(),
@@ -339,6 +374,15 @@ export function PlaybookEditorDialog({
         .split('\n')
         .map((x) => x.trim())
         .filter(Boolean)
+
+      const triggerPayload: Record<string, unknown> = {
+        schedule_cron: (form.schedule_cron || '').trim() || null,
+        schedule_enabled: Boolean(form.schedule_enabled && (form.schedule_cron || '').trim()),
+        schedule_timezone: (form.schedule_timezone || 'Asia/Shanghai').trim() || 'UTC',
+      }
+      if ((form.webhook_secret || '').trim()) {
+        triggerPayload.webhook_secret = (form.webhook_secret || '').trim()
+      }
 
       if (editing) {
         await apiFetch(`/api/playbooks/${editing.id}`, {
@@ -352,6 +396,7 @@ export function PlaybookEditorDialog({
             input_fields: cleanFields,
             stages: cleanStages,
             deliverables_checklist: cleanChecklist,
+            ...triggerPayload,
           }),
         })
         notify(t('playbooks.editorUpdated'))
@@ -369,6 +414,7 @@ export function PlaybookEditorDialog({
             input_fields: cleanFields,
             stages: cleanStages,
             deliverables_checklist: cleanChecklist,
+            ...triggerPayload,
           }),
         })
         notify(t('playbooks.editorCreated'))
@@ -822,6 +868,123 @@ export function PlaybookEditorDialog({
                       }
                     />
                   </div>
+
+                  {form.stages.length > 1 && (
+                    <div className="sm:col-span-12 space-y-1.5 rounded border border-zinc-800/80 bg-zinc-900/40 p-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Label className="text-[11px] text-zinc-400">
+                          {t('playbooks.editorStageDependsOn')}
+                        </Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {form.stages
+                            .filter((_, oIdx) => oIdx !== idx)
+                            .map((other, oIdx) => {
+                              const otherId = (other.id || `stage_${oIdx + 1}`).trim()
+                              const activeDeps = Array.isArray(st.depends_on) ? st.depends_on : []
+                              const selected = activeDeps.includes(otherId)
+                              return (
+                                <button
+                                  key={otherId}
+                                  type="button"
+                                  onClick={() => {
+                                    const next = selected
+                                      ? activeDeps.filter((d) => d !== otherId)
+                                      : [...activeDeps, otherId]
+                                    updateStage(idx, { depends_on: next })
+                                  }}
+                                  className={cn(
+                                    'rounded px-2 py-0.5 text-[11px] font-mono border cursor-pointer transition-colors',
+                                    selected
+                                      ? 'border-indigo-500/60 bg-indigo-500/20 text-indigo-200'
+                                      : 'border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200',
+                                  )}
+                                >
+                                  {other.name || otherId}
+                                </button>
+                              )
+                            })}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-zinc-400">
+                            {t('playbooks.editorStageSlaSeconds')}
+                          </Label>
+                          <Input
+                            type="number"
+                            min={10}
+                            step={30}
+                            placeholder="600"
+                            className="h-7 text-xs font-mono"
+                            value={st.timeout_seconds ?? ''}
+                            onChange={(e) => {
+                              const v = e.target.value.trim()
+                              updateStage(idx, {
+                                timeout_seconds: v ? Math.max(10, Number.parseInt(v, 10) || 10) : null,
+                              })
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-zinc-400">
+                            {t('playbooks.editorStageMaxRetries')}
+                          </Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={5}
+                            step={1}
+                            placeholder="0"
+                            className="h-7 text-xs font-mono"
+                            value={st.max_retries ?? 0}
+                            onChange={(e) => {
+                              const n = Number.parseInt(e.target.value, 10)
+                              updateStage(idx, {
+                                max_retries: Number.isFinite(n) ? Math.max(0, Math.min(5, n)) : 0,
+                              })
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-zinc-400">
+                            {t('playbooks.editorStageRejectGoto')}
+                          </Label>
+                          <Select
+                            className="h-7 text-xs"
+                            value={st.on_reject_goto || ''}
+                            onChange={(e) =>
+                              updateStage(idx, { on_reject_goto: e.target.value || null })
+                            }
+                          >
+                            <option value="">{t('playbooks.editorStageRejectNone')}</option>
+                            {form.stages
+                              .filter((_, oIdx) => oIdx !== idx && oIdx < idx)
+                              .map((other, oIdx) => {
+                                const otherId = (other.id || `stage_${oIdx + 1}`).trim()
+                                return (
+                                  <option key={otherId} value={otherId}>
+                                    ↩ {other.name || otherId}
+                                  </option>
+                                )
+                              })}
+                          </Select>
+                        </div>
+                        <div className="sm:col-span-3 space-y-1">
+                          <Label className="text-[11px] text-zinc-400">
+                            {t('playbooks.editorStageSkipIf')}
+                          </Label>
+                          <Input
+                            className="h-7 text-xs font-mono"
+                            placeholder={t('playbooks.editorStageSkipIfPh')}
+                            value={st.skip_if || ''}
+                            onChange={(e) =>
+                              updateStage(idx, { skip_if: e.target.value || null })
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -844,6 +1007,20 @@ export function PlaybookEditorDialog({
                           {`{{${vc.key}}}`}
                         </button>
                       ))}
+                      {form.stages.slice(0, idx).map((prevSt, pIdx) => {
+                        const pid = (prevSt.id || `stage_${pIdx + 1}`).trim()
+                        return (
+                          <button
+                            key={`stage_out_${pid}`}
+                            type="button"
+                            onClick={() => insertVariableIntoStage(idx, `stage.${pid}.output`)}
+                            className="rounded border border-sky-700/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] text-sky-300 hover:bg-sky-500/20 cursor-pointer"
+                            title={prevSt.name || pid}
+                          >
+                            {`{{stage.${pid}.output}}`}
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                   <Textarea
@@ -870,6 +1047,72 @@ export function PlaybookEditorDialog({
             value={checklistText}
             onChange={(e) => setChecklistText(e.target.value)}
           />
+        </div>
+
+        {/* Section 5: Cron Schedule & Webhook Triggers */}
+        <div className="rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/60 p-3.5 space-y-3">
+          <div className="text-xs font-medium text-zinc-200">
+            {t('playbooks.editorTriggersTitle')}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+            <div className="sm:col-span-5 space-y-1">
+              <Label className="text-[11px] text-zinc-400">
+                {t('playbooks.editorCronLabel')}
+              </Label>
+              <Input
+                className="h-8 text-xs font-mono"
+                placeholder={t('playbooks.editorCronPh')}
+                value={form.schedule_cron || ''}
+                onChange={(e) => setForm({ ...form, schedule_cron: e.target.value })}
+              />
+            </div>
+            <div className="sm:col-span-3 space-y-1">
+              <Label className="text-[11px] text-zinc-400">
+                {t('playbooks.editorTimezoneLabel')}
+              </Label>
+              <Input
+                className="h-8 text-xs font-mono"
+                placeholder="Asia/Shanghai"
+                value={form.schedule_timezone || 'Asia/Shanghai'}
+                onChange={(e) => setForm({ ...form, schedule_timezone: e.target.value })}
+              />
+            </div>
+            <div className="sm:col-span-4 flex items-end pb-1">
+              <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.schedule_enabled)}
+                  onChange={(e) =>
+                    setForm({ ...form, schedule_enabled: e.target.checked })
+                  }
+                  className="rounded border-zinc-700 accent-indigo-500"
+                />
+                <span>{t('playbooks.editorCronEnabledLabel')}</span>
+              </label>
+            </div>
+            <div className="sm:col-span-7 space-y-1">
+              <Label className="text-[11px] text-zinc-400">
+                {t('playbooks.editorWebhookSecretLabel')}
+              </Label>
+              <Input
+                type="password"
+                className="h-8 text-xs font-mono"
+                placeholder={t('playbooks.editorWebhookSecretPh')}
+                value={form.webhook_secret || ''}
+                onChange={(e) => setForm({ ...form, webhook_secret: e.target.value })}
+              />
+            </div>
+            {editing?.webhook_url && (
+              <div className="sm:col-span-5 space-y-1">
+                <Label className="text-[11px] text-zinc-400">
+                  {t('playbooks.editorWebhookUrlLabel')}
+                </Label>
+                <div className="h-8 flex items-center rounded border border-zinc-800 bg-zinc-900/70 px-2 font-mono text-[11px] text-indigo-300 truncate">
+                  POST {editing.webhook_url}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800">

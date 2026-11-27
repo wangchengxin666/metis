@@ -8,7 +8,7 @@ import {
   RefreshCw,
   Sparkles,
 } from 'lucide-react'
-import { Button, cn } from '../../components/ui'
+import { Badge, Button, cn } from '../../components/ui'
 import { BackupRestoreDialog } from '../../components/BackupRestoreDialog'
 import { WorkforceInspectorDialog } from '../../components/WorkforceInspectorDialog'
 import { type AdminSection, apiFetch } from '../../lib/client.ts'
@@ -117,6 +117,11 @@ export function AdminConsoleView({
     ownership_mode: 'personal',
     maintainer_emails: '',
     daily_cost_limit: '',
+    monthly_cost_limit: '',
+    rpm_limit: '',
+    tpm_limit: '',
+    max_concurrent_requests: '',
+    dlp_mode: '',
     budget_action: 'block',
     image_repo: 'dsh-sandbox',
     image_tag: 'latest',
@@ -152,6 +157,11 @@ export function AdminConsoleView({
     skill_ids: [],
     preview_auth_mode: 'public',
     daily_cost_limit: '',
+    monthly_cost_limit: '',
+    rpm_limit: '',
+    tpm_limit: '',
+    max_concurrent_requests: '',
+    dlp_mode: '',
     budget_action: 'block',
     auto_sleep_exempt: false,
   })
@@ -382,6 +392,19 @@ export function AdminConsoleView({
           daily_cost_limit: sbxForm.daily_cost_limit.trim()
             ? Math.max(0, Number.parseFloat(sbxForm.daily_cost_limit.trim()) || 0)
             : null,
+          monthly_cost_limit: sbxForm.monthly_cost_limit.trim()
+            ? Math.max(0, Number.parseFloat(sbxForm.monthly_cost_limit.trim()) || 0)
+            : null,
+          rpm_limit: sbxForm.rpm_limit.trim()
+            ? Math.max(0, Number.parseInt(sbxForm.rpm_limit.trim(), 10) || 0)
+            : null,
+          tpm_limit: sbxForm.tpm_limit.trim()
+            ? Math.max(0, Number.parseInt(sbxForm.tpm_limit.trim(), 10) || 0)
+            : null,
+          max_concurrent_requests: sbxForm.max_concurrent_requests.trim()
+            ? Math.max(0, Number.parseInt(sbxForm.max_concurrent_requests.trim(), 10) || 0)
+            : null,
+          dlp_mode: sbxForm.dlp_mode || null,
           budget_action: sbxForm.budget_action,
           image_repo: sbxForm.image_repo.trim() || null,
           image_tag: sbxForm.image_tag.trim() || null,
@@ -451,6 +474,19 @@ export function AdminConsoleView({
         sbx.daily_cost_limit != null && sbx.daily_cost_limit > 0
           ? String(sbx.daily_cost_limit)
           : '',
+      monthly_cost_limit:
+        sbx.monthly_cost_limit != null && sbx.monthly_cost_limit > 0
+          ? String(sbx.monthly_cost_limit)
+          : '',
+      rpm_limit:
+        sbx.rpm_limit != null && sbx.rpm_limit > 0 ? String(sbx.rpm_limit) : '',
+      tpm_limit:
+        sbx.tpm_limit != null && sbx.tpm_limit > 0 ? String(sbx.tpm_limit) : '',
+      max_concurrent_requests:
+        sbx.max_concurrent_requests != null && sbx.max_concurrent_requests > 0
+          ? String(sbx.max_concurrent_requests)
+          : '',
+      dlp_mode: (sbx.dlp_mode as '' | 'off' | 'redact' | 'block') || '',
       budget_action: sbx.budget_action || 'block',
       auto_sleep_exempt: Boolean(sbx.auto_sleep_exempt),
     })
@@ -477,6 +513,18 @@ export function AdminConsoleView({
       const costLimitNum = editSbxForm.daily_cost_limit.trim()
         ? Math.max(0, Number.parseFloat(editSbxForm.daily_cost_limit.trim()) || 0)
         : 0
+      const monthlyCostLimitNum = editSbxForm.monthly_cost_limit.trim()
+        ? Math.max(0, Number.parseFloat(editSbxForm.monthly_cost_limit.trim()) || 0)
+        : 0
+      const rpmLimitNum = editSbxForm.rpm_limit.trim()
+        ? Math.max(0, Number.parseInt(editSbxForm.rpm_limit.trim(), 10) || 0)
+        : 0
+      const tpmLimitNum = editSbxForm.tpm_limit.trim()
+        ? Math.max(0, Number.parseInt(editSbxForm.tpm_limit.trim(), 10) || 0)
+        : 0
+      const maxConcurrentNum = editSbxForm.max_concurrent_requests.trim()
+        ? Math.max(0, Number.parseInt(editSbxForm.max_concurrent_requests.trim(), 10) || 0)
+        : 0
       await apiFetch(`/api/sandboxes/${editSbx.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -499,6 +547,11 @@ export function AdminConsoleView({
           skill_ids: editSbxForm.skill_ids,
           preview_auth_mode: editSbxForm.preview_auth_mode,
           daily_cost_limit: costLimitNum,
+          monthly_cost_limit: monthlyCostLimitNum,
+          rpm_limit: rpmLimitNum,
+          tpm_limit: tpmLimitNum,
+          max_concurrent_requests: maxConcurrentNum,
+          dlp_mode: editSbxForm.dlp_mode || null,
           budget_action: editSbxForm.budget_action,
           auto_sleep_exempt: editSbxForm.auto_sleep_exempt,
         }),
@@ -721,6 +774,35 @@ export function AdminConsoleView({
               {overview?.allocated_cpus ?? 0} {t('admin.kpi.quotaUnit')}
             </strong>
           </span>
+          {overview?.database_backend && (
+            <>
+              <span className="text-zinc-700 hidden sm:inline">·</span>
+              <span className="inline-flex items-center gap-1.5 text-xs">
+                <Badge variant="outline" className="font-mono text-[11px] border-sky-500/40 text-sky-300">
+                  {overview.database_backend}
+                </Badge>
+                {overview.coordination && (
+                  <Badge
+                    variant="outline"
+                    className={
+                      overview.coordination.redis_connected
+                        ? 'text-[11px] border-emerald-500/40 text-emerald-300'
+                        : 'text-[11px] border-zinc-700 text-zinc-300'
+                    }
+                  >
+                    {overview.coordination.redis_connected
+                      ? t('admin.cluster.redisOk')
+                      : overview.coordination.mode === 'sql_lease'
+                        ? t('admin.cluster.dbLease')
+                        : t('admin.cluster.localOnly')}
+                    {' · '}
+                    {t('admin.cluster.workers', { count: overview.coordination.workers })}
+                    {overview.coordination.is_scheduler_leader ? ` · ${t('admin.cluster.leader')}` : ''}
+                  </Badge>
+                )}
+              </span>
+            </>
+          )}
           <span className="text-zinc-700 hidden sm:inline">·</span>
           <button
             type="button"

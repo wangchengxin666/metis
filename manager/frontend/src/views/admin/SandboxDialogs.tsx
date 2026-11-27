@@ -28,6 +28,11 @@ export interface ProvisionFormState {
   ownership_mode: 'personal' | 'shared'
   maintainer_emails: string
   daily_cost_limit: string
+  monthly_cost_limit: string
+  rpm_limit: string
+  tpm_limit: string
+  max_concurrent_requests: string
+  dlp_mode: '' | 'off' | 'redact' | 'block'
   budget_action: 'block' | 'downgrade' | 'warn'
   image_repo: string
   image_tag: string
@@ -80,6 +85,11 @@ export interface EditSandboxFormState {
   skill_ids: string[]
   preview_auth_mode: string
   daily_cost_limit: string
+  monthly_cost_limit: string
+  rpm_limit: string
+  tpm_limit: string
+  max_concurrent_requests: string
+  dlp_mode: '' | 'off' | 'redact' | 'block'
   budget_action: 'block' | 'downgrade' | 'warn'
   auto_sleep_exempt: boolean
 }
@@ -308,6 +318,76 @@ export function ProvisionSandboxDialog({
                 value={sbxForm.daily_cost_limit}
                 onChange={(e) => setSbxForm({ ...sbxForm, daily_cost_limit: e.target.value })}
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.monthlyCostLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="e.g. 100.00"
+                value={sbxForm.monthly_cost_limit}
+                onChange={(e) =>
+                  setSbxForm({ ...sbxForm, monthly_cost_limit: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.rpmLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="e.g. 60"
+                value={sbxForm.rpm_limit}
+                onChange={(e) => setSbxForm({ ...sbxForm, rpm_limit: e.target.value })}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.tpmLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1000"
+                placeholder="e.g. 120000"
+                value={sbxForm.tpm_limit}
+                onChange={(e) => setSbxForm({ ...sbxForm, tpm_limit: e.target.value })}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.concurrencyLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="e.g. 6"
+                value={sbxForm.max_concurrent_requests}
+                onChange={(e) =>
+                  setSbxForm({ ...sbxForm, max_concurrent_requests: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.dlpModeLabel')}</Label>
+              <Select
+                value={sbxForm.dlp_mode}
+                onChange={(e) =>
+                  setSbxForm({
+                    ...sbxForm,
+                    dlp_mode: e.target.value as '' | 'off' | 'redact' | 'block',
+                  })
+                }
+              >
+                <option value="">{t('sandbox.dlpInherit')}</option>
+                <option value="redact">{t('admin.llm.dlpRedact')}</option>
+                <option value="block">{t('admin.llm.dlpBlock')}</option>
+                <option value="off">{t('admin.llm.dlpOff')}</option>
+              </Select>
             </div>
 
             <div className="space-y-1.5">
@@ -908,6 +988,78 @@ export function EditSandboxDialog({
                   setEditSbxForm({ ...editSbxForm, daily_cost_limit: e.target.value })
                 }
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.monthlyCostLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="e.g. 100.00"
+                value={editSbxForm.monthly_cost_limit}
+                onChange={(e) =>
+                  setEditSbxForm({ ...editSbxForm, monthly_cost_limit: e.target.value })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.rpmLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="e.g. 60"
+                value={editSbxForm.rpm_limit}
+                onChange={(e) =>
+                  setEditSbxForm({ ...editSbxForm, rpm_limit: e.target.value })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.tpmLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1000"
+                placeholder="e.g. 120000"
+                value={editSbxForm.tpm_limit}
+                onChange={(e) =>
+                  setEditSbxForm({ ...editSbxForm, tpm_limit: e.target.value })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.concurrencyLimitLabel')}</Label>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="e.g. 6"
+                value={editSbxForm.max_concurrent_requests}
+                onChange={(e) =>
+                  setEditSbxForm({
+                    ...editSbxForm,
+                    max_concurrent_requests: e.target.value,
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t('sandbox.dlpModeLabel')}</Label>
+              <Select
+                value={editSbxForm.dlp_mode}
+                onChange={(e) =>
+                  setEditSbxForm({
+                    ...editSbxForm,
+                    dlp_mode: e.target.value as '' | 'off' | 'redact' | 'block',
+                  })
+                }
+              >
+                <option value="">{t('sandbox.dlpInherit')}</option>
+                <option value="redact">{t('admin.llm.dlpRedact')}</option>
+                <option value="block">{t('admin.llm.dlpBlock')}</option>
+                <option value="off">{t('admin.llm.dlpOff')}</option>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <Label>{t('sandbox.ownershipLabel')}</Label>

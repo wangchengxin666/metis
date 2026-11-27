@@ -41,6 +41,7 @@ const ALL_EVENTS: NotificationEventType[] = [
   'sandbox.unhealthy',
   'budget.warning',
   'budget.exceeded',
+  'stage.timeout',
 ]
 
 interface ChannelFormState {
@@ -124,6 +125,7 @@ export function NotificationsTab({
     if (ev === 'sandbox.unhealthy') return t('notif.eventUnhealthy')
     if (ev === 'budget.warning') return t('notif.eventBudgetWarn')
     if (ev === 'budget.exceeded') return t('notif.eventBudgetExceeded')
+    if (ev === 'stage.timeout') return t('notif.eventStageTimeout')
     return ev
   }
 

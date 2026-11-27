@@ -9,6 +9,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import httpx
 from authlib.integrations.starlette_client import OAuth
 
+from .coordination import bump_config_version, get_config_version
 from .models import OidcProvider
 from .security import decrypt_secret
 
@@ -101,6 +102,8 @@ class OidcClientRegistry:
             provider.issuer_url,
             provider.discovery_url or "",
             provider.scope,
+            provider.updated_at.isoformat() if getattr(provider, "updated_at", None) else "",
+            get_config_version(f"oidc:{provider.slug}"),
             os.environ.get("SSL_CERT_FILE", ""),
         )
 
@@ -141,6 +144,7 @@ class OidcClientRegistry:
             return client
 
     def invalidate(self, slug: str) -> None:
+        bump_config_version(f"oidc:{slug}")
         with self._lock:
             self._clients.pop(slug, None)
 

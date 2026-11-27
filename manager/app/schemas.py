@@ -195,6 +195,11 @@ class SandboxCreate(BaseModel):
     team_ids: list[str] = Field(default_factory=list)
     daily_token_limit: int | None = Field(default=None, ge=1000, le=1_000_000_000)
     daily_cost_limit: float | None = Field(default=None, ge=0, le=1_000_000)
+    monthly_cost_limit: float | None = Field(default=None, ge=0, le=10_000_000)
+    rpm_limit: int | None = Field(default=None, ge=0, le=100_000)
+    tpm_limit: int | None = Field(default=None, ge=0, le=100_000_000)
+    max_concurrent_requests: int | None = Field(default=None, ge=0, le=10_000)
+    dlp_mode: Literal["off", "redact", "block"] | None = None
     budget_action: BUDGET_ACTIONS = "block"
 
     @field_validator("initial_password")
@@ -227,6 +232,11 @@ class SandboxPatch(BaseModel):
     maintainer_emails: list[str] | None = None
     daily_token_limit: int | None = Field(default=None, ge=0, le=1_000_000_000)
     daily_cost_limit: float | None = Field(default=None, ge=0, le=1_000_000)
+    monthly_cost_limit: float | None = Field(default=None, ge=0, le=10_000_000)
+    rpm_limit: int | None = Field(default=None, ge=0, le=100_000)
+    tpm_limit: int | None = Field(default=None, ge=0, le=100_000_000)
+    max_concurrent_requests: int | None = Field(default=None, ge=0, le=10_000)
+    dlp_mode: Literal["off", "redact", "block"] | None = None
     budget_action: BUDGET_ACTIONS | None = None
     rotate_webhook_token: bool = False
     rotate_gateway_key: bool = False
@@ -272,6 +282,11 @@ class SandboxOut(BaseModel):
     has_gateway_api_key: bool = False
     daily_token_limit: int | None = None
     daily_cost_limit: float | None = None
+    monthly_cost_limit: float | None = None
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
+    max_concurrent_requests: int | None = None
+    dlp_mode: str | None = None
     budget_action: str = "block"
     project_team_name: str | None = None
     team_ids: list[str] = Field(default_factory=list)
@@ -354,6 +369,24 @@ LLM_THINKING_FORMATS = Literal[
 ]
 
 
+class LlmKeyPoolEntry(BaseModel):
+    id: str | None = None
+    label: str = Field(default="pool-key", min_length=1, max_length=64)
+    base_url: str | None = Field(default=None, max_length=512)
+    api_key: str = ""
+    weight: int = Field(default=1, ge=1, le=100)
+    enabled: bool = True
+
+
+class LlmKeyPoolOut(BaseModel):
+    id: str
+    label: str
+    base_url: str | None = None
+    has_api_key: bool = False
+    weight: int = 1
+    enabled: bool = True
+
+
 class LlmProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     base_url: str = Field(min_length=1, max_length=512)
@@ -368,7 +401,13 @@ class LlmProfileCreate(BaseModel):
     gateway_enabled: bool = False
     input_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
     output_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    cache_read_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    cache_creation_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    key_pool: list[LlmKeyPoolEntry] = Field(default_factory=list)
+    tpm_limit: int | None = Field(default=None, ge=0, le=100_000_000)
+    dlp_mode: Literal["off", "redact", "block"] = "off"
     fallback_llm_profile_id: str | None = None
+    circuit_breaker_enabled: bool = True
 
 
 class LlmProfileUpdate(BaseModel):
@@ -386,7 +425,13 @@ class LlmProfileUpdate(BaseModel):
     gateway_enabled: bool | None = None
     input_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
     output_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    cache_read_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    cache_creation_price_per_1m: float | None = Field(default=None, ge=0, le=10000)
+    key_pool: list[LlmKeyPoolEntry] | None = None
+    tpm_limit: int | None = Field(default=None, ge=0, le=100_000_000)
+    dlp_mode: Literal["off", "redact", "block"] | None = None
     fallback_llm_profile_id: str | None = None
+    circuit_breaker_enabled: bool | None = None
 
 
 class LlmProfileOut(BaseModel):
@@ -406,7 +451,13 @@ class LlmProfileOut(BaseModel):
     gateway_enabled: bool = False
     input_price_per_1m: float | None = None
     output_price_per_1m: float | None = None
+    cache_read_price_per_1m: float | None = None
+    cache_creation_price_per_1m: float | None = None
+    key_pool: list[LlmKeyPoolOut] = Field(default_factory=list)
+    tpm_limit: int | None = None
+    dlp_mode: str = "off"
     fallback_llm_profile_id: str | None = None
+    circuit_breaker_enabled: bool = True
 
 
 class LlmProfilePushRequest(BaseModel):
@@ -1062,6 +1113,7 @@ NOTIFICATION_EVENT_TYPES = Literal[
     "sandbox.unhealthy",
     "budget.warning",
     "budget.exceeded",
+    "stage.timeout",
 ]
 
 
@@ -1263,6 +1315,11 @@ class PlaybookStageSpec(BaseModel):
     role_hint: str = ""
     template_key_hint: str = ""
     parallel_group: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    timeout_seconds: int | None = Field(default=None, ge=10, le=86400 * 7)
+    max_retries: int = Field(default=0, ge=0, le=5)
+    on_reject_goto: str | None = Field(default=None, max_length=64)
+    skip_if: str | None = Field(default=None, max_length=512)
     approval_required: bool = False
     prompt_template: str = Field(min_length=1, max_length=6000)
     deliverable_hint: str = ""
@@ -1278,6 +1335,11 @@ class PlaybookCreate(BaseModel):
     input_fields: list[PlaybookInputField] = Field(default_factory=list)
     stages: list[PlaybookStageSpec] = Field(min_length=1, max_length=12)
     deliverables_checklist: list[str] = Field(default_factory=list)
+    schedule_cron: str | None = Field(default=None, max_length=128)
+    schedule_enabled: bool = False
+    schedule_timezone: str = Field(default="UTC", max_length=64)
+    schedule_inputs: dict[str, str] = Field(default_factory=dict)
+    webhook_secret: str | None = Field(default=None, max_length=256)
 
 
 class PlaybookUpdate(BaseModel):
@@ -1289,6 +1351,12 @@ class PlaybookUpdate(BaseModel):
     input_fields: list[PlaybookInputField] | None = None
     stages: list[PlaybookStageSpec] | None = None
     deliverables_checklist: list[str] | None = None
+    schedule_cron: str | None = Field(default=None, max_length=128)
+    schedule_enabled: bool | None = None
+    schedule_timezone: str | None = Field(default=None, max_length=64)
+    schedule_inputs: dict[str, str] | None = None
+    webhook_secret: str | None = Field(default=None, max_length=256)
+    clear_webhook_secret: bool = False
 
 
 class PlaybookImportPayload(BaseModel):
@@ -1334,6 +1402,40 @@ class MemoryPromoteRequest(BaseModel):
     target_team_id: str | None = None
     target_file_name: str = Field(default="TEAM_PLAYBOOK_SOP.md", max_length=128)
     rollout_sandbox_ids: list[str] = Field(default_factory=list)
+
+
+class ToolPolicyRuleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    enabled: bool = True
+    tool_pattern: str = Field(min_length=1, max_length=255)
+    arg_regex: str | None = Field(default=None, max_length=512)
+    action: Literal["require_approval", "block", "audit"] = "require_approval"
+    scope_sandbox_id: str | None = None
+    description: str | None = Field(default=None, max_length=512)
+
+
+class ToolPolicyRuleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    enabled: bool | None = None
+    tool_pattern: str | None = Field(default=None, min_length=1, max_length=255)
+    arg_regex: str | None = Field(default=None, max_length=512)
+    action: Literal["require_approval", "block", "audit"] | None = None
+    scope_sandbox_id: str | None = None
+    description: str | None = Field(default=None, max_length=512)
+
+
+class ToolApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: str = Field(default="", max_length=512)
+
+
+class MemoryKnowledgeCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    category: str = Field(default="workflow", max_length=64)
+    tags_csv: str = Field(default="", max_length=512)
+    content: str = Field(min_length=1, max_length=16000)
+    template_id: str | None = None
+    team_id: str | None = None
 
 
 

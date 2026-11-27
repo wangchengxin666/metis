@@ -177,6 +177,8 @@ class BaseSandboxRuntime(SandboxSyncMixin, WorkforceInspectMixin, WorkforceOpera
             "METIS_GATEWAY_AUTH_SECRET": derive_sandbox_gateway_secret(
                 sandbox.id, sandbox.slug
             ),
+            "METIS_MANAGER_URL": manager_url,
+            "METIS_SANDBOX_SLUG": sandbox.slug,
             "DSH_PERMISSION_MODE": self.settings.dsh_permission_mode,
             "DSH_PLUGIN_INDEX_URL": f"{manager_url}/plugins/index.json",
             "DSH_PLUGIN_NPM_REGISTRY": f"{manager_url}/plugins/npm",

@@ -85,6 +85,10 @@ def _seed_plugin_dir(root: Path) -> None:
 _seed_plugin_dir(_TEST_PLUGINS_DIR)
 
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_PATH.as_posix()}")
+os.environ.setdefault("ALLOW_SQLITE", "true")
+os.environ["MANAGER_WORKERS"] = "1"
+os.environ["REDIS_URL"] = ""
+os.environ["AUTO_MIGRATE_SQLITE_PATH"] = ""
 os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-32-chars-minimum"
 os.environ["MANAGER_AUTH_MODE"] = "token"
 os.environ["MANAGER_ADMIN_EMAIL"] = "admin@example.com"

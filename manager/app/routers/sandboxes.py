@@ -346,6 +346,11 @@ def create_sandbox_endpoint(
             team_ids=payload.team_ids,
             daily_token_limit=payload.daily_token_limit,
             daily_cost_limit=payload.daily_cost_limit,
+            monthly_cost_limit=payload.monthly_cost_limit,
+            rpm_limit=payload.rpm_limit,
+            tpm_limit=payload.tpm_limit,
+            max_concurrent_requests=payload.max_concurrent_requests,
+            dlp_mode=payload.dlp_mode,
             budget_action=payload.budget_action,
             credential_profile_ids=payload.credential_profile_ids,
             mcp_server_ids=payload.mcp_server_ids,
@@ -492,6 +497,11 @@ def patch_sandbox(
         and payload.maintainer_emails is None
         and payload.daily_token_limit is None
         and payload.daily_cost_limit is None
+        and payload.monthly_cost_limit is None
+        and payload.rpm_limit is None
+        and payload.tpm_limit is None
+        and payload.max_concurrent_requests is None
+        and payload.dlp_mode is None
         and payload.budget_action is None
         and not payload.rotate_webhook_token
         and not payload.rotate_gateway_key
@@ -619,16 +629,49 @@ def patch_sandbox(
             )
             db.commit()
         if payload.daily_cost_limit is not None:
-            sandbox.daily_cost_limit = (
-                round(float(payload.daily_cost_limit), 4)
-                if float(payload.daily_cost_limit) > 0
-                else None
-            )
+            rounded_daily = round(float(payload.daily_cost_limit), 6)
+            sandbox.daily_cost_limit = rounded_daily if rounded_daily > 0 else None
             audit(
                 db,
                 "sandbox.cost_budget",
                 target=sandbox.id,
                 detail=f"slug={sandbox.slug},daily_cost_limit={sandbox.daily_cost_limit}",
+            )
+            db.commit()
+        if payload.monthly_cost_limit is not None:
+            rounded_monthly = round(float(payload.monthly_cost_limit), 6)
+            sandbox.monthly_cost_limit = rounded_monthly if rounded_monthly > 0 else None
+            audit(
+                db,
+                "sandbox.monthly_cost_budget",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},monthly_cost_limit={sandbox.monthly_cost_limit}",
+            )
+            db.commit()
+        if payload.rpm_limit is not None:
+            sandbox.rpm_limit = (
+                int(payload.rpm_limit) if int(payload.rpm_limit) > 0 else None
+            )
+            audit(
+                db,
+                "sandbox.rpm_limit",
+                target=sandbox.id,
+                detail=f"slug={sandbox.slug},rpm_limit={sandbox.rpm_limit}",
+            )
+            db.commit()
+        if payload.tpm_limit is not None:
+            sandbox.tpm_limit = int(payload.tpm_limit) if int(payload.tpm_limit) > 0 else None
+            db.commit()
+        if payload.max_concurrent_requests is not None:
+            sandbox.max_concurrent_requests = (
+                int(payload.max_concurrent_requests)
+                if int(payload.max_concurrent_requests) > 0
+                else None
+            )
+            db.commit()
+        if payload.dlp_mode is not None:
+            sandbox.dlp_mode = (
+                payload.dlp_mode if payload.dlp_mode in {"off", "redact", "block"} else None
             )
             db.commit()
         if payload.rotate_webhook_token or not getattr(sandbox, "webhook_token", None):
@@ -856,8 +899,21 @@ def _handle_sleeping_sandbox_fallback(
     slug: str,
     request: Request,
     db: Session,
+    *,
+    rest: str = "",
 ) -> Response:
     """Traefik falls through here when a sandbox container is stopped or waking."""
+    clean_rest = rest.lstrip("/")
+    if clean_rest.startswith("p/4090/mesh/") and request.headers.get("x-mesh-from"):
+        return JSONResponse(
+            {
+                "detail": "工作区当前处于休眠状态",
+                "sleeping": True,
+                "slug": slug,
+            },
+            status_code=503,
+        )
+
     auth_resp = verify_sandbox_access(slug, request, db)
     if auth_resp.status_code != 200:
         return auth_resp
@@ -897,5 +953,4 @@ def sleeping_sandbox_fallback(
     rest: str = "",
     db: Session = Depends(get_db),
 ):
-    _ = rest
-    return _handle_sleeping_sandbox_fallback(slug, request, db)
+    return _handle_sleeping_sandbox_fallback(slug, request, db, rest=rest)

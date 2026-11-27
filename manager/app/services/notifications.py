@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
+from ..coordination import cluster_lock
 from ..models import NotificationChannel, NotificationDelivery
 from ..schemas import (
     NotificationChannelCreate,
@@ -45,6 +46,7 @@ EVENT_LABELS: dict[str, tuple[str, str]] = {
     "sandbox.unhealthy": ("数字员工异常离线", "Employee Unhealthy"),
     "budget.warning": ("预算预警", "Budget Warning"),
     "budget.exceeded": ("预算超限触发", "Budget Exceeded"),
+    "stage.timeout": ("编排阶段 SLA 超时", "Stage SLA Timeout"),
     "notification.test": ("通知通道连通性测试", "Notification Channel Test"),
 }
 
@@ -605,16 +607,32 @@ def _deliver_to_channel(
     skip_dedupe: bool = False,
 ) -> DeliveryResult:
     if not skip_dedupe and event.dedupe_key:
-        already = db.scalar(
-            select(NotificationDelivery.id).where(
-                NotificationDelivery.channel_id == channel.id,
-                NotificationDelivery.dedupe_key == event.dedupe_key,
-                NotificationDelivery.status == "sent",
+        with cluster_lock(f"notif:{channel.id}:{event.dedupe_key}", ttl_seconds=12.0, wait_seconds=2.5):
+            already = db.scalar(
+                select(NotificationDelivery.id).where(
+                    NotificationDelivery.channel_id == channel.id,
+                    NotificationDelivery.dedupe_key == event.dedupe_key,
+                    NotificationDelivery.status == "sent",
+                )
             )
-        )
-        if already:
-            return DeliveryResult(ok=True, detail="deduplicated")
+            if already:
+                return DeliveryResult(ok=True, detail="deduplicated")
+            res = _deliver_to_channel_unlocked(db, channel, event, brand_name=brand_name)
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            return res
+    return _deliver_to_channel_unlocked(db, channel, event, brand_name=brand_name)
 
+
+def _deliver_to_channel_unlocked(
+    db: Session,
+    channel: NotificationChannel,
+    event: NotificationEvent,
+    *,
+    brand_name: str,
+) -> DeliveryResult:
     connector = CONNECTOR_REGISTRY.get(channel.channel_type)
     if connector is None:
         res = DeliveryResult(ok=False, detail=f"unsupported channel type: {channel.channel_type}")
@@ -683,7 +701,7 @@ def dispatch_notification_event(
 
     channels = list(
         db.scalars(
-            select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
+            select(NotificationChannel).where(NotificationChannel.enabled == True)  # noqa: E712
         ).all()
     )
     sent = 0

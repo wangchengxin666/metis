@@ -1,11 +1,17 @@
-"""Interactive IM approval action pages & Feishu card callback endpoints."""
+"""Interactive IM approval action pages & bidirectional Feishu/Slack/WeCom Bot callback endpoints."""
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html as html_lib
+import json
+import re
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -16,8 +22,11 @@ from ..deps import (
     session_email,
     settings,
 )
+from ..models import NotificationChannel, Playbook, Sandbox
+from ..security import decrypt_secret
 from ..services import audit, load_sandbox
 from ..services.integrations import verify_approval_token
+from ..services.playbooks import serialize_playbook_run, start_playbook_run
 from ..services.workspace_hub import refresh_sandbox_snapshot
 
 router = APIRouter()
@@ -184,3 +193,198 @@ async def feishu_card_callback(
             },
         }
     )
+
+
+def _extract_im_text_and_actor(channel_type: str, payload: dict) -> tuple[str, str]:
+    ctype = channel_type.lower()
+    if ctype == "feishu":
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        msg = event.get("message") if isinstance(event.get("message"), dict) else {}
+        sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
+        sender_id = (sender.get("sender_id") or {}).get("open_id") or "feishu-user"
+        raw_content = str(msg.get("content") or payload.get("text") or "")
+        if raw_content.strip().startswith("{"):
+            try:
+                raw_content = str(json.loads(raw_content).get("text") or "")
+            except Exception:
+                pass
+        return raw_content.strip(), f"feishu:{sender_id}"
+    if ctype == "slack":
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        raw_text = str(event.get("text") or payload.get("text") or "").strip()
+        user_id = str(event.get("user") or payload.get("user_id") or "slack-user")
+        return raw_text, f"slack:{user_id}"
+    # WeCom / generic IM bot
+    raw_text = str(
+        payload.get("text", {}).get("content")
+        if isinstance(payload.get("text"), dict)
+        else (payload.get("content") or payload.get("text") or "")
+    ).strip()
+    actor_id = str(payload.get("from_user") or payload.get("userid") or "wecom-user")
+    return raw_text, f"{ctype}:{actor_id}"
+
+
+def _verify_im_inbound_auth(
+    db: Session,
+    channel_type: str,
+    request: Request,
+    payload: dict,
+    raw_body: bytes,
+) -> None:
+    """Verify optional IM Bot verification token or Slack signing secret when configured."""
+    channels = list(
+        db.scalars(
+            select(NotificationChannel).where(
+                NotificationChannel.channel_type == channel_type,
+                NotificationChannel.enabled == True,  # noqa: E712
+            )
+        ).all()
+    )
+    secrets_configured: list[str] = []
+    for ch in channels:
+        if ch.config_ciphertext:
+            try:
+                cfg = json.loads(decrypt_secret(ch.config_ciphertext))
+                sec = str(cfg.get("signing_secret") or cfg.get("bot_token") or "").strip()
+                if sec:
+                    secrets_configured.append(sec)
+            except Exception:
+                pass
+    if not secrets_configured:
+        return
+
+    provided_tok = str(
+        request.headers.get("x-metis-im-token")
+        or payload.get("token")
+        or (payload.get("header") or {}).get("token")
+        or ""
+    ).strip()
+    slack_sig = (request.headers.get("x-slack-signature") or "").strip()
+    slack_ts = (request.headers.get("x-slack-request-timestamp") or "").strip()
+
+    for sec in secrets_configured:
+        if provided_tok and hmac.compare_digest(provided_tok, sec):
+            return
+        if channel_type == "slack" and slack_sig and slack_ts:
+            base = f"v0:{slack_ts}:".encode("utf-8") + raw_body
+            exp = "v0=" + hmac.new(sec.encode("utf-8"), base, hashlib.sha256).hexdigest()
+            if hmac.compare_digest(exp, slack_sig):
+                return
+    raise HTTPException(status_code=401, detail="IM Bot 签名或 Token 校验失败")
+
+
+@router.post("/api/integrations/im/{channel_type}/events")
+async def im_bidirectional_events(
+    channel_type: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Unified bidirectional IM Bot endpoint (Feishu, Slack, WeCom) for approvals and '/run <playbook> <title>' dispatch."""
+    ctype = channel_type.strip().lower()
+    if ctype not in {"feishu", "slack", "wecom"}:
+        raise HTTPException(status_code=400, detail="不支持的 IM 渠道类型")
+
+    raw_body = await request.body()
+    content_type = (request.headers.get("content-type") or "").lower()
+    payload: dict = {}
+    if "application/x-www-form-urlencoded" in content_type:
+        form_map = parse_qs(raw_body.decode("utf-8", errors="replace"))
+        if "payload" in form_map and form_map["payload"]:
+            try:
+                payload = json.loads(form_map["payload"][0])
+            except Exception:
+                payload = {}
+        else:
+            payload = {k: v[0] for k, v in form_map.items() if v}
+    else:
+        try:
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid json payload")
+
+    if not isinstance(payload, dict):
+        payload = {}
+
+    # 1. URL verification challenges
+    if payload.get("challenge"):
+        return JSONResponse({"challenge": payload["challenge"]})
+
+    _verify_im_inbound_auth(db, ctype, request, payload, raw_body)
+
+    # 2. Interactive card approval callbacks (Feishu / Slack / WeCom button payloads)
+    if ctype == "slack" and payload.get("type") == "block_actions":
+        actions = payload.get("actions") or []
+        first = actions[0] if isinstance(actions, list) and actions else {}
+        raw_val = first.get("value") if isinstance(first, dict) else ""
+        try:
+            act_val = json.loads(raw_val) if isinstance(raw_val, str) and raw_val.startswith("{") else {}
+        except Exception:
+            act_val = {}
+        if act_val.get("token") and act_val.get("decision"):
+            user_name = str((payload.get("user") or {}).get("username") or "slack-user")
+            res = _execute_signed_approval(
+                db,
+                token=str(act_val["token"]),
+                decision=str(act_val["decision"]),
+                note=str(act_val.get("note") or ""),
+                actor=f"slack:{user_name}",
+            )
+            return JSONResponse({"ok": True, "text": f"Metis 审批完成：{res['decision']} (@{res['slug']})", **res})
+
+    if isinstance(payload.get("action"), dict) and isinstance(payload["action"].get("value"), dict):
+        val = payload["action"]["value"]
+        if val.get("token") and val.get("decision"):
+            actor_id = str(payload.get("open_id") or (payload.get("operator") or {}).get("open_id") or f"{ctype}-user")
+            res = _execute_signed_approval(
+                db,
+                token=str(val["token"]),
+                decision=str(val["decision"]),
+                note=str(val.get("note") or ""),
+                actor=f"{ctype}:{actor_id}",
+            )
+            return JSONResponse({"ok": True, **res})
+
+    # 3. Conversational IM command: `/run <playbook_key> <title...>` or `approve:<token>` / `reject:<token>`
+    text, actor = _extract_im_text_and_actor(ctype, payload)
+    clean_text = re.sub(r"<@[^>]+>", "", text).strip()
+
+    cmd_match = re.match(r"^(?:/)?(approve|reject)\s+(\S+)(?:\s+(.*))?$", clean_text, re.IGNORECASE)
+    if cmd_match:
+        decision = "approved" if cmd_match.group(1).lower() == "approve" else "rejected"
+        tok = cmd_match.group(2)
+        note = (cmd_match.group(3) or "").strip()
+        res = _execute_signed_approval(db, token=tok, decision=decision, note=note, actor=actor)
+        return JSONResponse({"ok": True, "reply": f"已{('批准' if decision == 'approved' else '驳回')} @{res['slug']} 任务 #{res['task_id']}", **res})
+
+    run_match = re.match(r"^(?:/run|run:)\s*([a-z0-9-]+)(?:\s+(.+))?$", clean_text, re.IGNORECASE)
+    if run_match:
+        pb_key = run_match.group(1).lower()
+        pb = db.scalar(select(Playbook).where(Playbook.key == pb_key, Playbook.enabled == True))  # noqa: E712
+        if not pb:
+            return JSONResponse({"ok": False, "reply": f"未找到已启用的 Playbook '{pb_key}'"}, status_code=404)
+        req_title = (run_match.group(2) or f"[{ctype.upper()}] {pb.name}").strip()
+        accessible = list(db.scalars(select(Sandbox).where(Sandbox.deleted_at.is_(None))).all())
+        first_field_key = pb.input_fields[0]["key"] if pb.input_fields else "topic"
+        inputs = {first_field_key: req_title, "feature_title": req_title}
+        run = start_playbook_run(
+            db,
+            settings,
+            resolve_docker(),
+            pb,
+            title=req_title,
+            inputs=inputs,
+            role_assignments={},
+            accessible_sandboxes=accessible,
+            actor=actor,
+        )
+        run_url = f"{settings.manager_base_url}/workforce?run={run.id}"
+        return JSONResponse(
+            {
+                "ok": True,
+                "reply": f"🚀 已通过 {ctype.upper()} 触发 Playbook「{pb.name}」：{req_title}\n查看进度：{run_url}",
+                "run": serialize_playbook_run(db, run),
+            },
+            status_code=201,
+        )
+
+    return JSONResponse({"ok": True, "ignored": True, "received_text": clean_text[:200]})

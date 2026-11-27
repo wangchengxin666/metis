@@ -168,6 +168,48 @@ def sanitize_brand_favicon(raw: str | None) -> str:
 
 
 
+def _encode_key_pool(
+    entries: list[Any] | None,
+    existing_json: str = "[]",
+) -> str:
+    if entries is None:
+        return existing_json
+    from ..security import encrypt_secret
+
+    try:
+        prev_list = json.loads(existing_json or "[]")
+        prev_by_id = {
+            str(item.get("id")): item
+            for item in (prev_list if isinstance(prev_list, list) else [])
+            if isinstance(item, dict) and item.get("id")
+        }
+    except Exception:
+        prev_by_id = {}
+
+    encoded = []
+    for idx, raw in enumerate(entries):
+        d = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
+        kid = str(d.get("id") or f"k{idx + 1}").strip()[:48]
+        raw_secret = str(d.get("api_key") or "").strip()
+        if raw_secret:
+            cipher = encrypt_secret(raw_secret)
+        elif kid in prev_by_id:
+            cipher = str(prev_by_id[kid].get("api_key_ciphertext") or "")
+        else:
+            cipher = ""
+        encoded.append(
+            {
+                "id": kid,
+                "label": str(d.get("label") or f"key-{idx + 1}").strip()[:64],
+                "base_url": str(d.get("base_url") or "").strip()[:512] or None,
+                "api_key_ciphertext": cipher,
+                "weight": max(1, int(d.get("weight") or 1)),
+                "enabled": bool(d.get("enabled", True)),
+            }
+        )
+    return json.dumps(encoded, ensure_ascii=False)
+
+
 def create_llm_profile(
     db: Session,
     name: str,
@@ -184,7 +226,13 @@ def create_llm_profile(
     gateway_enabled: bool = False,
     input_price_per_1m: float | None = None,
     output_price_per_1m: float | None = None,
+    cache_read_price_per_1m: float | None = None,
+    cache_creation_price_per_1m: float | None = None,
+    key_pool: list[Any] | None = None,
+    tpm_limit: int | None = None,
+    dlp_mode: str = "off",
     fallback_llm_profile_id: str | None = None,
+    circuit_breaker_enabled: bool = True,
 ) -> LlmProfile:
     clean_protocol = (api_protocol or "openai-completions").strip()
     clean_reasoning = (reasoning_effort or "").strip() or None
@@ -207,7 +255,13 @@ def create_llm_profile(
         gateway_enabled=bool(gateway_enabled),
         input_price_per_1m=input_price_per_1m,
         output_price_per_1m=output_price_per_1m,
+        cache_read_price_per_1m=cache_read_price_per_1m,
+        cache_creation_price_per_1m=cache_creation_price_per_1m,
+        key_pool_json=_encode_key_pool(key_pool),
+        tpm_limit=int(tpm_limit) if tpm_limit is not None and int(tpm_limit) > 0 else None,
+        dlp_mode=dlp_mode if dlp_mode in {"off", "redact", "block"} else "off",
         fallback_llm_profile_id=(fallback_llm_profile_id or "").strip() or None,
+        circuit_breaker_enabled=bool(circuit_breaker_enabled),
     )
     db.add(profile)
     db.commit()
@@ -233,7 +287,13 @@ def update_llm_profile(
     gateway_enabled: bool | None = None,
     input_price_per_1m: float | None = None,
     output_price_per_1m: float | None = None,
+    cache_read_price_per_1m: float | None = None,
+    cache_creation_price_per_1m: float | None = None,
+    key_pool: list[Any] | None = None,
+    tpm_limit: int | None = None,
+    dlp_mode: str | None = None,
     fallback_llm_profile_id: str | None = None,
+    circuit_breaker_enabled: bool | None = None,
     fields_set: set[str] | None = None,
 ) -> LlmProfile:
     provided = fields_set or set()
@@ -267,8 +327,22 @@ def update_llm_profile(
         profile.input_price_per_1m = input_price_per_1m
     if "output_price_per_1m" in provided or output_price_per_1m is not None:
         profile.output_price_per_1m = output_price_per_1m
+    if "cache_read_price_per_1m" in provided or cache_read_price_per_1m is not None:
+        profile.cache_read_price_per_1m = cache_read_price_per_1m
+    if "cache_creation_price_per_1m" in provided or cache_creation_price_per_1m is not None:
+        profile.cache_creation_price_per_1m = cache_creation_price_per_1m
+    if "key_pool" in provided or key_pool is not None:
+        profile.key_pool_json = _encode_key_pool(
+            key_pool or [], getattr(profile, "key_pool_json", None) or "[]"
+        )
+    if "tpm_limit" in provided or tpm_limit is not None:
+        profile.tpm_limit = int(tpm_limit) if tpm_limit is not None and int(tpm_limit) > 0 else None
+    if dlp_mode is not None and dlp_mode in {"off", "redact", "block"}:
+        profile.dlp_mode = dlp_mode
     if "fallback_llm_profile_id" in provided or fallback_llm_profile_id is not None:
         profile.fallback_llm_profile_id = (fallback_llm_profile_id or "").strip() or None
+    if circuit_breaker_enabled is not None:
+        profile.circuit_breaker_enabled = bool(circuit_breaker_enabled)
     db.commit()
     db.refresh(profile)
     return profile
@@ -430,7 +504,7 @@ def list_oidc_providers(
 ) -> list[OidcProvider]:
     query = select(OidcProvider)
     if enabled_only:
-        query = query.where(OidcProvider.enabled.is_(True))
+        query = query.where(OidcProvider.enabled == True)  # noqa: E712
     query = query.order_by(
         OidcProvider.sort_order.asc(),
         OidcProvider.name.asc(),
@@ -447,7 +521,7 @@ def get_oidc_provider_by_slug(
         return None
     query = select(OidcProvider).where(OidcProvider.slug == clean_slug)
     if enabled_only:
-        query = query.where(OidcProvider.enabled.is_(True))
+        query = query.where(OidcProvider.enabled == True)  # noqa: E712
     return db.scalar(query)
 
 

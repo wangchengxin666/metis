@@ -664,15 +664,24 @@ function extractArtifacts(text, msgs) {
         && (!effectiveThreadId || !t.threadId || t.threadId === effectiveThreadId)
       )
     : [];
-  const activeSpawned = spawnedTasks.filter((t) => !['done', 'cancelled'].includes(String(t.status || '').toLowerCase()));
-  const doneSpawned = spawnedTasks.filter((t) => String(t.status || '').toLowerCase() === 'done');
+  const isSelfApprovalWait = (t) => (
+    Boolean(t && t.approvalRequired)
+    && String(t.approvalStatus || 'pending').toLowerCase() === 'pending'
+    && String(t.status || '').toLowerCase() === 'in_review'
+    && (!cfg.selfSlug || !t.assigneeSlug || t.assigneeSlug === cfg.selfSlug || t.createdBy === cfg.selfSlug)
+  );
+  const approvalRequests = spawnedTasks.filter(isSelfApprovalWait);
+  const nonApprovalSpawned = spawnedTasks.filter((t) => !isSelfApprovalWait(t));
+  const activeSpawned = nonApprovalSpawned.filter((t) => !['done', 'cancelled'].includes(String(t.status || '').toLowerCase()));
+  const doneSpawned = nonApprovalSpawned.filter((t) => String(t.status || '').toLowerCase() === 'done');
   const blockedSpawned = activeSpawned.filter((t) => String(t.status || '').toLowerCase() === 'blocked');
-  const waitingOnSubtasks = spawnedTasks.length > 0 && activeSpawned.length > 0;
+  const waitingOnSubtasks = nonApprovalSpawned.length > 0 && activeSpawned.length > 0;
 
   let replyText = agentReplies
     .map((m) => String(m.text || '').trim())
     .filter(Boolean)
     .join('\\n\\n')
+    || approvalRequests.map((t) => String(t.approvalPrompt || t.summary || t.title || '').trim()).filter(Boolean).join('\\n\\n')
     || (taskDone ? String((matchedTask && (matchedTask.summary || matchedTask.description)) || '').trim() : '');
 
   if (!waitingOnSubtasks && doneSpawned.length > 0 && !replyText) {
@@ -696,7 +705,7 @@ function extractArtifacts(text, msgs) {
     }
   }
 
-  const completed = waitingOnSubtasks ? false : (agentReplies.length > 0 || taskDone || (spawnedTasks.length > 0 && doneSpawned.length > 0));
+  const completed = waitingOnSubtasks ? false : (agentReplies.length > 0 || approvalRequests.length > 0 || taskDone || (nonApprovalSpawned.length > 0 && doneSpawned.length > 0));
   const failed = !completed && !waitingOnSubtasks && errorMsgs.length > 0;
 
   console.log(JSON.stringify({
@@ -706,7 +715,7 @@ function extractArtifacts(text, msgs) {
     completed,
     failed,
     waiting_on_subtasks: waitingOnSubtasks,
-    subtasks_total: spawnedTasks.length - spawnedTasks.filter((t) => String(t.status || '').toLowerCase() === 'cancelled').length,
+    subtasks_total: nonApprovalSpawned.length - nonApprovalSpawned.filter((t) => String(t.status || '').toLowerCase() === 'cancelled').length,
     subtasks_done: doneSpawned.length,
     subtasks_blocked: blockedSpawned.length,
     reply_text: replyText.slice(0, 4000),
@@ -1824,21 +1833,19 @@ console.log('SHARED_SYNC_OK:' + target);
             "results": results,
         }
 
-    def write_intake_files(
+    def _write_named_files_to_dir(
         self,
         sandbox: Sandbox,
-        intake_id: str,
+        target_dir: str,
         files: list[tuple[str, bytes]],
     ) -> list[str]:
-        """Write uploaded intake attachments into /home/workspace/shared-intake/<intake_id>/ safely in chunks."""
+        """Safely chunk-write named files into an explicit sandbox workspace directory."""
         import base64
 
         st = self._workload_status(sandbox)
         if st != "running":
             raise SandboxRuntimeError(f"sandbox {sandbox.slug} is not running")
 
-        safe_intake = re.sub(r"[^a-zA-Z0-9_-]", "", intake_id)[:48] or "intake"
-        target_dir = f"/home/workspace/shared-intake/{safe_intake}"
         self.exec_command(
             sandbox,
             ["mkdir", "-p", target_dir, f"{target_dir}/output"],
@@ -1910,3 +1917,87 @@ if (process.env.INTAKE_APPEND === '1') {
             if ok_all:
                 written.append(target_path)
         return written
+
+    def write_intake_files(
+        self,
+        sandbox: Sandbox,
+        intake_id: str,
+        files: list[tuple[str, bytes]],
+    ) -> list[str]:
+        """Write uploaded intake attachments into /home/workspace/shared-intake/<intake_id>/ safely in chunks."""
+        safe_intake = re.sub(r"[^a-zA-Z0-9_-]", "", intake_id)[:48] or "intake"
+        return self._write_named_files_to_dir(
+            sandbox, f"/home/workspace/shared-intake/{safe_intake}", files
+        )
+
+    def write_relayed_artifacts(
+        self,
+        sandbox: Sandbox,
+        run_tag: str,
+        artifacts: list[tuple[str, bytes]],
+    ) -> list[str]:
+        """Materialize cross-sandbox Playbook artifacts into /home/workspace/shared/artifacts/<run_tag>/."""
+        safe_tag = re.sub(r"[^a-zA-Z0-9_-]", "", run_tag)[:48] or "run"
+        return self._write_named_files_to_dir(
+            sandbox, f"/home/workspace/shared/artifacts/{safe_tag}", artifacts
+        )
+
+    def extract_workspace_files(
+        self,
+        sandbox: Sandbox,
+        paths: list[str],
+        *,
+        max_file_bytes: int = 2 * 1024 * 1024,
+        max_files: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Read bounded workspace deliverable files out of a running sandbox for cross-container artifact relay."""
+        if not paths or self._workload_status(sandbox) != "running":
+            return []
+        clean_paths = [str(p).strip() for p in paths if str(p).strip().startswith("/home/workspace/")][:max_files]
+        if not clean_paths:
+            return []
+        node_script = """
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const reqPaths = JSON.parse(process.env.EXTRACT_PATHS || '[]');
+const maxBytes = Number(process.env.EXTRACT_MAX_BYTES || 2097152);
+const out = [];
+for (const rawPath of reqPaths) {
+  try {
+    const resolved = path.posix.resolve(String(rawPath));
+    if (!resolved.startsWith('/home/workspace/')) continue;
+    if (!fs.existsSync(resolved)) continue;
+    const st = fs.statSync(resolved);
+    if (!st.isFile() || st.size > maxBytes) continue;
+    const buf = fs.readFileSync(resolved);
+    out.push({
+      path: resolved,
+      file_name: path.posix.basename(resolved),
+      size_bytes: st.size,
+      sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+      content_b64: buf.toString('base64'),
+    });
+  } catch {}
+}
+console.log(JSON.stringify({ ok: true, files: out }));
+"""
+        ec, out = self.exec_command(
+            sandbox,
+            ["node", "-e", node_script],
+            user="workspace",
+            environment={
+                "HOME": "/home/workspace",
+                "EXTRACT_PATHS": json.dumps(clean_paths),
+                "EXTRACT_MAX_BYTES": str(max_file_bytes),
+            },
+        )
+        raw_text = out.decode("utf-8", errors="replace").strip() if out else ""
+        if ec == 0 and raw_text:
+            try:
+                parsed = json.loads(raw_text.splitlines()[-1])
+                files = parsed.get("files") if isinstance(parsed, dict) else []
+                return [f for f in (files or []) if isinstance(f, dict) and f.get("content_b64") is not None]
+            except Exception:
+                pass
+        return []

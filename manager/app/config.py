@@ -11,11 +11,19 @@ DEFAULT_AUTO_INSTALL_PLUGINS = "file-manager,workspace-user,custom-theme,sandbox
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "sqlite:////data/dsh-manager.db"
+    database_url: str = "postgresql+psycopg://dsh:dsh-secret-password@postgres:5432/dsh_manager"
+    allow_sqlite: bool = False
+    auto_migrate_sqlite_path: str = ""
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
+
+    # Distributed Control Plane & Redis coordination
+    redis_url: str = ""
+    manager_workers: int = 1
+    manager_instance_id: str = ""
+    distributed_lock_ttl_seconds: int = 30
 
     # Sandbox runtime backend: 'docker' (local sock or remote TCP/SSH) or 'kubernetes'
     sandbox_runtime: Literal["docker", "kubernetes"] = "docker"
@@ -96,6 +104,12 @@ class Settings(BaseSettings):
     manager_internal_url: str = ""
     # Optional internal Traefik gateway URL reachable by sandbox containers for sandbox-mesh (/s/<slug>/p/4090).
     gateway_internal_url: str = ""
+    # Built-in LLM Gateway HTTP timeouts & circuit breaker settings
+    llm_gateway_connect_timeout_seconds: float = 15.0
+    llm_gateway_read_timeout_seconds: float = 300.0
+    llm_gateway_circuit_breaker_threshold: int = 3
+    llm_gateway_circuit_breaker_cooldown_seconds: int = 60
+    llm_gateway_concurrent_limit: int = 32
     secret_key: str = "change-me-in-production"
 
     # Self-hosted plugin index & registry settings

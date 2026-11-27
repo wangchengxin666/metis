@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { ArrowUpRight, Brain, CheckCircle2, Pin, RefreshCw, Sparkles } from 'lucide-react'
+import { ArrowUpRight, Brain, CheckCircle2, Pin, Plus, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react'
 import {
   Badge,
   Button,
@@ -18,6 +18,7 @@ import { apiFetch } from '../../lib/client.ts'
 import { useI18n } from '../../lib/i18nContext'
 import type {
   AuthMe,
+  MemoryKnowledgeItem,
   MemoryPromotionItem,
   SandboxItem,
   SandboxMemoryItem,
@@ -45,6 +46,17 @@ export function MemoryHubSection({
   const [online, setOnline] = useState(true)
   const [loadingMem, setLoadingMem] = useState(false)
   const [promotions, setPromotions] = useState<MemoryPromotionItem[]>([])
+  const [knowledgeItems, setKnowledgeItems] = useState<MemoryKnowledgeItem[]>([])
+  const [recallQuery, setRecallQuery] = useState('')
+  const [recallResults, setRecallResults] = useState<MemoryKnowledgeItem[] | null>(null)
+  const [searchingRecall, setSearchingRecall] = useState(false)
+  const [addingKnowledge, setAddingKnowledge] = useState(false)
+  const [newKnowledge, setNewKnowledge] = useState({
+    title: '',
+    category: 'workflow',
+    tags_csv: '',
+    content: '',
+  })
 
   // Promote Dialog
   const [promoteMem, setPromoteMem] = useState<SandboxMemoryItem | null>(null)
@@ -63,12 +75,67 @@ export function MemoryHubSection({
 
   const loadPromotions = useCallback(async () => {
     try {
-      const res = await apiFetch<{ items: MemoryPromotionItem[] }>('/api/memory-hub/promotions')
+      const [res, knowRes] = await Promise.all([
+        apiFetch<{ items: MemoryPromotionItem[] }>('/api/memory-hub/promotions'),
+        apiFetch<{ items: MemoryKnowledgeItem[] }>('/api/memory-hub/knowledge?limit=30').catch(
+          () => ({ items: [] as MemoryKnowledgeItem[] }),
+        ),
+      ])
       setPromotions(res.items || [])
+      setKnowledgeItems(knowRes.items || [])
     } catch {
       // ignore
     }
   }, [])
+
+  const handleRecallSearch = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!recallQuery.trim()) return
+    setSearchingRecall(true)
+    try {
+      const res = await apiFetch<{ items: MemoryKnowledgeItem[] }>(
+        `/api/memory-hub/recall?q=${encodeURIComponent(recallQuery.trim())}&limit=5`,
+      )
+      setRecallResults(res.items || [])
+    } catch (err: any) {
+      notify(err.message, 'error')
+    } finally {
+      setSearchingRecall(false)
+    }
+  }
+
+  const handleCreateKnowledge = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newKnowledge.title.trim() || !newKnowledge.content.trim()) return
+    setAddingKnowledge(true)
+    try {
+      await apiFetch('/api/memory-hub/knowledge', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: newKnowledge.title.trim(),
+          category: newKnowledge.category.trim() || 'workflow',
+          tags_csv: newKnowledge.tags_csv.trim(),
+          content: newKnowledge.content.trim(),
+        }),
+      })
+      notify(t('memoryHub.ragCreated'))
+      setNewKnowledge({ title: '', category: 'workflow', tags_csv: '', content: '' })
+      await loadPromotions()
+    } catch (err: any) {
+      notify(err.message, 'error')
+    } finally {
+      setAddingKnowledge(false)
+    }
+  }
+
+  const handleDeleteKnowledge = async (entryId: string) => {
+    try {
+      await apiFetch(`/api/memory-hub/knowledge/${entryId}`, { method: 'DELETE' })
+      await loadPromotions()
+    } catch (err: any) {
+      notify(err.message, 'error')
+    }
+  }
 
   const loadMemories = useCallback(
     async (sbxId: string) => {
@@ -293,6 +360,118 @@ export function MemoryHubSection({
                       {p.created_at ? ` · ${new Date(p.created_at).toLocaleString()}` : ''}
                     </div>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* BM25 RAG Knowledge Recall & Authoring */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Search className="h-4 w-4 text-sky-400" />
+            <span>{t('memoryHub.ragTitle')}</span>
+            <Badge variant="outline">{knowledgeItems.length}</Badge>
+          </CardTitle>
+          <p className="text-xs text-zinc-400 mt-1">{t('memoryHub.ragSubtitle')}</p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <form onSubmit={handleRecallSearch} className="flex flex-col sm:flex-row gap-2">
+            <Input
+              className="flex-1 h-9 text-xs"
+              placeholder={t('memoryHub.ragSearchPh')}
+              value={recallQuery}
+              onChange={(e) => setRecallQuery(e.target.value)}
+            />
+            <Button type="submit" size="sm" variant="outline" disabled={searchingRecall}>
+              <Search className="h-3.5 w-3.5" />
+              {t('memoryHub.ragSearchBtn')}
+            </Button>
+          </form>
+
+          {recallResults !== null && (
+            <div className="space-y-2 rounded-[var(--brand-radius-md)] border border-sky-500/30 bg-sky-950/10 p-3">
+              {recallResults.length === 0 ? (
+                <p className="text-xs text-zinc-400">{t('memoryHub.ragNoMatch')}</p>
+              ) : (
+                recallResults.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded border border-zinc-800 bg-zinc-950/70 p-2.5 space-y-1 text-xs"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-zinc-100">{item.title}</span>
+                      <div className="flex items-center gap-1.5">
+                        {item.score != null && (
+                          <Badge variant="outline" className="font-mono text-[10px] border-sky-500/40 text-sky-300">
+                            BM25 {item.score.toFixed(2)}
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="text-[10px]">
+                          {item.category}
+                        </Badge>
+                      </div>
+                    </div>
+                    <p className="text-zinc-300 whitespace-pre-wrap line-clamp-3">{item.content}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          <form
+            onSubmit={handleCreateKnowledge}
+            className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 rounded-[var(--brand-radius-md)] border border-zinc-800 bg-zinc-950/50 p-3 text-xs"
+          >
+            <Input
+              required
+              className="sm:col-span-6 h-8 text-xs"
+              placeholder={t('memoryHub.memTitleLabel')}
+              value={newKnowledge.title}
+              onChange={(e) => setNewKnowledge({ ...newKnowledge, title: e.target.value })}
+            />
+            <Input
+              className="sm:col-span-6 h-8 text-xs"
+              placeholder={t('memoryHub.ragTagsPh')}
+              value={newKnowledge.tags_csv}
+              onChange={(e) => setNewKnowledge({ ...newKnowledge, tags_csv: e.target.value })}
+            />
+            <Textarea
+              required
+              rows={2}
+              className="sm:col-span-10 text-xs"
+              placeholder={t('memoryHub.memContentLabel')}
+              value={newKnowledge.content}
+              onChange={(e) => setNewKnowledge({ ...newKnowledge, content: e.target.value })}
+            />
+            <div className="sm:col-span-2 flex items-end">
+              <Button type="submit" size="sm" className="w-full" disabled={addingKnowledge}>
+                <Plus className="h-3.5 w-3.5" />
+                {t('memoryHub.ragAddBtn')}
+              </Button>
+            </div>
+          </form>
+
+          {knowledgeItems.length > 0 && (
+            <div className="divide-y divide-zinc-800/60 text-xs max-h-52 overflow-y-auto">
+              {knowledgeItems.map((entry) => (
+                <div key={entry.id} className="py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="font-medium text-zinc-200">{entry.title}</span>
+                    {entry.tags_csv && (
+                      <span className="ml-2 text-zinc-500 font-mono">[{entry.tags_csv}]</span>
+                    )}
+                  </div>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-rose-400 shrink-0"
+                    onClick={() => void handleDeleteKnowledge(entry.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               ))}
             </div>

@@ -33,7 +33,20 @@ const EMPTY_LLM_FORM = {
   gateway_enabled: true,
   input_price_per_1m: '',
   output_price_per_1m: '',
+  cache_read_price_per_1m: '',
+  cache_creation_price_per_1m: '',
+  tpm_limit: '',
+  dlp_mode: 'off' as 'off' | 'redact' | 'block',
+  key_pool: [] as Array<{
+    id?: string
+    label: string
+    base_url: string
+    api_key: string
+    weight: string
+    enabled: boolean
+  }>,
   fallback_llm_profile_id: '',
+  circuit_breaker_enabled: true,
 }
 
 export interface LlmAndVaultTabProps {
@@ -87,7 +100,22 @@ export function LlmAndVaultTab({
       gateway_enabled: Boolean(p.gateway_enabled),
       input_price_per_1m: p.input_price_per_1m != null ? String(p.input_price_per_1m) : '',
       output_price_per_1m: p.output_price_per_1m != null ? String(p.output_price_per_1m) : '',
+      cache_read_price_per_1m:
+        p.cache_read_price_per_1m != null ? String(p.cache_read_price_per_1m) : '',
+      cache_creation_price_per_1m:
+        p.cache_creation_price_per_1m != null ? String(p.cache_creation_price_per_1m) : '',
+      tpm_limit: p.tpm_limit != null && p.tpm_limit > 0 ? String(p.tpm_limit) : '',
+      dlp_mode: (p.dlp_mode as 'off' | 'redact' | 'block') || 'off',
+      key_pool: (p.key_pool || []).map((k) => ({
+        id: k.id,
+        label: k.label,
+        base_url: k.base_url || '',
+        api_key: '',
+        weight: String(k.weight || 1),
+        enabled: k.enabled ?? true,
+      })),
       fallback_llm_profile_id: p.fallback_llm_profile_id || '',
+      circuit_breaker_enabled: p.circuit_breaker_enabled ?? true,
     })
     setLlmModalOpen(true)
   }
@@ -204,6 +232,21 @@ export function LlmAndVaultTab({
                         {p.gateway_enabled && (
                           <Badge variant="outline" className="border-indigo-500/40 text-indigo-300">
                             {t('admin.llm.badgeGateway')}
+                          </Badge>
+                        )}
+                        {p.gateway_enabled && (p.circuit_breaker_enabled ?? true) && p.fallback_llm_profile_id && (
+                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-300">
+                            {t('admin.llm.badgeCircuitBreaker')}
+                          </Badge>
+                        )}
+                        {(p.key_pool?.length ?? 0) > 0 && (
+                          <Badge variant="outline" className="border-sky-500/40 text-sky-300">
+                            {t('admin.llm.badgeKeyPool', { count: p.key_pool?.length ?? 0 })}
+                          </Badge>
+                        )}
+                        {p.dlp_mode && p.dlp_mode !== 'off' && (
+                          <Badge variant="outline" className="border-amber-500/40 text-amber-300">
+                            {t('admin.llm.badgeDlp', { mode: p.dlp_mode })}
                           </Badge>
                         )}
                         {(p.input_price_per_1m != null || p.output_price_per_1m != null) && (
@@ -340,6 +383,25 @@ export function LlmAndVaultTab({
               const outPrice = llmForm.output_price_per_1m.trim()
                 ? Number.parseFloat(llmForm.output_price_per_1m.trim())
                 : null
+              const cachePrice = llmForm.cache_read_price_per_1m.trim()
+                ? Number.parseFloat(llmForm.cache_read_price_per_1m.trim())
+                : null
+              const cacheCreatePrice = llmForm.cache_creation_price_per_1m.trim()
+                ? Number.parseFloat(llmForm.cache_creation_price_per_1m.trim())
+                : null
+              const tpmLimitNum = llmForm.tpm_limit.trim()
+                ? Math.max(0, Number.parseInt(llmForm.tpm_limit.trim(), 10) || 0)
+                : null
+              const cleanPool = llmForm.key_pool
+                .filter((k) => k.label.trim())
+                .map((k) => ({
+                  ...(k.id ? { id: k.id } : {}),
+                  label: k.label.trim(),
+                  base_url: k.base_url.trim() || null,
+                  api_key: k.api_key.trim(),
+                  weight: Math.max(1, Math.min(100, Number.parseInt(k.weight || '1', 10) || 1)),
+                  enabled: Boolean(k.enabled),
+                }))
               const body: Record<string, unknown> = {
                 name: llmForm.name.trim(),
                 api_protocol: llmForm.api_protocol || 'openai-completions',
@@ -356,7 +418,15 @@ export function LlmAndVaultTab({
                 gateway_enabled: Boolean(llmForm.gateway_enabled),
                 input_price_per_1m: Number.isFinite(inPrice as number) ? inPrice : null,
                 output_price_per_1m: Number.isFinite(outPrice as number) ? outPrice : null,
+                cache_read_price_per_1m: Number.isFinite(cachePrice as number) ? cachePrice : null,
+                cache_creation_price_per_1m: Number.isFinite(cacheCreatePrice as number)
+                  ? cacheCreatePrice
+                  : null,
+                tpm_limit: tpmLimitNum,
+                dlp_mode: llmForm.dlp_mode || 'off',
+                key_pool: cleanPool,
                 fallback_llm_profile_id: llmForm.fallback_llm_profile_id || null,
+                circuit_breaker_enabled: Boolean(llmForm.circuit_breaker_enabled),
               }
               if (!editingLlmId || llmForm.api_key.trim()) {
                 body.api_key = llmForm.api_key.trim()
@@ -533,7 +603,7 @@ export function LlmAndVaultTab({
                 </p>
               </div>
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">{t('admin.llm.inputPriceLabel')}</Label>
                 <Input
@@ -556,6 +626,175 @@ export function LlmAndVaultTab({
                   onChange={(e) => setLlmForm({ ...llmForm, output_price_per_1m: e.target.value })}
                 />
               </div>
+              <div className="space-y-1">
+                <Label className="text-xs">{t('admin.llm.cachePriceLabel')}</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  placeholder="0.10"
+                  value={llmForm.cache_read_price_per_1m}
+                  onChange={(e) =>
+                    setLlmForm({ ...llmForm, cache_read_price_per_1m: e.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">{t('admin.llm.cacheCreationPriceLabel')}</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  placeholder="1.25"
+                  value={llmForm.cache_creation_price_per_1m}
+                  onChange={(e) =>
+                    setLlmForm({ ...llmForm, cache_creation_price_per_1m: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">{t('admin.llm.tpmLimitLabel')}</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="1000"
+                  placeholder="e.g. 500000"
+                  value={llmForm.tpm_limit}
+                  onChange={(e) => setLlmForm({ ...llmForm, tpm_limit: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">{t('admin.llm.dlpModeLabel')}</Label>
+                <Select
+                  value={llmForm.dlp_mode}
+                  onChange={(e) =>
+                    setLlmForm({
+                      ...llmForm,
+                      dlp_mode: e.target.value as 'off' | 'redact' | 'block',
+                    })
+                  }
+                >
+                  <option value="off">{t('admin.llm.dlpOff')}</option>
+                  <option value="redact">{t('admin.llm.dlpRedact')}</option>
+                  <option value="block">{t('admin.llm.dlpBlock')}</option>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2 rounded border border-zinc-800/80 bg-zinc-900/40 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-zinc-300">
+                  {t('admin.llm.keyPoolTitle')}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() =>
+                    setLlmForm((prev) => ({
+                      ...prev,
+                      key_pool: [
+                        ...prev.key_pool,
+                        {
+                          label: `pool-${prev.key_pool.length + 1}`,
+                          base_url: '',
+                          api_key: '',
+                          weight: '1',
+                          enabled: true,
+                        },
+                      ],
+                    }))
+                  }
+                >
+                  <Plus className="h-3 w-3" />
+                  {t('admin.llm.keyPoolAddBtn')}
+                </Button>
+              </div>
+              {llmForm.key_pool.length === 0 ? (
+                <p className="text-[11px] text-zinc-500">{t('admin.llm.keyPoolEmpty')}</p>
+              ) : (
+                <div className="space-y-2">
+                  {llmForm.key_pool.map((entry, idx) => (
+                    <div
+                      key={entry.id || `kp-${idx}`}
+                      className="grid grid-cols-1 sm:grid-cols-12 gap-1.5 items-center"
+                    >
+                      <Input
+                        className="sm:col-span-3 h-7 text-xs"
+                        placeholder={t('admin.llm.keyLabelPh')}
+                        value={entry.label}
+                        onChange={(e) =>
+                          setLlmForm((prev) => ({
+                            ...prev,
+                            key_pool: prev.key_pool.map((item, i) =>
+                              i === idx ? { ...item, label: e.target.value } : item,
+                            ),
+                          }))
+                        }
+                      />
+                      <Input
+                        className="sm:col-span-4 h-7 text-xs font-mono"
+                        placeholder={t('admin.llm.keyUrlPh')}
+                        value={entry.base_url}
+                        onChange={(e) =>
+                          setLlmForm((prev) => ({
+                            ...prev,
+                            key_pool: prev.key_pool.map((item, i) =>
+                              i === idx ? { ...item, base_url: e.target.value } : item,
+                            ),
+                          }))
+                        }
+                      />
+                      <Input
+                        type="password"
+                        className="sm:col-span-3 h-7 text-xs"
+                        placeholder={t('admin.llm.keySecretPh')}
+                        value={entry.api_key}
+                        onChange={(e) =>
+                          setLlmForm((prev) => ({
+                            ...prev,
+                            key_pool: prev.key_pool.map((item, i) =>
+                              i === idx ? { ...item, api_key: e.target.value } : item,
+                            ),
+                          }))
+                        }
+                      />
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        className="sm:col-span-1 h-7 text-xs"
+                        placeholder={t('admin.llm.keyWeightPh')}
+                        value={entry.weight}
+                        onChange={(e) =>
+                          setLlmForm((prev) => ({
+                            ...prev,
+                            key_pool: prev.key_pool.map((item, i) =>
+                              i === idx ? { ...item, weight: e.target.value } : item,
+                            ),
+                          }))
+                        }
+                      />
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="sm:col-span-1 h-7 w-7 text-rose-400"
+                        onClick={() =>
+                          setLlmForm((prev) => ({
+                            ...prev,
+                            key_pool: prev.key_pool.filter((_, i) => i !== idx),
+                          }))
+                        }
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs">{t('admin.llm.fallbackLabel')}</Label>
@@ -575,6 +814,19 @@ export function LlmAndVaultTab({
                   ))}
               </Select>
             </div>
+            <label className="flex items-start gap-2.5 text-zinc-200 cursor-pointer pt-1">
+              <input
+                type="checkbox"
+                checked={llmForm.circuit_breaker_enabled}
+                onChange={(e) =>
+                  setLlmForm({ ...llmForm, circuit_breaker_enabled: e.target.checked })
+                }
+                className="h-4 w-4 mt-0.5 rounded border-zinc-600 accent-indigo-500"
+              />
+              <span className="text-xs leading-relaxed text-zinc-300">
+                {t('admin.llm.circuitBreakerLabel')}
+              </span>
+            </label>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
             <Button type="button" variant="ghost" onClick={() => setLlmModalOpen(false)}>

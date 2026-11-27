@@ -7,12 +7,13 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from .config import Settings
-from .db import SessionLocal
+from .coordination import get_redis_client, try_acquire_lease
+from .db import SessionLocal, get_database_backend
 from .docker_service import DockerService, SandboxRuntimeError
 from .models import PlaybookRun, Sandbox
 from .services import audit, get_branding_config, get_idle_sleep_policy, utcnow
 from .services.notifications import NotificationEvent, dispatch_notification_event
-from .services.playbooks import sync_playbook_run_progress
+from .services.playbooks import process_due_scheduled_playbooks, sync_playbook_run_progress
 from .services.vault import refresh_expiring_github_app_credentials
 from .services.workspace_hub import refresh_sandboxes_snapshots
 
@@ -38,6 +39,12 @@ class BackgroundWorker:
             await asyncio.sleep(self.settings.reconcile_interval_seconds)
 
     def tick(self) -> None:
+        # In multi-worker / distributed deployments, elect a single scheduler leader per tick
+        if get_redis_client(self.settings) is not None or get_database_backend() != "sqlite":
+            lease_ttl = max(20.0, float(self.settings.reconcile_interval_seconds) * 1.6)
+            if not try_acquire_lease("scheduler_leader", ttl_seconds=lease_ttl):
+                logger.debug("Skipping background tick (standby worker)")
+                return
         self._tick_count += 1
         refresh_disk_this_tick = (self._tick_count % 5) == 1
         refresh_snapshots_this_tick = (self._tick_count % 2) == 1
@@ -133,17 +140,36 @@ class BackgroundWorker:
                         max_workers=4,
                         emit_notifications=True,
                     )
-                    active_runs = list(
-                        db.scalars(
-                            select(PlaybookRun).where(
-                                PlaybookRun.status.in_(["running", "awaiting_approval"])
-                            )
-                        ).all()
-                    )
-                    for run in active_runs:
-                        sync_playbook_run_progress(db, self.settings, self.docker, run)
                 except Exception:
                     logger.warning("periodic workforce snapshot refresh failed")
+
+            try:
+                active_runs = list(
+                    db.scalars(
+                        select(PlaybookRun).where(
+                            PlaybookRun.status.in_(["running", "awaiting_approval"])
+                        )
+                    ).all()
+                )
+                check_runtime = bool(
+                    refresh_snapshots_this_tick
+                    and hasattr(self.docker, "inspect_workforce_runtime")
+                )
+                for run in active_runs:
+                    sync_playbook_run_progress(
+                        db,
+                        self.settings,
+                        self.docker,
+                        run,
+                        check_runtime=check_runtime,
+                    )
+            except Exception:
+                logger.warning("periodic playbook sync failed")
+
+            try:
+                process_due_scheduled_playbooks(db, self.settings, self.docker)
+            except Exception:
+                logger.warning("scheduled playbook execution check failed")
 
             try:
                 refresh_expiring_github_app_credentials(db, self.docker)

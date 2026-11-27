@@ -75,6 +75,11 @@ def create_sandbox(
     preview_auth_mode: str = "public",
     daily_token_limit: int | None = None,
     daily_cost_limit: float | None = None,
+    monthly_cost_limit: float | None = None,
+    rpm_limit: int | None = None,
+    tpm_limit: int | None = None,
+    max_concurrent_requests: int | None = None,
+    dlp_mode: str | None = None,
     budget_action: str = "block",
     ownership_mode: str = "personal",
     maintainer_emails: list[str] | None = None,
@@ -210,10 +215,23 @@ def create_sandbox(
         gateway_api_key=generate_sandbox_gateway_key(),
         daily_token_limit=daily_token_limit,
         daily_cost_limit=(
-            round(float(daily_cost_limit), 4)
-            if daily_cost_limit is not None and float(daily_cost_limit) > 0
+            r_daily
+            if daily_cost_limit is not None and (r_daily := round(float(daily_cost_limit), 6)) > 0
             else None
         ),
+        monthly_cost_limit=(
+            r_monthly
+            if monthly_cost_limit is not None and (r_monthly := round(float(monthly_cost_limit), 6)) > 0
+            else None
+        ),
+        rpm_limit=int(rpm_limit) if rpm_limit is not None and int(rpm_limit) > 0 else None,
+        tpm_limit=int(tpm_limit) if tpm_limit is not None and int(tpm_limit) > 0 else None,
+        max_concurrent_requests=(
+            int(max_concurrent_requests)
+            if max_concurrent_requests is not None and int(max_concurrent_requests) > 0
+            else None
+        ),
+        dlp_mode=dlp_mode if dlp_mode in {"off", "redact", "block"} else None,
         budget_action=(
             budget_action if budget_action in {"block", "downgrade", "warn"} else "block"
         ),
@@ -565,6 +583,9 @@ def clone_sandbox(
         preview_auth_mode=source.preview_auth_mode or "public",
         ownership_mode=getattr(source, "ownership_mode", "personal") or "personal",
         maintainer_emails=source.maintainer_emails,
+        daily_cost_limit=getattr(source, "daily_cost_limit", None),
+        monthly_cost_limit=getattr(source, "monthly_cost_limit", None),
+        rpm_limit=getattr(source, "rpm_limit", None),
         budget_action=getattr(source, "budget_action", "block") or "block",
         credential_profile_ids=source.credential_profile_ids,
         mcp_server_ids=source.mcp_server_ids,

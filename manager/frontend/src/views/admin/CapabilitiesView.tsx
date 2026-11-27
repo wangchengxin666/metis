@@ -1,4 +1,4 @@
-import { BookOpen, Cpu, Lock, Package } from 'lucide-react'
+import { BookOpen, Cpu, Lock, Package, ShieldAlert } from 'lucide-react'
 import { Badge, cn } from '../../components/ui'
 import { useI18n } from '../../lib/i18nContext'
 import type {
@@ -12,8 +12,9 @@ import { CredentialVaultSection } from './CredentialVaultSection'
 import { McpCenterTab } from './McpCenterTab'
 import { PluginsRegistryData, PluginsTab } from './PluginsTab'
 import { SkillsCenterTab } from './SkillsCenterTab'
+import { ToolPoliciesTab } from './ToolPoliciesTab'
 
-export type CapabilitySubTab = 'plugins' | 'credentials' | 'mcp' | 'skills'
+export type CapabilitySubTab = 'plugins' | 'credentials' | 'mcp' | 'skills' | 'policies'
 
 export function CapabilitiesView({
   activeSubTab,
@@ -74,6 +75,12 @@ export function CapabilitiesView({
       count: skills.length,
       icon: BookOpen,
     },
+    {
+      key: 'policies',
+      label: t('admin.subtab.policies'),
+      count: null as unknown as number,
+      icon: ShieldAlert,
+    },
   ]
 
   return (
@@ -96,15 +103,17 @@ export function CapabilitiesView({
             >
               <Icon className="h-3.5 w-3.5" />
               <span>{tab.label}</span>
-              <Badge
-                variant={active ? 'default' : 'outline'}
-                className={cn(
-                  'ml-0.5 text-[10px] px-1.5 py-0',
-                  active && 'bg-black/25 border-transparent text-white',
-                )}
-              >
-                {tab.count}
-              </Badge>
+              {tab.count != null && (
+                <Badge
+                  variant={active ? 'default' : 'outline'}
+                  className={cn(
+                    'ml-0.5 text-[10px] px-1.5 py-0',
+                    active && 'bg-black/25 border-transparent text-white',
+                  )}
+                >
+                  {tab.count}
+                </Badge>
+              )}
             </button>
           )
         })}
@@ -147,6 +156,10 @@ export function CapabilitiesView({
           onRefresh={onRefresh}
           notify={notify}
         />
+      )}
+
+      {activeSubTab === 'policies' && (
+        <ToolPoliciesTab sandboxes={sandboxes} notify={notify} />
       )}
     </div>
   )

@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
+import mimetypes
+import posixpath
 import re
 import secrets
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
+from ..coordination import cluster_lock
 from ..docker_service import BaseSandboxRuntime
 from ..models import (
     LlmProfile,
     Playbook,
+    PlaybookArtifact,
     PlaybookRun,
     PlaybookStepRun,
     Sandbox,
@@ -24,7 +33,7 @@ from ..models import (
     Team,
 )
 from ..schemas import PlaybookCreate, PlaybookUpdate
-from ..security import decrypt_secret
+from ..security import decrypt_secret, encrypt_secret
 from .common import Conflict, ManagerError, NotFoundError, audit, utcnow
 from .notifications import NotificationEvent, dispatch_notification_event
 from .policies import get_branding_config
@@ -379,7 +388,75 @@ def ensure_default_playbooks(db: Session) -> None:
         db.commit()
 
 
+def _parse_cron_field(field: str, min_v: int, max_v: int) -> set[int]:
+    vals: set[int] = set()
+    for part in field.split(","):
+        p = part.strip()
+        if not p:
+            raise ValueError(f"Empty cron token in '{field}'")
+        step = 1
+        if "/" in p:
+            p, step_raw = p.split("/", 1)
+            step = int(step_raw)
+            if step <= 0:
+                raise ValueError(f"Invalid cron step '{step_raw}'")
+        if p == "*":
+            lo, hi = min_v, max_v
+        elif "-" in p:
+            a, b = p.split("-", 1)
+            lo, hi = int(a), int(b)
+        else:
+            lo = hi = int(p)
+            if step == 1:
+                if lo < min_v or lo > max_v:
+                    raise ValueError(f"Cron value {lo} out of [{min_v}, {max_v}]")
+                vals.add(lo)
+                continue
+        if lo < min_v or hi > max_v or lo > hi:
+            raise ValueError(f"Cron range {lo}-{hi} out of [{min_v}, {max_v}]")
+        vals.update(range(lo, hi + 1, step))
+    return vals
+
+
+def validate_cron_expression(expr: str) -> str:
+    clean = " ".join((expr or "").strip().split())
+    parts = clean.split(" ")
+    if len(parts) != 5:
+        raise ValueError("Cron 表达式必须为 5 段格式：分 时 日 月 周，例如 '0 9 * * 1-5'")
+    _parse_cron_field(parts[0], 0, 59)
+    _parse_cron_field(parts[1], 0, 23)
+    _parse_cron_field(parts[2], 1, 31)
+    _parse_cron_field(parts[3], 1, 12)
+    _parse_cron_field(parts[4], 0, 7)
+    return clean
+
+
+def _cron_matches_minute(expr: str, dt: datetime) -> bool:
+    parts = validate_cron_expression(expr).split(" ")
+    mins = _parse_cron_field(parts[0], 0, 59)
+    hours = _parse_cron_field(parts[1], 0, 23)
+    doms = _parse_cron_field(parts[2], 1, 31)
+    months = _parse_cron_field(parts[3], 1, 12)
+    dows_raw = _parse_cron_field(parts[4], 0, 7)
+    dows = {0 if d == 7 else d for d in dows_raw}
+    # Python weekday(): Mon=0..Sun=6 -> cron dow: Sun=0..Sat=6
+    cron_dow = (dt.weekday() + 1) % 7
+    return (
+        dt.minute in mins
+        and dt.hour in hours
+        and dt.day in doms
+        and dt.month in months
+        and cron_dow in dows
+    )
+
+
 def serialize_playbook(pb: Playbook) -> dict[str, Any]:
+    try:
+        sched_inputs = json.loads(getattr(pb, "schedule_inputs_json", None) or "{}")
+        if not isinstance(sched_inputs, dict):
+            sched_inputs = {}
+    except Exception:
+        sched_inputs = {}
     return {
         "id": pb.id,
         "key": pb.key,
@@ -392,6 +469,15 @@ def serialize_playbook(pb: Playbook) -> dict[str, Any]:
         "input_fields": pb.input_fields,
         "stages": pb.stages,
         "deliverables_checklist": pb.deliverables_checklist,
+        "schedule_cron": getattr(pb, "schedule_cron", None),
+        "schedule_enabled": bool(getattr(pb, "schedule_enabled", False)),
+        "schedule_timezone": getattr(pb, "schedule_timezone", "UTC") or "UTC",
+        "schedule_inputs": sched_inputs,
+        "last_scheduled_at": (
+            pb.last_scheduled_at.isoformat() if getattr(pb, "last_scheduled_at", None) else None
+        ),
+        "has_webhook_secret": bool(getattr(pb, "webhook_secret_ciphertext", "")),
+        "webhook_url": f"/api/hooks/playbooks/{pb.key}",
         "created_by": pb.created_by,
         "created_at": pb.created_at.isoformat() if pb.created_at else None,
         "updated_at": pb.updated_at.isoformat() if pb.updated_at else None,
@@ -401,7 +487,7 @@ def serialize_playbook(pb: Playbook) -> dict[str, Any]:
 def list_playbooks(db: Session, *, enabled_only: bool = False) -> list[Playbook]:
     stmt = select(Playbook)
     if enabled_only:
-        stmt = stmt.where(Playbook.enabled.is_(True))
+        stmt = stmt.where(Playbook.enabled == True)  # noqa: E712
     stmt = stmt.order_by(Playbook.is_builtin.desc(), Playbook.created_at.asc())
     return list(db.scalars(stmt).all())
 
@@ -436,6 +522,16 @@ def create_playbook(
     actor: str | None = None,
 ) -> Playbook:
     clean_key = _unique_playbook_key(db, payload.key, payload.name)
+    cron_clean = (payload.schedule_cron or "").strip() or None
+    if cron_clean:
+        cron_clean = validate_cron_expression(cron_clean)
+    elif payload.schedule_enabled:
+        raise ValueError("启用定时编排前必须填写合法的 Cron 表达式")
+    tz_clean = (payload.schedule_timezone or "UTC").strip() or "UTC"
+    try:
+        ZoneInfo(tz_clean)
+    except Exception as exc:
+        raise ValueError(f"无效的时区标识: {tz_clean}") from exc
     pb = Playbook(
         key=clean_key,
         name=payload.name.strip(),
@@ -453,6 +549,15 @@ def create_playbook(
         deliverables_checklist_json=json.dumps(
             [x.strip() for x in payload.deliverables_checklist if x.strip()],
             ensure_ascii=False,
+        ),
+        schedule_cron=cron_clean,
+        schedule_enabled=bool(payload.schedule_enabled and cron_clean),
+        schedule_timezone=tz_clean,
+        schedule_inputs_json=json.dumps(payload.schedule_inputs or {}, ensure_ascii=False),
+        webhook_secret_ciphertext=(
+            encrypt_secret(payload.webhook_secret.strip())
+            if payload.webhook_secret and payload.webhook_secret.strip()
+            else ""
         ),
         created_by=actor,
     )
@@ -493,6 +598,26 @@ def update_playbook(
             [x.strip() for x in payload.deliverables_checklist if x.strip()],
             ensure_ascii=False,
         )
+    if payload.schedule_cron is not None:
+        cron_clean = payload.schedule_cron.strip() or None
+        pb.schedule_cron = validate_cron_expression(cron_clean) if cron_clean else None
+    if payload.schedule_timezone is not None:
+        tz_clean = payload.schedule_timezone.strip() or "UTC"
+        try:
+            ZoneInfo(tz_clean)
+        except Exception as exc:
+            raise ValueError(f"无效的时区标识: {tz_clean}") from exc
+        pb.schedule_timezone = tz_clean
+    if payload.schedule_enabled is not None:
+        if payload.schedule_enabled and not (pb.schedule_cron or "").strip():
+            raise ValueError("启用定时编排前必须填写合法的 Cron 表达式")
+        pb.schedule_enabled = bool(payload.schedule_enabled)
+    if payload.schedule_inputs is not None:
+        pb.schedule_inputs_json = json.dumps(payload.schedule_inputs, ensure_ascii=False)
+    if payload.clear_webhook_secret:
+        pb.webhook_secret_ciphertext = ""
+    elif payload.webhook_secret is not None and payload.webhook_secret.strip():
+        pb.webhook_secret_ciphertext = encrypt_secret(payload.webhook_secret.strip())
     pb.updated_at = utcnow()
     audit(db, "playbook.update", target=pb.key, detail=f"name={pb.name}", actor=actor)
     db.commit()
@@ -521,6 +646,10 @@ def export_playbook_declarative(pb: Playbook, fmt: str = "yaml") -> tuple[str, s
         "input_fields": pb.input_fields,
         "stages": pb.stages,
         "deliverables_checklist": pb.deliverables_checklist,
+        "schedule_cron": getattr(pb, "schedule_cron", None),
+        "schedule_enabled": bool(getattr(pb, "schedule_enabled", False)),
+        "schedule_timezone": getattr(pb, "schedule_timezone", "UTC") or "UTC",
+        "schedule_inputs": serialize_playbook(pb)["schedule_inputs"],
     }
     if fmt == "yaml" and yaml is not None:
         text = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
@@ -562,6 +691,11 @@ def import_playbook_declarative(
                 input_fields=spec.input_fields,
                 stages=spec.stages,
                 deliverables_checklist=spec.deliverables_checklist,
+                schedule_cron=spec.schedule_cron,
+                schedule_enabled=spec.schedule_enabled,
+                schedule_timezone=spec.schedule_timezone,
+                schedule_inputs=spec.schedule_inputs,
+                webhook_secret=spec.webhook_secret,
             ),
             actor=actor,
         )
@@ -605,21 +739,73 @@ def _auto_pick_sandbox_for_stage(
     return best[1] if best else accessible[0]
 
 
-def _collect_previous_outputs_text(steps: list[PlaybookStepRun], up_to_idx: int) -> str:
+def _collect_previous_outputs_text(
+    steps: list[PlaybookStepRun],
+    up_to_idx: int,
+    *,
+    depends_on: list[str] | None = None,
+) -> str:
+    dep_set = {str(d).strip() for d in (depends_on or []) if str(d).strip()}
     lines: list[str] = []
     for st in steps:
-        if st.stage_index >= up_to_idx:
+        is_dep = st.stage_id in dep_set
+        if not dep_set and st.stage_index >= up_to_idx:
             break
+        if dep_set and not is_dep and st.stage_index >= up_to_idx:
+            continue
         if st.status != "completed":
             continue
         summary = (st.output_summary or "").strip() or "已完成"
+        if len(summary) > 1200:
+            summary = summary[:1200] + "…"
         try:
             arts = json.loads(st.artifacts_json or "[]")
         except Exception:
             arts = []
         art_line = f" | 产物: {', '.join(str(a) for a in arts)}" if arts else ""
-        lines.append(f"- [{st.stage_name}](@{st.sandbox_slug or 'unassigned'}): {summary}{art_line}")
+        tag = " [前置依赖]" if is_dep else ""
+        lines.append(f"- [{st.stage_name}{tag}](@{st.sandbox_slug or 'unassigned'}): {summary}{art_line}")
     return "\n".join(lines) if lines else "无前置阶段输出"
+
+
+def _notify_step_sla_timeout(
+    db: Session,
+    settings: Settings,
+    run: PlaybookRun,
+    step: PlaybookStepRun,
+) -> None:
+    """Emit stage.timeout notification when a running step breaches its SLA timeout without recovery."""
+    try:
+        brand = get_branding_config(db)
+        brand_name = str(brand.get("brand_name_zh") or brand.get("brand_name_en") or "Metis")
+        timeout_sec = int(step.timeout_seconds or 0)
+        dispatch_notification_event(
+            db,
+            settings,
+            NotificationEvent(
+                event_type="stage.timeout",
+                title=f"[Playbook 阶段 SLA 超时] {run.title} · {step.stage_name}",
+                summary=(
+                    f"数字员工 @{step.sandbox_slug or 'agent'} 执行阶段「{step.stage_name}」已超过 SLA 时限"
+                    f"（{timeout_sec}s，已自动重试 {int(step.retry_count or 0)}/{int(step.max_retries or 0)} 次），"
+                    "请检查执行状态或介入重派/跳过。"
+                ),
+                severity="danger",
+                sandbox_id=step.sandbox_id,
+                sandbox_slug=step.sandbox_slug,
+                task_id=step.task_id,
+                action_url=(
+                    f"{settings.manager_base_url.rstrip('/')}/projects/{run.team_id}"
+                    if run.team_id
+                    else f"{settings.manager_base_url.rstrip('/')}/projects"
+                ),
+                dedupe_key=f"playbook.sla:{run.id}:{step.id}:{int(step.retry_count or 0)}",
+                metadata={"room_id": step.room_id or "", "timeout_seconds": timeout_sec},
+            ),
+            brand_name=brand_name,
+        )
+    except Exception:
+        pass
 
 
 def _notify_step_awaiting_approval(
@@ -662,6 +848,214 @@ def _notify_step_awaiting_approval(
         pass
 
 
+def _eval_skip_atom(atom: str, inputs: dict[str, Any], steps_by_id: dict[str, PlaybookStepRun]) -> bool:
+    clean = atom.strip()
+    if not clean:
+        return False
+
+    def resolve_operand(token: str) -> str:
+        t = token.strip()
+        if (t.startswith("'") and t.endswith("'")) or (t.startswith('"') and t.endswith('"')):
+            return t[1:-1]
+        if t.startswith("inputs."):
+            return str(inputs.get(t[7:], "") or "")
+        if t.startswith("stage."):
+            parts = t.split(".", 2)
+            if len(parts) == 3:
+                st = steps_by_id.get(parts[1])
+                if st is None:
+                    return ""
+                if parts[2] == "status":
+                    return str(st.status or "")
+                if parts[2] == "output":
+                    return str(st.output_summary or "")
+                if parts[2] == "approval_status":
+                    return str(st.approval_status or "")
+        return t
+
+    for op_name in (" not contains ", " contains ", " != ", " == "):
+        if op_name in clean:
+            lhs_raw, rhs_raw = clean.split(op_name, 1)
+            lhs = resolve_operand(lhs_raw)
+            rhs = resolve_operand(rhs_raw)
+            if op_name == " == ":
+                return lhs.strip().lower() == rhs.strip().lower()
+            if op_name == " != ":
+                return lhs.strip().lower() != rhs.strip().lower()
+            if op_name == " contains ":
+                return rhs.lower() in lhs.lower()
+            return rhs.lower() not in lhs.lower()
+
+    negate = clean.startswith("!")
+    target = clean[1:].strip() if negate else clean
+    val = resolve_operand(target).strip().lower()
+    truthy = bool(val) and val not in {"false", "0", "no", "off", "none", "null"}
+    return (not truthy) if negate else truthy
+
+
+def _evaluate_skip_condition(
+    expr: str | None,
+    inputs: dict[str, Any],
+    steps: list[PlaybookStepRun],
+) -> tuple[bool, str]:
+    clean = (expr or "").strip()
+    if not clean:
+        return False, ""
+    steps_by_id = {s.stage_id: s for s in steps}
+    for or_part in clean.split("||"):
+        and_parts = [p.strip() for p in or_part.split("&&") if p.strip()]
+        if and_parts and all(_eval_skip_atom(p, inputs, steps_by_id) for p in and_parts):
+            return True, clean
+    return False, ""
+
+
+def _capture_uploaded_artifacts(
+    db: Session,
+    run: PlaybookRun,
+    files: list[tuple[str, bytes]],
+) -> None:
+    max_store = 5 * 1024 * 1024
+    for idx, (fname, raw) in enumerate(files):
+        if len(raw) > max_store:
+            continue
+        clean_name = posixpath.basename((fname or "").replace("\\", "/")).strip() or f"intake-{idx + 1}.bin"
+        ctype, _ = mimetypes.guess_type(clean_name)
+        db.add(
+            PlaybookArtifact(
+                run_id=run.id,
+                step_id=None,
+                stage_id="_intake",
+                source_sandbox_id=None,
+                source_sandbox_slug="user-upload",
+                source_path=f"/home/workspace/shared-intake/pb-{run.id[:8]}/{clean_name}",
+                file_name=clean_name[:255],
+                content_type=(ctype or "application/octet-stream")[:128],
+                size_bytes=len(raw),
+                sha256=hashlib.sha256(raw).hexdigest(),
+                content_b64=base64.b64encode(raw).decode("ascii"),
+            )
+        )
+
+
+def _capture_step_artifacts(
+    db: Session,
+    docker: BaseSandboxRuntime,
+    run: PlaybookRun,
+    step: PlaybookStepRun,
+    sandbox: Sandbox | None,
+    candidate_paths: list[str],
+) -> int:
+    if sandbox is None or not candidate_paths or not hasattr(docker, "extract_workspace_files"):
+        return 0
+    existing_paths = set(
+        db.scalars(
+            select(PlaybookArtifact.source_path).where(
+                PlaybookArtifact.run_id == run.id,
+                PlaybookArtifact.step_id == step.id,
+            )
+        ).all()
+    )
+    to_fetch = [p for p in candidate_paths if p.startswith("/home/workspace/") and p not in existing_paths]
+    if not to_fetch:
+        return 0
+    extracted = docker.extract_workspace_files(sandbox, to_fetch)
+    added = 0
+    for item in extracted:
+        src_path = str(item.get("path") or "").strip()
+        fname = str(item.get("file_name") or posixpath.basename(src_path) or "artifact.bin")
+        b64 = str(item.get("content_b64") or "")
+        if not src_path or src_path in existing_paths:
+            continue
+        ctype, _ = mimetypes.guess_type(fname)
+        db.add(
+            PlaybookArtifact(
+                run_id=run.id,
+                step_id=step.id,
+                stage_id=step.stage_id,
+                source_sandbox_id=sandbox.id,
+                source_sandbox_slug=sandbox.slug,
+                source_path=src_path[:512],
+                file_name=fname[:255],
+                content_type=(ctype or "application/octet-stream")[:128],
+                size_bytes=int(item.get("size_bytes") or 0),
+                sha256=str(item.get("sha256") or "")[:64],
+                content_b64=b64,
+            )
+        )
+        existing_paths.add(src_path)
+        added += 1
+    if added:
+        db.flush()
+    return added
+
+
+def _materialize_upstream_artifacts(
+    db: Session,
+    docker: BaseSandboxRuntime,
+    run: PlaybookRun,
+    step: PlaybookStepRun,
+    all_steps: list[PlaybookStepRun],
+    sandbox: Sandbox,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Copy persistent DB PlaybookArtifacts from upstream stages into downstream sandbox shared folder."""
+    if not hasattr(docker, "write_relayed_artifacts"):
+        return {}, []
+    deps = set(step.depends_on)
+    if deps:
+        by_stage_id = {s.stage_id: s for s in all_steps}
+        allowed_stage_ids = {"_intake"}
+        queue = list(deps)
+        seen_ids: set[str] = set()
+        while queue:
+            cur_id = queue.pop(0)
+            if cur_id in seen_ids:
+                continue
+            seen_ids.add(cur_id)
+            allowed_stage_ids.add(cur_id)
+            dep_step = by_stage_id.get(cur_id)
+            if dep_step is not None and dep_step.status == "skipped":
+                queue.extend(dep_step.depends_on)
+    else:
+        allowed_stage_ids = {s.stage_id for s in all_steps if s.stage_index < step.stage_index} | {"_intake"}
+
+    rows = list(
+        db.scalars(
+            select(PlaybookArtifact)
+            .where(PlaybookArtifact.run_id == run.id)
+            .order_by(PlaybookArtifact.created_at.asc())
+        ).all()
+    )
+    rel_rows = [r for r in rows if (r.stage_id or "") in allowed_stage_ids and r.content_b64]
+    if not rel_rows:
+        return {}, []
+
+    files_payload: list[tuple[str, bytes]] = []
+    stage_tags: list[str] = []
+    for row in rel_rows:
+        if row.source_sandbox_id == sandbox.id and row.stage_id != "_intake":
+            # Avoid duplicating same-container scratch files unless from intake
+            continue
+        try:
+            raw = base64.b64decode(row.content_b64.encode("ascii"))
+        except Exception:
+            continue
+        prefixed = f"{row.stage_id or 'stage'}_{row.file_name}"
+        files_payload.append((prefixed, raw))
+        stage_tags.append(row.stage_id or "stage")
+
+    if not files_payload:
+        return {}, []
+    try:
+        written = docker.write_relayed_artifacts(sandbox, f"pb-{run.id[:8]}", files_payload)
+    except Exception:
+        return {}, []
+
+    by_stage: dict[str, list[str]] = {}
+    for st_tag, wpath in zip(stage_tags, written):
+        by_stage.setdefault(st_tag, []).append(wpath)
+    return by_stage, written
+
+
 def _dispatch_step(
     db: Session,
     settings: Settings,
@@ -676,7 +1070,39 @@ def _dispatch_step(
     actor: str,
 ) -> None:
     variables = {str(k): str(v) for k, v in inputs.items()}
-    variables["previous_outputs"] = _collect_previous_outputs_text(all_steps, step.stage_index)
+    variables["previous_outputs"] = _collect_previous_outputs_text(
+        all_steps,
+        step.stage_index,
+        depends_on=step.depends_on,
+    )
+    for prev_st in all_steps:
+        if prev_st.status == "completed":
+            variables[f"stage.{prev_st.stage_id}.output"] = (
+                prev_st.output_summary or ""
+            ).strip() or "已完成"
+            try:
+                prev_arts = json.loads(prev_st.artifacts_json or "[]")
+            except Exception:
+                prev_arts = []
+            variables[f"stage.{prev_st.stage_id}.artifacts"] = ", ".join(
+                str(a) for a in prev_arts if str(a).strip()
+            )
+    relayed_by_stage: dict[str, list[str]] = {}
+    relayed_paths: list[str] = []
+    if sandbox is not None:
+        try:
+            if docker.status(sandbox) != "running":
+                docker.start(sandbox)
+                docker.wait_healthy(sandbox)
+                sandbox.status = "running"
+            relayed_by_stage, relayed_paths = _materialize_upstream_artifacts(
+                db, docker, run, step, all_steps, sandbox
+            )
+        except Exception:
+            relayed_by_stage, relayed_paths = {}, []
+    for st_id_key, spaths in relayed_by_stage.items():
+        variables[f"stage.{st_id_key}.shared_artifacts"] = ", ".join(spaths)
+
     rendered = _render_template(step.prompt_rendered or step.stage_name, variables)
     team = db.get(Team, run.team_id) if run.team_id else None
     if team is not None:
@@ -687,6 +1113,33 @@ def _dispatch_step(
         )
     if uploaded_paths:
         rendered += "\n\n---\n### 随单附件路径\n" + "\n".join(f"- `{p}`" for p in uploaded_paths)
+    if relayed_paths:
+        rendered += (
+            "\n\n### 跨阶段真实文件交付物（已同步至本沙箱目录，可直接读取）\n"
+            + "\n".join(f"- `{p}`" for p in relayed_paths)
+        )
+    try:
+        from .memory_hub import recall_relevant_memories
+
+        tpl_id = None
+        if sandbox is not None and sandbox.template:
+            tpl_obj = db.scalar(select(SandboxTemplate).where(SandboxTemplate.key == sandbox.template))
+            tpl_id = tpl_obj.id if tpl_obj else None
+        recalled = recall_relevant_memories(
+            db,
+            f"{run.title} {step.stage_name} {rendered[:400]}",
+            team_id=run.team_id,
+            template_id=tpl_id,
+            limit=3,
+        )
+        if recalled:
+            snippets = [
+                f"- **{m['title']}**: {str(m['content'] or '').strip()[:260]}"
+                for m in recalled
+            ]
+            rendered += "\n\n### 组织经验库召回参考（Top-K RAG）\n" + "\n".join(snippets)
+    except Exception:
+        pass
     if step.deliverable_hint:
         rendered += f"\n\n### 预期交付物\n- {step.deliverable_hint}"
     total_stages = len(all_steps)
@@ -709,6 +1162,7 @@ def _dispatch_step(
 
     step.prompt_rendered = rendered
     step.started_at = utcnow()
+    step.sla_warned_at = None
     # Always start in 'running' so the digital employee executes first!
     # Only after the employee replies does an approval_required stage transition to 'awaiting_approval'.
     step.status = "running"
@@ -742,7 +1196,7 @@ def _dispatch_step(
                 sandbox.status = "running"
             dispatch_kwargs: dict[str, Any] = {
                 "title": f"[{run.playbook_name}] {step.stage_name}: {run.title}"[:200],
-                "description": rendered[:3900],
+                "description": rendered[:5500],
                 "priority": "high" if step.approval_required else "normal",
                 "room_id": target_room_id,
                 "approval_required": bool(step.approval_required),
@@ -782,35 +1236,6 @@ def _dispatch_next_wave(
     *,
     actor: str,
 ) -> None:
-    pending = [s for s in steps if s.status == "pending"]
-    if not pending:
-        if all(s.status in {"completed", "skipped"} for s in steps):
-            run.status = "completed"
-            run.completed_at = utcnow()
-        elif any(s.status == "awaiting_approval" for s in steps):
-            run.status = "awaiting_approval"
-        elif any(s.status == "rejected" for s in steps):
-            run.status = "failed"
-        return
-
-    # Only dispatch next wave if no prior step is still running or awaiting approval
-    if any(s.status in {"running", "awaiting_approval"} for s in steps):
-        run.status = (
-            "awaiting_approval"
-            if any(s.status == "awaiting_approval" for s in steps)
-            else "running"
-        )
-        return
-
-    first = pending[0]
-    wave = [first]
-    if first.parallel_group:
-        for cand in pending[1:]:
-            if cand.parallel_group == first.parallel_group:
-                wave.append(cand)
-            else:
-                break
-
     try:
         inputs = json.loads(run.inputs_json or "{}")
     except Exception:
@@ -820,32 +1245,112 @@ def _dispatch_next_wave(
     except Exception:
         uploaded_meta = []
 
-    run.current_stage_index = first.stage_index
-    for st in wave:
-        sbx = sbx_by_id.get(st.sandbox_id) if st.sandbox_id else None
-        paths = [
-            str(m.get("path"))
-            for m in uploaded_meta
-            if isinstance(m, dict) and m.get("path") and (not m.get("sandbox_id") or m.get("sandbox_id") == st.sandbox_id)
-        ]
-        _dispatch_step(
-            db,
-            settings,
-            docker,
-            run,
-            st,
-            steps,
-            sbx,
-            inputs=inputs,
-            uploaded_paths=paths,
-            actor=actor,
-        )
+    while True:
+        pending = [s for s in steps if s.status == "pending"]
+        if not pending:
+            if all(s.status in {"completed", "skipped"} for s in steps):
+                run.status = "completed"
+                run.completed_at = utcnow()
+            elif any(s.status == "awaiting_approval" for s in steps):
+                run.status = "awaiting_approval"
+            elif any(s.status == "rejected" for s in steps):
+                run.status = "failed"
+            return
 
-    run.status = (
-        "awaiting_approval"
-        if any(s.status == "awaiting_approval" for s in steps)
-        else "running"
-    )
+        has_dag = any(bool(s.depends_on) for s in steps)
+        if has_dag:
+            done_ids = {s.stage_id for s in steps if s.status in {"completed", "skipped"}}
+            rejected_ids = {s.stage_id for s in steps if s.status == "rejected"}
+            wave = [
+                cand
+                for cand in pending
+                if all(dep in done_ids for dep in cand.depends_on)
+                and not any(dep in rejected_ids for dep in cand.depends_on)
+            ]
+            if not wave:
+                if any(s.status == "awaiting_approval" for s in steps):
+                    run.status = "awaiting_approval"
+                elif any(s.status == "running" for s in steps):
+                    run.status = "running"
+                elif rejected_ids:
+                    run.status = "failed"
+                return
+        else:
+            if any(s.status in {"running", "awaiting_approval"} for s in steps):
+                run.status = (
+                    "awaiting_approval"
+                    if any(s.status == "awaiting_approval" for s in steps)
+                    else "running"
+                )
+                return
+
+            first = pending[0]
+            wave = [first]
+            if first.parallel_group:
+                for cand in pending[1:]:
+                    if cand.parallel_group == first.parallel_group:
+                        wave.append(cand)
+                    else:
+                        break
+
+        skipped_any = False
+        to_dispatch: list[PlaybookStepRun] = []
+        for st in wave:
+            matched_skip, skip_reason = _evaluate_skip_condition(
+                getattr(st, "skip_if", None), inputs, steps
+            )
+            if matched_skip:
+                st.status = "skipped"
+                st.completed_at = utcnow()
+                st.output_summary = f"条件跳过 (skip_if: {skip_reason})"
+                skipped_any = True
+                audit(
+                    db,
+                    "playbook.step_skipped",
+                    target=run.id,
+                    actor=actor,
+                    detail=f"playbook={run.playbook_key},stage={st.stage_id},condition={skip_reason}",
+                )
+            else:
+                to_dispatch.append(st)
+
+        if to_dispatch:
+            run.current_stage_index = to_dispatch[0].stage_index
+            for st in to_dispatch:
+                sbx = sbx_by_id.get(st.sandbox_id) if st.sandbox_id else None
+                paths = [
+                    str(m.get("path"))
+                    for m in uploaded_meta
+                    if isinstance(m, dict)
+                    and m.get("path")
+                    and (not m.get("sandbox_id") or m.get("sandbox_id") == st.sandbox_id)
+                ]
+                _dispatch_step(
+                    db,
+                    settings,
+                    docker,
+                    run,
+                    st,
+                    steps,
+                    sbx,
+                    inputs=inputs,
+                    uploaded_paths=paths,
+                    actor=actor,
+                )
+            break
+        if not skipped_any:
+            break
+
+    if all(s.status in {"completed", "skipped"} for s in steps):
+        run.status = "completed"
+        run.completed_at = utcnow()
+    else:
+        run.status = (
+            "awaiting_approval"
+            if any(s.status == "awaiting_approval" for s in steps)
+            and not any(s.status == "running" for s in steps)
+            else "running"
+        )
     run.updated_at = utcnow()
 
 
@@ -918,6 +1423,17 @@ def start_playbook_run(
             stage_name=str(st.get("name") or st_id),
             role_hint=str(st.get("role_hint") or "") or None,
             parallel_group=str(st.get("parallel_group") or "") or None,
+            depends_on_json=json.dumps(
+                [str(d).strip() for d in (st.get("depends_on") or []) if str(d).strip()],
+                ensure_ascii=False,
+            ),
+            timeout_seconds=(
+                int(st["timeout_seconds"]) if st.get("timeout_seconds") else None
+            ),
+            max_retries=int(st.get("max_retries") or 0),
+            retry_count=0,
+            on_reject_goto=(str(st.get("on_reject_goto") or "").strip() or None),
+            skip_if=(str(st.get("skip_if") or "").strip() or None),
             sandbox_id=sbx.id if sbx else None,
             sandbox_slug=sbx.slug if sbx else None,
             prompt_rendered=str(st.get("prompt_template") or st.get("name") or ""),
@@ -929,9 +1445,10 @@ def start_playbook_run(
         db.add(step)
         steps.append(step)
 
-    # Write uploaded files into unique assigned sandboxes
+    # Persist intake files into DB Artifact store + write into initial assigned sandboxes
     uploaded_meta: list[dict[str, Any]] = []
     if files:
+        _capture_uploaded_artifacts(db, run, files)
         seen_sbx_ids: set[str] = set()
         for sbx in resolved_assignments.values():
             if sbx is None or sbx.id in seen_sbx_ids:
@@ -940,7 +1457,7 @@ def start_playbook_run(
             try:
                 if docker.status(sbx) != "running":
                     docker.start(sbx)
-                    docker.wait_healthy(sbx)
+                    docker.wait_healthy(sandbox=sbx) if False else docker.wait_healthy(sbx)
                     sbx.status = "running"
                 paths = docker.write_intake_files(sbx, f"pb-{run.id[:8]}", files)
                 for p in paths:
@@ -972,8 +1489,33 @@ def sync_playbook_run_progress(
     settings: Settings,
     docker: BaseSandboxRuntime,
     run: PlaybookRun,
+    *,
+    check_runtime: bool = True,
 ) -> bool:
-    """Reconcile running Playbook steps against latest SandboxRuntimeSnapshots and auto-advance waves."""
+    """Reconcile running Playbook steps against runtime/snapshots with distributed run-level locking."""
+    if run.status in {"completed", "failed", "cancelled"}:
+        return False
+    if check_runtime:
+        with cluster_lock(f"playbook_run:{run.id}", ttl_seconds=25.0, wait_seconds=5.0):
+            db.refresh(run)
+            if run.status in {"completed", "failed", "cancelled"}:
+                return False
+            return _sync_playbook_run_progress_unlocked(
+                db, settings, docker, run, check_runtime=check_runtime
+            )
+    return _sync_playbook_run_progress_unlocked(
+        db, settings, docker, run, check_runtime=check_runtime
+    )
+
+
+def _sync_playbook_run_progress_unlocked(
+    db: Session,
+    settings: Settings,
+    docker: BaseSandboxRuntime,
+    run: PlaybookRun,
+    *,
+    check_runtime: bool = True,
+) -> bool:
     if run.status in {"completed", "failed", "cancelled"}:
         return False
 
@@ -1011,6 +1553,16 @@ def sync_playbook_run_progress(
         else {}
     )
 
+    try:
+        run_inputs = json.loads(run.inputs_json or "{}")
+    except Exception:
+        run_inputs = {}
+    try:
+        uploaded_meta = json.loads(run.uploaded_files_json or "[]")
+    except Exception:
+        uploaded_meta = []
+
+    now = utcnow()
     changed = False
     for step in steps:
         if step.status not in {"running", "awaiting_approval"} or not step.sandbox_id:
@@ -1019,7 +1571,8 @@ def sync_playbook_run_progress(
         # 1. Preferred: inspect live @metis/sandbox-mesh room replies for running steps
         sbx = sbx_by_id.get(step.sandbox_id)
         if (
-            step.status == "running"
+            check_runtime
+            and step.status == "running"
             and sbx is not None
             and step.room_id
             and hasattr(docker, "inspect_mesh_room_progress")
@@ -1047,13 +1600,14 @@ def sync_playbook_run_progress(
                             existing_arts = []
                         merged_arts = list(dict.fromkeys([*existing_arts, *prog_arts]))
                         step.artifacts_json = json.dumps(merged_arts, ensure_ascii=False)
+                        _capture_step_artifacts(db, docker, run, step, sbx, prog_arts)
                     if step.approval_required:
                         step.status = "awaiting_approval"
                         step.approval_status = "pending"
                         _notify_step_awaiting_approval(db, settings, run, step)
                     else:
                         step.status = "completed"
-                        step.completed_at = step.completed_at or utcnow()
+                        step.completed_at = step.completed_at or now
                     changed = True
                     continue
                 if prog.get("failed") and prog.get("error_text"):
@@ -1064,51 +1618,119 @@ def sync_playbook_run_progress(
                     continue
 
         # 2. Fallback: reconcile legacy task records in SandboxRuntimeSnapshot
-        if not step.task_id:
-            continue
-        snap = snaps.get(step.sandbox_id)
-        if not snap:
-            continue
-        try:
-            payload = json.loads(snap.payload_json or "{}")
-        except Exception:
-            continue
-        mesh = payload.get("mesh_summary") if isinstance(payload, dict) else {}
-        tasks = mesh.get("tasks") if isinstance(mesh, dict) else []
-        matched = next(
-            (t for t in (tasks or []) if isinstance(t, dict) and str(t.get("id") or "") == step.task_id),
-            None,
-        )
-        if not matched:
-            continue
-        t_status = str(matched.get("status") or "").lower()
-        t_appr = str(matched.get("approval_status") or "").lower()
-        t_summary = str(matched.get("summary") or matched.get("description") or "").strip()
-        t_arts = [str(a) for a in (matched.get("artifacts") or []) if str(a).strip()]
-        if t_summary and not step.output_summary:
-            step.output_summary = t_summary[:2000]
-            changed = True
-        if t_arts:
-            step.artifacts_json = json.dumps(t_arts, ensure_ascii=False)
-            changed = True
-        if t_status in {"done", "in_review"}:
-            if step.approval_required and t_appr != "approved":
-                if step.status == "running":
-                    step.status = "awaiting_approval"
-                    step.approval_status = "pending"
-                    _notify_step_awaiting_approval(db, settings, run, step)
+        resolved_from_snapshot = False
+        if step.task_id:
+            snap = snaps.get(step.sandbox_id)
+            if snap:
+                try:
+                    payload = json.loads(snap.payload_json or "{}")
+                except Exception:
+                    payload = None
+                mesh = payload.get("mesh_summary") if isinstance(payload, dict) else {}
+                tasks = mesh.get("tasks") if isinstance(mesh, dict) else []
+                matched = next(
+                    (
+                        t
+                        for t in (tasks or [])
+                        if isinstance(t, dict) and str(t.get("id") or "") == step.task_id
+                    ),
+                    None,
+                )
+                if matched:
+                    t_status = str(matched.get("status") or "").lower()
+                    t_appr = str(matched.get("approval_status") or "").lower()
+                    t_summary = str(matched.get("summary") or matched.get("description") or "").strip()
+                    t_arts = [str(a) for a in (matched.get("artifacts") or []) if str(a).strip()]
+                    if t_summary and not step.output_summary:
+                        step.output_summary = t_summary[:2000]
+                        changed = True
+                    if t_arts:
+                        step.artifacts_json = json.dumps(t_arts, ensure_ascii=False)
+                        changed = True
+                    if t_status in {"done", "in_review"}:
+                        resolved_from_snapshot = True
+                        if step.approval_required and t_appr != "approved":
+                            if step.status == "running":
+                                step.status = "awaiting_approval"
+                                step.approval_status = "pending"
+                                _notify_step_awaiting_approval(db, settings, run, step)
+                                changed = True
+                        else:
+                            step.status = "completed"
+                            step.completed_at = step.completed_at or now
+                            if step.approval_required:
+                                step.approval_status = "approved"
+                            changed = True
+                    elif t_appr == "rejected":
+                        resolved_from_snapshot = True
+                        step.status = "rejected"
+                        step.approval_status = "rejected"
+                        step.completed_at = step.completed_at or now
+                        changed = True
+
+        # 3. Enforce stage SLA timeout & bounded auto-retry when step is still running
+        if (
+            not resolved_from_snapshot
+            and step.status == "running"
+            and getattr(step, "timeout_seconds", None)
+            and step.started_at is not None
+        ):
+            elapsed_sec = (now - step.started_at).total_seconds()
+            if elapsed_sec >= int(step.timeout_seconds):
+                cur_retries = int(getattr(step, "retry_count", 0) or 0)
+                max_retries = int(getattr(step, "max_retries", 0) or 0)
+                if cur_retries < max_retries and sbx is not None:
+                    step.retry_count = cur_retries + 1
+                    pb_obj = db.get(Playbook, run.playbook_id)
+                    if pb_obj is not None:
+                        orig_stage = next(
+                            (s for s in pb_obj.stages if s.get("id") == step.stage_id), None
+                        )
+                        if orig_stage and orig_stage.get("prompt_template"):
+                            step.prompt_rendered = str(orig_stage["prompt_template"])
+                    step.prompt_rendered = (
+                        f"{step.prompt_rendered or step.stage_name}\n\n"
+                        f"### SLA 超时自动重试（第 {step.retry_count}/{max_retries} 次）\n"
+                        f"上次派发已超过 {int(step.timeout_seconds)} 秒未回传终态结论，请立即收敛并输出完整交付结果。"
+                    )
+                    paths = [
+                        str(m.get("path"))
+                        for m in uploaded_meta
+                        if isinstance(m, dict)
+                        and m.get("path")
+                        and (not m.get("sandbox_id") or m.get("sandbox_id") == sbx.id)
+                    ]
+                    _dispatch_step(
+                        db,
+                        settings,
+                        docker,
+                        run,
+                        step,
+                        steps,
+                        sbx,
+                        inputs=run_inputs if isinstance(run_inputs, dict) else {},
+                        uploaded_paths=paths,
+                        actor="system:sla",
+                    )
+                    audit(
+                        db,
+                        "playbook.step_auto_retry",
+                        target=run.id,
+                        actor="system:sla",
+                        detail=f"playbook={run.playbook_key},stage={step.stage_id},retry={step.retry_count}/{max_retries}",
+                    )
                     changed = True
-            else:
-                step.status = "completed"
-                step.completed_at = step.completed_at or utcnow()
-                if step.approval_required:
-                    step.approval_status = "approved"
-                changed = True
-        elif t_appr == "rejected":
-            step.status = "rejected"
-            step.approval_status = "rejected"
-            step.completed_at = step.completed_at or utcnow()
-            changed = True
+                elif step.sla_warned_at is None:
+                    step.sla_warned_at = now
+                    _notify_step_sla_timeout(db, settings, run, step)
+                    audit(
+                        db,
+                        "playbook.step_sla_timeout",
+                        target=run.id,
+                        actor="system:sla",
+                        detail=f"playbook={run.playbook_key},stage={step.stage_id},timeout={step.timeout_seconds}s",
+                    )
+                    changed = True
 
     if changed:
         _dispatch_next_wave(db, settings, docker, run, steps, sbx_by_id, actor=run.created_by)
@@ -1117,6 +1739,36 @@ def sync_playbook_run_progress(
 
 
 def decide_playbook_step(
+    db: Session,
+    settings: Settings,
+    docker: BaseSandboxRuntime,
+    run: PlaybookRun,
+    step: PlaybookStepRun,
+    *,
+    decision: str,
+    note: str = "",
+    output_summary: str | None = None,
+    artifacts: list[str] | None = None,
+    actor: str,
+) -> PlaybookRun:
+    with cluster_lock(f"playbook_run:{run.id}", ttl_seconds=25.0, wait_seconds=5.0):
+        db.refresh(run)
+        db.refresh(step)
+        return _decide_playbook_step_unlocked(
+            db,
+            settings,
+            docker,
+            run,
+            step,
+            decision=decision,
+            note=note,
+            output_summary=output_summary,
+            artifacts=artifacts,
+            actor=actor,
+        )
+
+
+def _decide_playbook_step_unlocked(
     db: Session,
     settings: Settings,
     docker: BaseSandboxRuntime,
@@ -1158,6 +1810,8 @@ def decide_playbook_step(
         step.approval_note = revision_prompt
         step.approval_decided_by = actor
         step.status = "running"
+        step.started_at = utcnow()
+        step.sla_warned_at = None
         step.completed_at = None
         if sbx is not None:
             try:
@@ -1229,11 +1883,71 @@ def decide_playbook_step(
             [a.strip() for a in artifacts if a.strip()], ensure_ascii=False
         )
     step.completed_at = utcnow()
-    step.status = "completed" if decision == "approved" else "rejected"
 
     if decision == "approved":
+        step.status = "completed"
+        try:
+            step_arts = json.loads(step.artifacts_json or "[]")
+        except Exception:
+            step_arts = []
+        _capture_step_artifacts(
+            db,
+            docker,
+            run,
+            step,
+            sbx_by_id.get(step.sandbox_id) if step.sandbox_id else None,
+            [str(a) for a in step_arts],
+        )
         _dispatch_next_wave(db, settings, docker, run, steps, sbx_by_id, actor=actor)
     else:
+        # Conditional rework routing when stage configures `on_reject_goto` (bounded loop guard <= 3)
+        goto_id = (getattr(step, "on_reject_goto", None) or "").strip()
+        goto_step = (
+            next((s for s in steps if s.stage_id == goto_id and s.id != step.id), None)
+            if goto_id
+            else None
+        )
+        rework_limit = max(3, int(getattr(step, "max_retries", 0) or 0) + 1)
+        if goto_step is not None and int(step.retry_count or 0) < rework_limit:
+            step.retry_count = int(step.retry_count or 0) + 1
+            pb_obj = db.get(Playbook, run.playbook_id)
+            stages_cfg = pb_obj.stages if pb_obj is not None else []
+            # Reset target stage & dependent downstream stages back to pending cleanly
+            reset_ids = {goto_step.stage_id, step.stage_id}
+            # In sequential or DAG mode, reset stages reachable between goto_step and step
+            for st in steps:
+                if goto_step.stage_index <= st.stage_index <= step.stage_index:
+                    if st.stage_id == goto_step.stage_id or st.stage_id == step.stage_id or not st.depends_on or any(d in reset_ids for d in st.depends_on):
+                        reset_ids.add(st.stage_id)
+            for st in steps:
+                if st.stage_id in reset_ids:
+                    st.status = "pending"
+                    st.approval_status = None
+                    st.completed_at = None
+                    st.sla_warned_at = None
+                    if orig := next((c for c in stages_cfg if c.get("id") == st.stage_id), None):
+                        if orig.get("prompt_template"):
+                            st.prompt_rendered = str(orig["prompt_template"])
+            feedback_line = clean_note or "评审未通过，请针对评审意见修正并重新交付。"
+            goto_step.retry_count = int(goto_step.retry_count or 0) + 1
+            goto_step.prompt_rendered = (
+                f"{goto_step.prompt_rendered or goto_step.stage_name}\n\n"
+                f"### 驳回返工指令（来自阶段「{step.stage_name}」· 审核人 {actor} · 第 {step.retry_count} 次返工）\n"
+                f"{feedback_line}"
+            )
+            _dispatch_next_wave(db, settings, docker, run, steps, sbx_by_id, actor=actor)
+            audit(
+                db,
+                "playbook.step_rework",
+                target=run.id,
+                actor=actor,
+                detail=f"playbook={run.playbook_key},from={step.stage_id},goto={goto_step.stage_id},loop={step.retry_count}",
+            )
+            db.commit()
+            db.refresh(run)
+            return run
+
+        step.status = "rejected"
         run.status = "failed"
         run.updated_at = utcnow()
 
@@ -1597,15 +2311,16 @@ def generate_playbook_draft_with_llm(
         '    {"key": "snake_case_key", "label": "字段中文名", "type": "text|textarea|select|file", "required": true, "placeholder": "示例", "options": []}\n'
         "  ],\n"
         '  "stages": [\n'
-        '    {"id": "snake_case_id", "name": "阶段名称", "role_hint": "适合岗位", "template_key_hint": "从可用模板选择", "parallel_group": null, "approval_required": false, "prompt_template": "清晰的阶段指令，使用 {{变量键}} 与 {{previous_outputs}}", "deliverable_hint": "预期交付物"}\n'
+        '    {"id": "snake_case_id", "name": "阶段名称", "role_hint": "适合岗位", "template_key_hint": "从可用模板选择", "parallel_group": null, "depends_on": [], "timeout_seconds": null, "max_retries": 0, "on_reject_goto": null, "approval_required": false, "prompt_template": "清晰的阶段指令，使用 {{变量键}}、{{previous_outputs}} 与 {{stage.前置id.output}}", "deliverable_hint": "预期交付物"}\n'
         "  ],\n"
         '  "deliverables_checklist": ["最终交付物1", "最终交付物2"]\n'
         "}\n"
         f"平台现有可用岗位模板：\n{tpl_hints}\n"
         "规则：\n"
         "1. 关键里程碑或对外发布/定稿节点建议设 approval_required=true；\n"
-        "2. 仅当两个阶段真正无先后依赖时才填相同的 parallel_group，否则填 null；\n"
-        "3. 每个后续阶段的 prompt_template 应引用 {{previous_outputs}} 和相关输入变量。"
+        "2. 仅当两个阶段真正无先后依赖时才设相同的 parallel_group 或并行 depends_on（例如两分支均 depends_on=[\"prd\"]），汇总验收阶段 depends_on=[\"branch_a\",\"branch_b\"]；\n"
+        "3. 如需人工拒绝后自动退回上游返工，可设 on_reject_goto 为上游 stage id；\n"
+        "4. 每个后续阶段的 prompt_template 应引用 {{previous_outputs}} 或 {{stage.<id>.output}} 与相关输入变量。"
     )
     user_prompt = f"用户目标：{goal.strip()}\n{cat_hint}\n{stage_hint}\n请直接输出 JSON："
 
@@ -1669,6 +2384,25 @@ def generate_playbook_draft_with_llm(
         sname = str(s.get("name") or f"阶段 {idx + 1}").strip()[:120]
         pt = str(s.get("prompt_template") or sname).strip()[:5800] or sname
         pg = str(s.get("parallel_group") or "").strip()[:48] or None
+        raw_deps = s.get("depends_on") if isinstance(s.get("depends_on"), list) else []
+        norm_deps = [
+            re.sub(r"[^a-z0-9_]+", "_", str(d).strip().lower()).strip("_")[:48]
+            for d in raw_deps
+            if str(d).strip()
+        ]
+        try:
+            t_sec = int(s["timeout_seconds"]) if s.get("timeout_seconds") else None
+            if t_sec is not None:
+                t_sec = max(10, min(86400 * 7, t_sec))
+        except Exception:
+            t_sec = None
+        try:
+            m_ret = max(0, min(5, int(s.get("max_retries") or 0)))
+        except Exception:
+            m_ret = 0
+        goto_raw = re.sub(
+            r"[^a-z0-9_]+", "_", str(s.get("on_reject_goto") or "").strip().lower()
+        ).strip("_")[:48] or None
         norm_stages.append(
             {
                 "id": sid,
@@ -1676,6 +2410,10 @@ def generate_playbook_draft_with_llm(
                 "role_hint": str(s.get("role_hint") or "").strip()[:120],
                 "template_key_hint": str(s.get("template_key_hint") or "").strip()[:64],
                 "parallel_group": pg,
+                "depends_on": norm_deps,
+                "timeout_seconds": t_sec,
+                "max_retries": m_ret,
+                "on_reject_goto": goto_raw,
                 "approval_required": bool(s.get("approval_required", False)),
                 "prompt_template": pt,
                 "deliverable_hint": str(s.get("deliverable_hint") or "").strip()[:240],
@@ -1759,6 +2497,13 @@ def serialize_playbook_run(db: Session, run: PlaybookRun) -> dict[str, Any]:
                 "stage_name": st.stage_name,
                 "role_hint": st.role_hint,
                 "parallel_group": st.parallel_group,
+                "depends_on": st.depends_on,
+                "timeout_seconds": getattr(st, "timeout_seconds", None),
+                "max_retries": int(getattr(st, "max_retries", 0) or 0),
+                "retry_count": int(getattr(st, "retry_count", 0) or 0),
+                "sla_warned_at": st.sla_warned_at.isoformat() if getattr(st, "sla_warned_at", None) else None,
+                "on_reject_goto": getattr(st, "on_reject_goto", None),
+                "skip_if": getattr(st, "skip_if", None),
                 "sandbox_id": st.sandbox_id,
                 "sandbox_slug": st.sandbox_slug,
                 "room_id": st.room_id,
@@ -1775,6 +2520,30 @@ def serialize_playbook_run(db: Session, run: PlaybookRun) -> dict[str, Any]:
                 "completed_at": st.completed_at.isoformat() if st.completed_at else None,
             }
         )
+
+    relayed_rows = list(
+        db.scalars(
+            select(PlaybookArtifact)
+            .where(PlaybookArtifact.run_id == run.id)
+            .order_by(PlaybookArtifact.created_at.asc())
+        ).all()
+    )
+    relayed_list = [
+        {
+            "id": a.id,
+            "step_id": a.step_id,
+            "stage_id": a.stage_id,
+            "source_sandbox_slug": a.source_sandbox_slug,
+            "source_path": a.source_path,
+            "file_name": a.file_name,
+            "content_type": a.content_type,
+            "size_bytes": int(a.size_bytes or 0),
+            "sha256": a.sha256,
+            "download_url": f"/api/playbook-runs/{run.id}/artifacts/{a.id}",
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in relayed_rows
+    ]
 
     done_count = sum(1 for s in steps if s.status in {"completed", "skipped"})
     return {
@@ -1798,4 +2567,233 @@ def serialize_playbook_run(db: Session, run: PlaybookRun) -> dict[str, Any]:
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "steps": serialized_steps,
         "artifacts": all_artifacts,
+        "relayed_artifacts": relayed_list,
+    }
+
+
+def process_due_scheduled_playbooks(
+    db: Session,
+    settings: Settings,
+    docker: BaseSandboxRuntime,
+) -> int:
+    """Trigger enabled cron-scheduled Playbooks cleanly (called by the cluster scheduler leader)."""
+    scheduled = list(
+        db.scalars(
+            select(Playbook).where(
+                Playbook.enabled == True,  # noqa: E712
+                Playbook.schedule_enabled == True,  # noqa: E712
+                Playbook.schedule_cron.is_not(None),
+            )
+        ).all()
+    )
+    triggered = 0
+    now_utc = utcnow()
+    slot_utc = now_utc.replace(second=0, microsecond=0)
+    accessible: list[Sandbox] | None = None
+
+    for pb in scheduled:
+        cron_expr = (pb.schedule_cron or "").strip()
+        if not cron_expr:
+            continue
+        if pb.last_scheduled_at is not None and pb.last_scheduled_at >= slot_utc:
+            continue
+        try:
+            tz = ZoneInfo((pb.schedule_timezone or "UTC").strip() or "UTC")
+            local_dt = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+            if not _cron_matches_minute(cron_expr, local_dt):
+                continue
+        except Exception:
+            continue
+
+        if accessible is None:
+            accessible = list(
+                db.scalars(
+                    select(Sandbox).where(Sandbox.deleted_at.is_(None))
+                ).all()
+            )
+        try:
+            sched_inputs = json.loads(pb.schedule_inputs_json or "{}")
+            if not isinstance(sched_inputs, dict):
+                sched_inputs = {}
+        except Exception:
+            sched_inputs = {}
+
+        pb.last_scheduled_at = now_utc
+        db.flush()
+        try:
+            start_playbook_run(
+                db,
+                settings,
+                docker,
+                pb,
+                title=f"[定时触发] {pb.name} ({local_dt.strftime('%Y-%m-%d %H:%M')})",
+                inputs=sched_inputs,
+                role_assignments={},
+                accessible_sandboxes=accessible,
+                actor="scheduler:cron",
+            )
+            triggered += 1
+        except Exception:
+            db.rollback()
+    if triggered:
+        db.commit()
+    return triggered
+
+
+def trigger_playbook_webhook(
+    db: Session,
+    settings: Settings,
+    docker: BaseSandboxRuntime,
+    pb: Playbook,
+    *,
+    secret_header: str = "",
+    sig_header: str = "",
+    raw_body: bytes = b"",
+    payload_json: dict[str, Any] | None = None,
+) -> PlaybookRun:
+    """Authenticate an inbound Playbook Webhook request and launch a PlaybookRun."""
+    stored_cipher = getattr(pb, "webhook_secret_ciphertext", "") or ""
+    if not stored_cipher:
+        raise ValueError("该 Playbook 尚未配置 Webhook Secret，请先在模板编辑中设置")
+    expected_secret = decrypt_secret(stored_cipher)
+    if not expected_secret:
+        raise ValueError("Playbook Webhook Secret 解密失败")
+
+    authorized = False
+    if secret_header and hmac.compare_digest(secret_header.strip(), expected_secret):
+        authorized = True
+    elif sig_header and sig_header.startswith("sha256="):
+        digest = hmac.new(expected_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        authorized = hmac.compare_digest(sig_header[7:].strip().lower(), digest.lower())
+    if not authorized:
+        raise PermissionError("Webhook 签名或密钥校验失败")
+
+    body = payload_json if isinstance(payload_json, dict) else {}
+    raw_inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else body
+    inputs = {
+        str(k): str(v) if not isinstance(v, (dict, list)) else json.dumps(v, ensure_ascii=False)
+        for k, v in raw_inputs.items()
+        if str(k) not in {"title", "team_id", "execution_mode", "role_assignments"}
+    }
+    role_assignments = (
+        {str(k): str(v) for k, v in body["role_assignments"].items() if v}
+        if isinstance(body.get("role_assignments"), dict)
+        else {}
+    )
+    accessible = list(
+        db.scalars(select(Sandbox).where(Sandbox.deleted_at.is_(None))).all()
+    )
+    title = str(body.get("title") or f"[Webhook] {pb.name}").strip()
+    team_id = str(body.get("team_id") or "").strip() or None
+    exec_mode = str(body.get("execution_mode") or "isolated").strip()
+    return start_playbook_run(
+        db,
+        settings,
+        docker,
+        pb,
+        title=title,
+        inputs=inputs,
+        role_assignments=role_assignments,
+        accessible_sandboxes=accessible,
+        team_id=team_id,
+        execution_mode=exec_mode,
+        actor="webhook:playbook",
+    )
+
+
+def build_playbook_run_trace(db: Session, run: PlaybookRun) -> dict[str, Any]:
+    """Build per-stage execution timeline, relayed artifacts, and LLM Gateway cost/token attribution."""
+    from ..models import LlmUsageLedger
+
+    steps = list(
+        db.scalars(
+            select(PlaybookStepRun)
+            .where(PlaybookStepRun.run_id == run.id)
+            .order_by(PlaybookStepRun.stage_index.asc())
+        ).all()
+    )
+    ledger_rows = list(
+        db.scalars(
+            select(LlmUsageLedger)
+            .where(LlmUsageLedger.playbook_run_id == run.id)
+            .order_by(LlmUsageLedger.created_at.asc())
+        ).all()
+    )
+    artifacts = list(
+        db.scalars(
+            select(PlaybookArtifact)
+            .where(PlaybookArtifact.run_id == run.id)
+            .order_by(PlaybookArtifact.created_at.asc())
+        ).all()
+    )
+
+    by_step_id: dict[str, list[LlmUsageLedger]] = {}
+    for row in ledger_rows:
+        if row.playbook_step_id:
+            by_step_id.setdefault(row.playbook_step_id, []).append(row)
+
+    stage_traces: list[dict[str, Any]] = []
+    for st in steps:
+        calls = by_step_id.get(st.id, [])
+        duration_sec: float | None = None
+        if st.started_at and st.completed_at:
+            duration_sec = round(max(0.0, (st.completed_at - st.started_at).total_seconds()), 2)
+        stage_traces.append(
+            {
+                "step_id": st.id,
+                "stage_id": st.stage_id,
+                "stage_name": st.stage_name,
+                "sandbox_slug": st.sandbox_slug,
+                "status": st.status,
+                "retry_count": int(st.retry_count or 0),
+                "duration_seconds": duration_sec,
+                "llm_calls": len(calls),
+                "tokens": sum(int(c.total_tokens or 0) for c in calls),
+                "cost_usd": round(sum(float(c.cost_amount or 0.0) for c in calls), 6),
+                "fallback_calls": sum(1 for c in calls if c.routed_mode == "fallback"),
+                "dlp_redactions": sum(int(getattr(c, "dlp_redacted_count", 0) or 0) for c in calls),
+                "events": [
+                    {
+                        "id": c.id,
+                        "model": c.model,
+                        "routed_mode": c.routed_mode,
+                        "upstream_key_label": getattr(c, "upstream_key_label", None),
+                        "input_tokens": int(c.input_tokens or 0),
+                        "output_tokens": int(c.output_tokens or 0),
+                        "cache_read_tokens": int(c.cache_read_tokens or 0),
+                        "cache_creation_tokens": int(getattr(c, "cache_creation_tokens", 0) or 0),
+                        "cost_amount": float(c.cost_amount or 0.0),
+                        "status_code": int(c.status_code or 200),
+                        "latency_ms": int(c.latency_ms or 0),
+                        "dlp_redacted_count": int(getattr(c, "dlp_redacted_count", 0) or 0),
+                        "created_at": c.created_at.isoformat() if c.created_at else None,
+                    }
+                    for c in calls
+                ],
+            }
+        )
+
+    return {
+        "run_id": run.id,
+        "playbook_key": run.playbook_key,
+        "title": run.title,
+        "status": run.status,
+        "total_llm_calls": len(ledger_rows),
+        "total_tokens": sum(int(c.total_tokens or 0) for c in ledger_rows),
+        "total_cost_usd": round(sum(float(c.cost_amount or 0.0) for c in ledger_rows), 6),
+        "total_dlp_redactions": sum(int(getattr(c, "dlp_redacted_count", 0) or 0) for c in ledger_rows),
+        "stages": stage_traces,
+        "artifacts": [
+            {
+                "id": a.id,
+                "stage_id": a.stage_id,
+                "file_name": a.file_name,
+                "source_sandbox_slug": a.source_sandbox_slug,
+                "source_path": a.source_path,
+                "size_bytes": int(a.size_bytes or 0),
+                "sha256": a.sha256,
+                "download_url": f"/api/playbook-runs/{run.id}/artifacts/{a.id}",
+            }
+            for a in artifacts
+        ],
     }

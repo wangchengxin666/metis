@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  Activity,
   AlertTriangle,
   ArrowRight,
   Ban,
@@ -48,6 +49,7 @@ import type {
   AuthMe,
   PlaybookItem,
   PlaybookRunItem,
+  PlaybookRunTraceResponse,
   PlaybookStepRunItem,
   SandboxItem,
   TeamItem,
@@ -154,7 +156,27 @@ export function PlaybooksView({
   const [importText, setImportText] = useState('')
   const [importOverwrite, setImportOverwrite] = useState(false)
   const [importing, setImporting] = useState(false)
+
+  // Execution Trace & Cost Modal
+  const [traceRun, setTraceRun] = useState<PlaybookRunItem | null>(null)
+  const [traceData, setTraceData] = useState<PlaybookRunTraceResponse | null>(null)
+  const [loadingTrace, setLoadingTrace] = useState(false)
   const pollingRunsRef = useRef(false)
+
+  const openRunTrace = async (run: PlaybookRunItem) => {
+    setTraceRun(run)
+    setTraceData(null)
+    setLoadingTrace(true)
+    try {
+      const res = await apiFetch<PlaybookRunTraceResponse>(`/api/playbook-runs/${run.id}/trace`)
+      setTraceData(res)
+    } catch (err: any) {
+      notify(err.message || t('admin.loadFailed'), 'error')
+      setTraceRun(null)
+    } finally {
+      setLoadingTrace(false)
+    }
+  }
 
   const runsEndpoint = projectId
     ? `/api/playbook-runs?team_id=${encodeURIComponent(projectId)}`
@@ -617,6 +639,20 @@ export function PlaybooksView({
                   <Badge variant="outline" className="text-[11px] font-mono">
                     {t('playbooks.estSaved', { hours: pb.estimated_manual_hours })}
                   </Badge>
+                  {pb.schedule_cron && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-[11px] font-mono',
+                        pb.schedule_enabled
+                          ? 'border-emerald-500/40 text-emerald-300'
+                          : 'border-zinc-700 text-zinc-400',
+                      )}
+                    >
+                      <Clock className="h-3 w-3 mr-1" />
+                      {t('playbooks.cronBadge', { cron: pb.schedule_cron })}
+                    </Badge>
+                  )}
                 </div>
                 <CardTitle className="text-lg">{pb.name}</CardTitle>
                 {pb.description && (
@@ -643,6 +679,16 @@ export function PlaybooksView({
                             <span className="text-zinc-200 truncate">{st.name}</span>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
+                            {st.depends_on && st.depends_on.length > 0 && (
+                              <Badge variant="outline" className="text-[10px] border-indigo-500/40 text-indigo-300 font-mono">
+                                ← {st.depends_on.join(',')}
+                              </Badge>
+                            )}
+                            {st.timeout_seconds && (
+                              <Badge variant="outline" className="text-[10px] border-amber-500/35 text-amber-300 font-mono">
+                                SLA {st.timeout_seconds >= 60 ? `${Math.round(st.timeout_seconds / 60)}m` : `${st.timeout_seconds}s`}
+                              </Badge>
+                            )}
                             {st.parallel_group && (
                               <Badge variant="outline" className="text-[10px] border-sky-500/40 text-sky-300">
                                 {t('playbooks.parallelBadge')}
@@ -819,6 +865,16 @@ export function PlaybooksView({
                           </Button>
                         ) : null
                       })()}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs whitespace-nowrap"
+                        onClick={() => void openRunTrace(run)}
+                      >
+                        <Activity className="h-3 w-3" />
+                        {t('playbooks.traceBtn')}
+                      </Button>
                       {(run.status === 'running' || run.status === 'awaiting_approval') && (
                         <Button
                           type="button"
@@ -853,15 +909,17 @@ export function PlaybooksView({
                             'rounded-[var(--brand-radius-md)] border p-3.5 space-y-2.5 text-xs flex flex-col justify-between',
                             st.status === 'completed'
                               ? 'border-emerald-500/35 bg-emerald-950/15'
-                              : isAwaiting
-                                ? 'border-amber-500/50 bg-amber-950/20'
-                                : isRunning
-                                  ? hasWarning
-                                    ? 'border-rose-500/45 bg-rose-950/20'
-                                    : 'border-indigo-500/50 bg-indigo-950/20'
-                                  : st.status === 'rejected'
-                                    ? 'border-rose-500/40 bg-rose-950/20'
-                                    : 'border-zinc-800 bg-zinc-950/50 opacity-70',
+                              : st.status === 'skipped'
+                                ? 'border-zinc-800/80 bg-zinc-900/40 opacity-80'
+                                : isAwaiting
+                                  ? 'border-amber-500/50 bg-amber-950/20'
+                                  : isRunning
+                                    ? hasWarning
+                                      ? 'border-rose-500/45 bg-rose-950/20'
+                                      : 'border-indigo-500/50 bg-indigo-950/20'
+                                    : st.status === 'rejected'
+                                      ? 'border-rose-500/40 bg-rose-950/20'
+                                      : 'border-zinc-800 bg-zinc-950/50 opacity-70',
                           )}
                         >
                           <div className="space-y-2">
@@ -869,6 +927,8 @@ export function PlaybooksView({
                               <div className="flex items-center gap-1.5 font-medium text-zinc-100">
                                 {st.status === 'completed' ? (
                                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                                ) : st.status === 'skipped' ? (
+                                  <SkipForward className="h-4 w-4 text-zinc-400 shrink-0" />
                                 ) : st.status === 'rejected' ? (
                                   <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
                                 ) : isRunning ? (
@@ -886,11 +946,28 @@ export function PlaybooksView({
                                   {idx + 1}. {st.stage_name}
                                 </span>
                               </div>
-                              {st.sandbox_slug && (
-                                <Badge variant="outline" className="font-mono text-[10px]">
-                                  @{st.sandbox_slug}
-                                </Badge>
-                              )}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {st.sla_warned_at && (
+                                  <Badge variant="destructive" className="text-[10px]">
+                                    {t('playbooks.slaTimeoutBadge')}
+                                  </Badge>
+                                )}
+                                {(st.retry_count || 0) > 0 && (
+                                  <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-300 font-mono">
+                                    {t('playbooks.retryBadge', { count: st.retry_count || 0 })}
+                                  </Badge>
+                                )}
+                                {st.depends_on && st.depends_on.length > 0 && (
+                                  <Badge variant="outline" className="text-[10px] border-indigo-500/40 text-indigo-300 font-mono">
+                                    ← {st.depends_on.join(',')}
+                                  </Badge>
+                                )}
+                                {st.sandbox_slug && (
+                                  <Badge variant="outline" className="font-mono text-[10px]">
+                                    @{st.sandbox_slug}
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
                             {st.deliverable_hint && (
                               <div className="text-zinc-400">{st.deliverable_hint}</div>
@@ -1045,6 +1122,34 @@ export function PlaybooksView({
                       )
                     })}
                   </div>
+                  {(run.relayed_artifacts?.length ?? 0) > 0 && (
+                    <div className="rounded-[var(--brand-radius-md)] border border-sky-500/25 bg-sky-950/10 p-3 space-y-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-sky-300">
+                        <Paperclip className="h-3.5 w-3.5" />
+                        <span>{t('playbooks.relayedArtifactsTitle')}</span>
+                        <Badge variant="outline" className="text-[10px]">
+                          {run.relayed_artifacts?.length ?? 0}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {(run.relayed_artifacts || []).map((art) => (
+                          <a
+                            key={art.id}
+                            href={art.download_url || `/api/playbook-runs/${run.id}/artifacts/${art.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded border border-sky-500/30 bg-zinc-950/70 px-2.5 py-1 text-xs font-mono text-sky-200 hover:bg-sky-950/40"
+                          >
+                            <Download className="h-3 w-3 shrink-0" />
+                            <span>{art.file_name}</span>
+                            <span className="text-[10px] text-zinc-500">
+                              ({Math.max(1, Math.round(art.size_bytes / 1024))} KB)
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )
@@ -1422,6 +1527,97 @@ export function PlaybooksView({
             </div>
           </form>
         )}
+      </Dialog>
+
+      {/* Playbook Execution Trace & LLM Cost Attribution Modal */}
+      <Dialog
+        open={!!traceRun}
+        onOpenChange={(o) => !o && !loadingTrace && setTraceRun(null)}
+        title={`${t('playbooks.traceTitle')} · ${traceRun?.title ?? ''}`}
+        maxWidth="max-w-3xl"
+      >
+        {loadingTrace ? (
+          <div className="py-8 text-center text-xs text-zinc-400">{t('common.loading')}</div>
+        ) : traceData ? (
+          <div className="space-y-4 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded border border-zinc-800 bg-zinc-950/70 p-2.5">
+                <div className="text-zinc-500">{t('playbooks.traceCalls')}</div>
+                <div className="text-base font-semibold text-zinc-100 mt-0.5">
+                  {traceData.total_llm_calls}
+                </div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950/70 p-2.5">
+                <div className="text-zinc-500">Tokens</div>
+                <div className="text-base font-semibold text-zinc-100 mt-0.5 font-mono">
+                  {traceData.total_tokens.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950/70 p-2.5">
+                <div className="text-zinc-500">Cost (USD)</div>
+                <div className="text-base font-semibold text-emerald-300 mt-0.5 font-mono">
+                  ${traceData.total_cost_usd.toFixed(4)}
+                </div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950/70 p-2.5">
+                <div className="text-zinc-500">{t('playbooks.traceDlp')}</div>
+                <div className="text-base font-semibold text-amber-300 mt-0.5 font-mono">
+                  {traceData.total_dlp_redactions}
+                </div>
+              </div>
+            </div>
+
+            {traceData.stages.length === 0 ? (
+              <p className="text-center text-zinc-500 py-6">{t('playbooks.traceEmpty')}</p>
+            ) : (
+              <div className="space-y-2.5 max-h-[52vh] overflow-y-auto pr-1">
+                {traceData.stages.map((sg) => (
+                  <div
+                    key={sg.step_id}
+                    className="rounded border border-zinc-800 bg-zinc-950/60 p-3 space-y-2"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-zinc-100">{sg.stage_name}</span>
+                        {sg.sandbox_slug && (
+                          <span className="font-mono text-zinc-400">@{sg.sandbox_slug}</span>
+                        )}
+                        <Badge variant="outline" className="text-[10px]">
+                          {sg.status}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] text-zinc-300">
+                        <span>{sg.llm_calls} calls</span>
+                        <span>{sg.tokens.toLocaleString()} tok</span>
+                        <span className="text-emerald-300">${sg.cost_usd.toFixed(4)}</span>
+                        {sg.duration_seconds != null && <span>{sg.duration_seconds}s</span>}
+                      </div>
+                    </div>
+                    {sg.events.length > 0 && (
+                      <div className="divide-y divide-zinc-800/60 border-t border-zinc-800/70 pt-1.5">
+                        {sg.events.map((ev) => (
+                          <div
+                            key={ev.id}
+                            className="py-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400 font-mono"
+                          >
+                            <span>
+                              {ev.model} · {ev.routed_mode}
+                              {ev.upstream_key_label ? ` (${ev.upstream_key_label})` : ''}
+                            </span>
+                            <span>
+                              in {ev.input_tokens} / out {ev.output_tokens} · ${ev.cost_amount.toFixed(4)} ·{' '}
+                              {ev.latency_ms}ms
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
       </Dialog>
     </div>
   )

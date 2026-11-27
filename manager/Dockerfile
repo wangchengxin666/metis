@@ -52,7 +52,7 @@ RUN if [ -n "${APT_MIRROR}" ] && [ "${APT_MIRROR}" != "deb.debian.org" ]; then \
       fi; \
     fi \
  && apt-get -o Acquire::Retries=5 update \
- && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates unixodbc \
  && rm -rf /var/lib/apt/lists/*
 
 # Optional custom/enterprise CA bundle. Installed only if PEM certificates are present.
@@ -82,4 +82,4 @@ EXPOSE 9000
 HEALTHCHECK --interval=5s --timeout=3s --start-period=2s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/healthz')" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 9000 --workers ${MANAGER_WORKERS:-1}"]

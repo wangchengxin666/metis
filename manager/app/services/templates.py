@@ -257,7 +257,7 @@ def ensure_default_templates(db: Session, settings: Settings) -> None:
         extra = db.scalar(
             select(SandboxTemplate).where(
                 SandboxTemplate.key == extra_key,
-                SandboxTemplate.is_builtin.is_(True),
+                SandboxTemplate.is_builtin == True,  # noqa: E712
             )
         )
         if extra is not None:

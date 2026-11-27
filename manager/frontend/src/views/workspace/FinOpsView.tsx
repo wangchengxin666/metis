@@ -170,6 +170,11 @@ export function FinOpsView({
               </div>
               <div className="text-[11px] text-zinc-500 mt-0.5 font-mono">
                 {formatTokens(data?.period.tokens || 0)} tokens · {data?.period.requests || 0} reqs
+                {(data?.period.cache_savings_estimate || 0) > 0 && (
+                  <span className="text-emerald-400 ml-1.5">
+                    ({t('finops.cacheSaved', { amount: formatUsd(data?.period.cache_savings_estimate || 0) })})
+                  </span>
+                )}
               </div>
             </div>
             <Activity className="h-7 w-7 text-sky-400/80" />
@@ -182,12 +187,29 @@ export function FinOpsView({
               <div className="text-2xl font-semibold text-amber-300 mt-1 font-mono">
                 {data?.period.fallback_requests || 0}
               </div>
-              <div className="text-[11px] text-zinc-500 mt-0.5">auto-downgrade routes</div>
+              <div className="text-[11px] text-zinc-500 mt-0.5">
+                {t('finops.fallbackSub', { errors: data?.period.error_requests || 0 })}
+              </div>
             </div>
             <TrendingDown className="h-7 w-7 text-amber-400/80" />
           </CardContent>
         </Card>
       </div>
+
+      {/* Open Upstream Circuit Breakers Alert */}
+      {Object.entries(data?.circuit_breakers || {}).some(([, cb]) => cb.open) && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-xs text-amber-200 flex flex-wrap items-center gap-3">
+          <ShieldAlert className="h-4 w-4 text-amber-400 shrink-0" />
+          <span className="font-medium">{t('finops.circuitOpenBanner')}</span>
+          {Object.entries(data?.circuit_breakers || {})
+            .filter(([, cb]) => cb.open)
+            .map(([pid, cb]) => (
+              <Badge key={pid} variant="outline" className="border-amber-500/40 text-amber-200 font-mono text-[11px]">
+                {pid.slice(0, 8)} · {cb.failures} fails · {cb.cooldown_remaining_seconds}s
+              </Badge>
+            ))}
+        </div>
+      )}
 
       {/* Daily Trend Bar Strip */}
       <Card>
@@ -308,8 +330,19 @@ export function FinOpsView({
                               <span className="text-emerald-300">{formatUsd(row.today_cost)}</span>
                             )}
                           </div>
-                          <div className="text-[11px] font-mono text-zinc-500 mt-0.5">
-                            {formatTokens(row.today_tokens)} tokens
+                          <div className="text-[11px] font-mono text-zinc-500 mt-0.5 flex flex-wrap items-center gap-2">
+                            <span>{formatTokens(row.today_tokens)} tokens</span>
+                            {row.monthly_cost_limit != null && row.monthly_cost_limit > 0 && (
+                              <span className="text-zinc-400">
+                                · {t('finops.monthlySpent', {
+                                  spent: formatUsd(row.monthly_cost || 0),
+                                  limit: formatUsd(row.monthly_cost_limit),
+                                })}
+                              </span>
+                            )}
+                            {row.rpm_limit != null && row.rpm_limit > 0 && (
+                              <span className="text-sky-400/90">· {row.rpm_limit} RPM</span>
+                            )}
                           </div>
                           {hasCostLimit || hasLegacyTokLimit ? (
                             <div className="mt-1.5 h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">

@@ -17,9 +17,17 @@ from ..deps import (
     settings,
 )
 from ..models import MemoryPromotion, TeamMember
-from ..schemas import MemoryPromoteRequest
+from ..schemas import MemoryKnowledgeCreate, MemoryPromoteRequest
 from ..services import load_sandbox
-from ..services.memory_hub import promote_sandbox_memory, serialize_promotion
+from ..services.memory_hub import (
+    create_knowledge_entry,
+    delete_knowledge_entry,
+    list_knowledge_entries,
+    promote_sandbox_memory,
+    recall_relevant_memories,
+    serialize_knowledge_entry,
+    serialize_promotion,
+)
 from ..services.teams import can_user_open_sandbox_ide, is_team_lead_for_team
 
 router = APIRouter()
@@ -129,3 +137,77 @@ def api_list_memory_promotions(
 
     rows = list(db.scalars(stmt.order_by(MemoryPromotion.created_at.desc()).limit(limit)).all())
     return {"items": [serialize_promotion(r) for r in rows]}
+
+
+@router.get("/api/memory-hub/knowledge")
+def api_list_knowledge(
+    request: Request,
+    team_id: str | None = Query(default=None),
+    template_id: str | None = Query(default=None),
+    limit: int = Query(default=60, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    is_admin = _is_authenticated_admin(request, db)
+    if not is_admin:
+        email = require_user_api(request)
+        _ensure_active_user(db, email)
+    items = list_knowledge_entries(db, team_id=team_id, template_id=template_id, limit=limit)
+    return {"items": [serialize_knowledge_entry(x) for x in items]}
+
+
+@router.post("/api/memory-hub/knowledge", status_code=201)
+def api_create_knowledge(
+    payload: MemoryKnowledgeCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    is_admin = _is_authenticated_admin(request, db)
+    if is_admin:
+        actor = session_email(request) or settings.manager_admin_email
+    else:
+        actor = require_user_api(request)
+        _ensure_active_user(db, actor)
+        if not payload.team_id or not is_team_lead_for_team(db, actor, payload.team_id):
+            raise HTTPException(
+                status_code=403,
+                detail="仅平台管理员或目标团队负责人 (Team Lead) 可新增知识库条目",
+            )
+    row = create_knowledge_entry(db, payload, actor=actor)
+    return serialize_knowledge_entry(row)
+
+
+@router.delete("/api/memory-hub/knowledge/{entry_id}")
+def api_delete_knowledge(
+    entry_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    is_admin = _is_authenticated_admin(request, db)
+    actor = session_email(request) or settings.manager_admin_email if is_admin else require_user_api(request)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="仅平台管理员可删除组织知识条目")
+    try:
+        delete_knowledge_entry(db, entry_id, actor=actor)
+        return {"ok": True}
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.get("/api/memory-hub/recall")
+def api_recall_memories(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=1000),
+    team_id: str | None = Query(default=None),
+    template_id: str | None = Query(default=None),
+    limit: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Portable BM25 Top-K semantic/keyword recall over promoted organizational lessons."""
+    is_admin = _is_authenticated_admin(request, db)
+    if not is_admin:
+        email = require_user_api(request)
+        _ensure_active_user(db, email)
+    items = recall_relevant_memories(
+        db, q, team_id=team_id, template_id=template_id, limit=limit
+    )
+    return {"query": q, "items": items}

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import codecs
 from dataclasses import dataclass
 import json
 import logging
+import random
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
@@ -13,13 +16,204 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
-from ..models import LlmProfile, LlmUsageLedger, Sandbox, Team, TeamSandbox
+from ..coordination import (
+    acquire_concurrency_slot,
+    check_and_consume_window_limit,
+    get_circuit_states_snapshot,
+    is_circuit_open as coord_is_circuit_open,
+    record_circuit_failure,
+    record_circuit_success,
+    release_concurrency_slot,
+    reset_coordination_state,
+)
+from ..models import (
+    CredentialProfile,
+    LlmProfile,
+    LlmUsageLedger,
+    PlaybookStepRun,
+    Sandbox,
+    Team,
+    TeamSandbox,
+)
 from ..security import decrypt_secret
-from .common import utcnow
+from .common import audit, utcnow
 from .notifications import NotificationEvent, dispatch_notification_event
 from .policies import get_branding_config
 
 logger = logging.getLogger("dsh-manager.llm_gateway")
+
+
+def reset_gateway_runtime_state() -> None:
+    """Clear distributed/in-process RPM, TPM, concurrency, and circuit-breaker states."""
+    reset_coordination_state()
+
+
+def check_sandbox_rpm_limit(sandbox: Sandbox) -> tuple[bool, int]:
+    """Distributed sliding 60-second RPM rate limiter per sandbox. Returns (allowed, retry_after_seconds)."""
+    limit = getattr(sandbox, "rpm_limit", None)
+    if limit is None or int(limit) <= 0:
+        return True, 0
+    return check_and_consume_window_limit(
+        "rpm", sandbox.id, int(limit), cost=1, consume=True, window_seconds=60.0
+    )
+
+
+def check_sandbox_tpm_limit(sandbox: Sandbox, profile: LlmProfile | None = None) -> tuple[bool, int]:
+    """Distributed sliding 60-second TPM rate limiter (checks sandbox or profile cap before forwarding)."""
+    sbx_cap = int(getattr(sandbox, "tpm_limit", None) or 0)
+    prof_cap = int(getattr(profile, "tpm_limit", None) or 0) if profile is not None else 0
+    cap = sbx_cap if sbx_cap > 0 else prof_cap
+    if cap <= 0:
+        return True, 0
+    return check_and_consume_window_limit(
+        "tpm", sandbox.id, cap, cost=0, consume=False, window_seconds=60.0
+    )
+
+
+def record_sandbox_tpm_usage(sandbox_id: str, tokens: int) -> None:
+    if int(tokens or 0) > 0:
+        check_and_consume_window_limit(
+            "tpm", sandbox_id, None, cost=int(tokens), consume=True, window_seconds=60.0
+        )
+
+
+def acquire_sandbox_concurrency(
+    sandbox: Sandbox, *, default_limit: int = 0
+) -> tuple[bool, str | None]:
+    raw_cap = getattr(sandbox, "max_concurrent_requests", None)
+    cap = int(raw_cap) if raw_cap is not None and int(raw_cap) > 0 else int(default_limit or 0)
+    if cap <= 0:
+        return True, None
+    return acquire_concurrency_slot(f"sbx:{sandbox.id}", cap)
+
+
+def release_sandbox_concurrency(sandbox: Sandbox, token: str | None) -> None:
+    if token:
+        release_concurrency_slot(f"sbx:{sandbox.id}", token)
+
+
+def is_upstream_circuit_open(profile: LlmProfile) -> bool:
+    """Return True when a profile's distributed circuit breaker is open (or canary probe is already active)."""
+    return coord_is_circuit_open(
+        profile.id,
+        enabled=bool(getattr(profile, "circuit_breaker_enabled", True)),
+    )
+
+
+def record_upstream_success(profile_id: str) -> None:
+    record_circuit_success(profile_id)
+
+
+def record_upstream_failure(
+    profile: LlmProfile,
+    *,
+    reason: str,
+    threshold: int = 3,
+    cooldown_seconds: int = 60,
+) -> bool:
+    """Increment cluster failure counter for profile and open circuit breaker when threshold reached."""
+    opened = record_circuit_failure(
+        profile.id,
+        reason=reason,
+        threshold=threshold,
+        cooldown_seconds=cooldown_seconds,
+        enabled=bool(getattr(profile, "circuit_breaker_enabled", True)),
+    )
+    if opened:
+        logger.warning(
+            "LLM Gateway circuit opened for profile %s (%s): %s",
+            profile.name,
+            profile.id,
+            (reason or "")[:300],
+        )
+    return opened
+
+
+def get_circuit_breaker_snapshot() -> dict[str, dict[str, Any]]:
+    return get_circuit_states_snapshot()
+
+
+class SseUsageAccumulator:
+    """Bounded-memory incremental SSE parser that captures trailing usage across streams of any length."""
+
+    def __init__(self, api_protocol: str) -> None:
+        self.api_protocol = (api_protocol or "openai-completions").strip()
+        self._decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+        self._pending_line = ""
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cache_read_tokens = 0
+        self.cache_creation_tokens = 0
+        self.total_tokens = 0
+
+    def _consume_line(self, line: str) -> None:
+        stripped = line.strip()
+        if not stripped.startswith("data:"):
+            return
+        data_str = stripped[5:].strip()
+        if not data_str or data_str == "[DONE]":
+            return
+        try:
+            obj = json.loads(data_str)
+        except Exception:
+            return
+        if not isinstance(obj, dict):
+            return
+        e_in, e_out, e_cr, e_cc, e_tot = extract_detailed_usage_from_payload(
+            obj, self.api_protocol
+        )
+        if e_in > self.input_tokens:
+            self.input_tokens = e_in
+        if e_out > self.output_tokens:
+            self.output_tokens = e_out
+        if e_cr > self.cache_read_tokens:
+            self.cache_read_tokens = e_cr
+        if e_cc > self.cache_creation_tokens:
+            self.cache_creation_tokens = e_cc
+        if e_tot > self.total_tokens:
+            self.total_tokens = e_tot
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        text = self._decoder.decode(chunk, final=False)
+        if not text:
+            return
+        self._pending_line += text
+        if "\n" not in self._pending_line:
+            # Cap corrupted single-line memory at 2 MiB
+            if len(self._pending_line) > 2 * 1024 * 1024:
+                self._pending_line = ""
+            return
+        lines = self._pending_line.splitlines()
+        if self._pending_line.endswith(("\n", "\r")):
+            self._pending_line = ""
+        else:
+            self._pending_line = lines.pop() if lines else ""
+        for line in lines:
+            self._consume_line(line)
+
+    def finalize_detailed(self) -> tuple[int, int, int, int, int]:
+        tail = self._decoder.decode(b"", final=True)
+        if tail:
+            self._pending_line += tail
+        if self._pending_line:
+            for line in self._pending_line.splitlines():
+                self._consume_line(line)
+            self._pending_line = ""
+        if self.total_tokens == 0 and (self.input_tokens or self.output_tokens):
+            self.total_tokens = self.input_tokens + self.output_tokens
+        return (
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_creation_tokens,
+            self.total_tokens,
+        )
+
+    def finalize(self) -> tuple[int, int, int, int]:
+        inp, out, cr, _cc, tot = self.finalize_detailed()
+        return inp, out, cr, tot
 
 
 @dataclass(frozen=True)
@@ -85,6 +279,11 @@ def _utc_day_start(now: datetime | None = None) -> datetime:
     return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _utc_month_start(now: datetime | None = None) -> datetime:
+    dt = now or utcnow()
+    return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
 def _fmt_usd(amount: float) -> str:
     val = float(amount or 0.0)
     if val >= 1.0:
@@ -94,85 +293,95 @@ def _fmt_usd(amount: float) -> str:
     return "$0.00"
 
 
-def extract_usage_from_payload(payload: dict[str, Any], api_protocol: str) -> tuple[int, int, int, int]:
-    """Extract (input_tokens, output_tokens, cache_read_tokens, total_tokens) from OpenAI/Anthropic/Gemini JSON."""
+def extract_detailed_usage_from_payload(
+    payload: dict[str, Any], api_protocol: str
+) -> tuple[int, int, int, int, int]:
+    """Extract (input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens)."""
     if not isinstance(payload, dict):
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
 
-    # Gemini usageMetadata
     gm = payload.get("usageMetadata")
     if isinstance(gm, dict):
         inp = int(gm.get("promptTokenCount") or 0)
         out = int(gm.get("candidatesTokenCount") or 0)
         cr = int(gm.get("cachedContentTokenCount") or 0)
         tot = int(gm.get("totalTokenCount") or (inp + out))
-        return inp, out, cr, tot
+        return inp, out, cr, 0, tot
 
-    # OpenAI Responses wraps under response.usage
     usage = payload.get("usage")
     if not isinstance(usage, dict) and isinstance(payload.get("response"), dict):
         usage = payload["response"].get("usage")
     if not isinstance(usage, dict) and isinstance(payload.get("message"), dict):
         usage = payload["message"].get("usage")
     if not isinstance(usage, dict):
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
 
     inp = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
     out = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
     cr = int(usage.get("cache_read_input_tokens") or usage.get("cache_read_tokens") or 0)
+    cc = int(usage.get("cache_creation_input_tokens") or usage.get("cache_creation_tokens") or 0)
     if cr == 0:
         details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details")
         if isinstance(details, dict):
             cr = int(details.get("cached_tokens") or 0)
-    tot = int(usage.get("total_tokens") or (inp + out))
-    if tot == 0 and (inp or out):
-        tot = inp + out
+    tot = int(usage.get("total_tokens") or (inp + out + cr + cc if api_protocol == "anthropic-messages" else inp + out))
+    if tot == 0 and (inp or out or cr or cc):
+        tot = inp + out + (cr + cc if api_protocol == "anthropic-messages" else 0)
+    return inp, out, cr, cc, tot
+
+
+def extract_usage_from_payload(payload: dict[str, Any], api_protocol: str) -> tuple[int, int, int, int]:
+    """Extract (input_tokens, output_tokens, cache_read_tokens, total_tokens) from OpenAI/Anthropic/Gemini JSON."""
+    inp, out, cr, _cc, tot = extract_detailed_usage_from_payload(payload, api_protocol)
     return inp, out, cr, tot
 
 
 def extract_usage_from_sse_text(raw_sse: str, api_protocol: str) -> tuple[int, int, int, int]:
     """Parse token usage incrementally across SSE data lines (OpenAI, Anthropic, Gemini)."""
-    inp = 0
-    out = 0
-    cr = 0
-    tot = 0
-    for line in raw_sse.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("data:"):
-            continue
-        data_str = stripped[5:].strip()
-        if not data_str or data_str == "[DONE]":
-            continue
-        try:
-            obj = json.loads(data_str)
-        except Exception:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        e_in, e_out, e_cr, e_tot = extract_usage_from_payload(obj, api_protocol)
-        if e_in > inp:
-            inp = e_in
-        if e_out > out:
-            out = e_out
-        if e_cr > cr:
-            cr = e_cr
-        if e_tot > tot:
-            tot = e_tot
-    if tot == 0 and (inp or out):
-        tot = inp + out
-    return inp, out, cr, tot
+    acc = SseUsageAccumulator(api_protocol)
+    acc.feed(raw_sse.encode("utf-8", errors="ignore"))
+    return acc.finalize()
 
 
 def compute_usage_cost(
     profile: LlmProfile,
     input_tokens: int,
     output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
 ) -> float:
     in_price = float(getattr(profile, "input_price_per_1m", None) or 0.0)
     out_price = float(getattr(profile, "output_price_per_1m", None) or 0.0)
-    cost = (max(0, input_tokens) / 1_000_000.0) * in_price + (
-        max(0, output_tokens) / 1_000_000.0
-    ) * out_price
+    cr_price_raw = getattr(profile, "cache_read_price_per_1m", None)
+    cc_price_raw = getattr(profile, "cache_creation_price_per_1m", None)
+    inp = max(0, int(input_tokens or 0))
+    out = max(0, int(output_tokens or 0))
+    cr = max(0, int(cache_read_tokens or 0))
+    cc = max(0, int(cache_creation_tokens or 0))
+    protocol = (getattr(profile, "api_protocol", None) or "openai-completions").strip()
+
+    if cr_price_raw is not None and cr > 0:
+        cr_price = float(cr_price_raw)
+        if protocol == "anthropic-messages":
+            cost = (
+                (inp / 1_000_000.0) * in_price
+                + (cr / 1_000_000.0) * cr_price
+                + (out / 1_000_000.0) * out_price
+            )
+        else:
+            billable_cache = min(inp, cr)
+            uncached_in = max(0, inp - billable_cache)
+            cost = (
+                (uncached_in / 1_000_000.0) * in_price
+                + (billable_cache / 1_000_000.0) * cr_price
+                + (out / 1_000_000.0) * out_price
+            )
+    else:
+        cost = (inp / 1_000_000.0) * in_price + (out / 1_000_000.0) * out_price
+
+    if cc > 0:
+        cc_price = float(cc_price_raw) if cc_price_raw is not None else in_price
+        cost += (cc / 1_000_000.0) * cc_price
     return round(cost, 6)
 
 
@@ -202,6 +411,17 @@ def get_sandbox_today_cost(db: Session, sandbox_id: str) -> float:
         select(func.coalesce(func.sum(LlmUsageLedger.cost_amount), 0.0)).where(
             LlmUsageLedger.sandbox_id == sandbox_id,
             LlmUsageLedger.created_at >= day_start,
+        )
+    )
+    return round(float(val or 0.0), 6)
+
+
+def get_sandbox_month_cost(db: Session, sandbox_id: str) -> float:
+    month_start = _utc_month_start()
+    val = db.scalar(
+        select(func.coalesce(func.sum(LlmUsageLedger.cost_amount), 0.0)).where(
+            LlmUsageLedger.sandbox_id == sandbox_id,
+            LlmUsageLedger.created_at >= month_start,
         )
     )
     return round(float(val or 0.0), 6)
@@ -356,8 +576,10 @@ def evaluate_budget_and_route(
     sandbox: Sandbox,
     profile: LlmProfile,
 ) -> BudgetEvaluation:
-    """Enforce daily cost (primary) and legacy token budgets for both the employee and their project teams."""
-    today_tag = utcnow().strftime("%Y%m%d")
+    """Enforce daily/monthly cost and legacy token budgets for both the employee and their project teams."""
+    now = utcnow()
+    today_tag = now.strftime("%Y%m%d")
+    month_tag = now.strftime("%Y%m")
     action = (getattr(sandbox, "budget_action", None) or "block").strip().lower()
     action_label = "仅告警" if action == "warn" else "已熔断"
 
@@ -439,6 +661,46 @@ def evaluate_budget_and_route(
                     title=f"@{sandbox.slug} 每日 Token 预算已消耗 {pct}%",
                     summary=f"今日已用 {used_today:,} / 上限 {daily_token_limit:,} Tokens，请留意算力消耗。",
                 )
+
+    # 1c. Employee monthly cost cap (USD) — cumulative calendar-month guardrail
+    monthly_cost_limit = getattr(sandbox, "monthly_cost_limit", None)
+    if monthly_cost_limit is not None and float(monthly_cost_limit) > 0:
+        mlimit = float(monthly_cost_limit)
+        mused = get_sandbox_month_cost(db, sandbox.id)
+        if mused >= mlimit:
+            return _apply_budget_exceeded(
+                db,
+                settings,
+                sandbox=sandbox,
+                profile=profile,
+                action=action,
+                today_tag=month_tag,
+                scope="sandbox",
+                unit="usd",
+                used=mused,
+                limit=mlimit,
+                error_code="monthly_cost_limit_exceeded",
+                error_message=(
+                    f"Monthly cost budget exceeded for @{sandbox.slug} "
+                    f"({_fmt_usd(mused)} / {_fmt_usd(mlimit)} USD)."
+                ),
+                dedupe_prefix=f"budget.monthly.sbx:{sandbox.id}",
+                downgrade_title=f"@{sandbox.slug} 达到月度费用上限，已自动降级至 {{fallback_name}}",
+                downgrade_summary=f"本月已消费 {_fmt_usd(mused)} / 月度上限 {_fmt_usd(mlimit)}，系统已切换至备用低成本模型 {{fallback_model}}。",
+                exceeded_title=f"@{sandbox.slug} 已触达月度费用上限 ({action_label})",
+                exceeded_summary=f"本月已消费 {_fmt_usd(mused)}，达到月度费用配额上限 {_fmt_usd(mlimit)}。",
+            )
+        if mused >= mlimit * 0.8:
+            pct = round((mused / mlimit) * 100)
+            _emit_budget_warning(
+                db,
+                settings,
+                sandbox=sandbox,
+                today_tag=month_tag,
+                dedupe_prefix=f"budget.monthly.sbx:{sandbox.id}",
+                title=f"@{sandbox.slug} 月度费用预算已消耗 {pct}%",
+                summary=f"本月已消费 {_fmt_usd(mused)} / 月度上限 {_fmt_usd(mlimit)}，请留意成本支出。",
+            )
 
     # 2. Team daily cost budget (primary) & legacy team token budget enforcement
     team_rows = list(
@@ -536,6 +798,253 @@ def evaluate_budget_and_route(
     return BudgetEvaluation(decision="primary", profile=profile)
 
 
+_DLP_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("pem_private_key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")),
+    ("api_key_sk", re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")),
+    ("github_pat", re.compile(r"\b(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b")),
+    ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("bearer_token", re.compile(r"\bBearer\s+[A-Za-z0-9._-]{20,}\b")),
+]
+
+
+def resolve_upstream_targets(profile: LlmProfile) -> list[dict[str, str]]:
+    """Expand an LlmProfile + its weighted key_pool into ordered healthy upstream targets."""
+    targets: list[dict[str, str]] = []
+    primary_key = ""
+    if profile.api_key_ciphertext:
+        try:
+            primary_key = decrypt_secret(profile.api_key_ciphertext)
+        except ValueError:
+            primary_key = ""
+    if not coord_is_circuit_open(
+        f"{profile.id}:key:primary",
+        enabled=bool(getattr(profile, "circuit_breaker_enabled", True)),
+    ):
+        targets.append(
+            {
+                "key_id": "primary",
+                "label": "primary",
+                "base_url": profile.base_url.rstrip("/"),
+                "api_key": primary_key,
+                "weight": "1",
+            }
+        )
+
+    pool_raw: list[Any] = []
+    try:
+        parsed = json.loads(getattr(profile, "key_pool_json", None) or "[]")
+        if isinstance(parsed, list):
+            pool_raw = parsed
+    except Exception:
+        pool_raw = []
+
+    weighted_extra: list[dict[str, str]] = []
+    for idx, entry in enumerate(pool_raw):
+        if not isinstance(entry, dict) or not entry.get("enabled", True):
+            continue
+        kid = str(entry.get("id") or f"k{idx + 1}")
+        if coord_is_circuit_open(
+            f"{profile.id}:key:{kid}",
+            enabled=bool(getattr(profile, "circuit_breaker_enabled", True)),
+        ):
+            continue
+        cipher = str(entry.get("api_key_ciphertext") or "")
+        raw_k = primary_key
+        if cipher:
+            try:
+                raw_k = decrypt_secret(cipher)
+            except ValueError:
+                continue
+        url = str(entry.get("base_url") or profile.base_url).strip().rstrip("/")
+        weighted_extra.append(
+            {
+                "key_id": kid,
+                "label": str(entry.get("label") or kid),
+                "base_url": url,
+                "api_key": raw_k,
+                "weight": str(max(1, int(entry.get("weight") or 1))),
+            }
+        )
+
+    if weighted_extra:
+        # Rotate intra-profile pool entries evenly alongside primary
+        random.shuffle(weighted_extra)
+        weighted_extra.sort(key=lambda x: -int(x["weight"]))
+        # Put weighted pool first half / alternate cleanly
+        combined = weighted_extra + targets
+        return combined
+    return targets or [
+        {
+            "key_id": "primary",
+            "label": "primary",
+            "base_url": profile.base_url.rstrip("/"),
+            "api_key": primary_key,
+            "weight": "1",
+        }
+    ]
+
+
+def record_upstream_key_failure(
+    profile: LlmProfile,
+    key_id: str,
+    *,
+    reason: str,
+    cooldown_seconds: int = 30,
+) -> None:
+    record_circuit_failure(
+        f"{profile.id}:key:{key_id}",
+        reason=reason,
+        threshold=2,
+        cooldown_seconds=cooldown_seconds,
+        enabled=bool(getattr(profile, "circuit_breaker_enabled", True)),
+    )
+
+
+def record_upstream_key_success(profile_id: str, key_id: str) -> None:
+    record_circuit_success(f"{profile_id}:key:{key_id}")
+
+
+def resolve_fallback_chain(
+    db: Session,
+    start_profile: LlmProfile,
+    *,
+    max_hops: int = 4,
+) -> list[LlmProfile]:
+    """Resolve non-cyclic multi-hop fallback profile chain starting after start_profile."""
+    chain: list[LlmProfile] = []
+    seen = {start_profile.id}
+    cur = start_profile
+    for _ in range(max_hops):
+        fb_id = getattr(cur, "fallback_llm_profile_id", None)
+        if not fb_id or fb_id in seen:
+            break
+        nxt = db.get(LlmProfile, fb_id)
+        if nxt is None:
+            break
+        seen.add(nxt.id)
+        chain.append(nxt)
+        cur = nxt
+    return chain
+
+
+def collect_sandbox_vault_secrets(db: Session, sandbox: Sandbox) -> list[str]:
+    """Collect active Vault plaintext secrets bound to a sandbox strictly in-memory for DLP scanning."""
+    cids = sandbox.credential_profile_ids
+    if not cids:
+        return []
+    creds = list(
+        db.scalars(select(CredentialProfile).where(CredentialProfile.id.in_(cids))).all()
+    )
+    secrets_list: list[str] = []
+    for c in creds:
+        for attr in (
+            "git_token_ciphertext",
+            "ssh_private_key_ciphertext",
+            "github_app_cached_token_ciphertext",
+        ):
+            enc = getattr(c, attr, "") or ""
+            if enc:
+                try:
+                    val = decrypt_secret(enc)
+                    if val and len(val.strip()) >= 8:
+                        secrets_list.append(val.strip())
+                except Exception:
+                    pass
+        if c.env_vars_ciphertext:
+            try:
+                env_map = json.loads(decrypt_secret(c.env_vars_ciphertext))
+                if isinstance(env_map, dict):
+                    for v in env_map.values():
+                        sv = str(v or "").strip()
+                        if len(sv) >= 8:
+                            secrets_list.append(sv)
+            except Exception:
+                pass
+    return list(dict.fromkeys(secrets_list))
+
+
+def apply_outbound_dlp(
+    raw_body: bytes,
+    *,
+    mode: str = "off",
+    extra_secrets: list[str] | None = None,
+) -> tuple[bytes, int, list[str]]:
+    """Scan/redact sensitive secrets & Vault tokens in outbound LLM payloads."""
+    clean_mode = (mode or "off").strip().lower()
+    if clean_mode not in {"redact", "block"} or not raw_body:
+        return raw_body, 0, []
+    try:
+        parsed = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        return raw_body, 0, []
+
+    hits: list[str] = []
+    count = 0
+
+    def scrub_str(s: str) -> str:
+        nonlocal count
+        out = s
+        if extra_secrets:
+            for sec in extra_secrets:
+                if sec and sec in out:
+                    out = out.replace(sec, "[REDACTED:VAULT_SECRET]")
+                    count += 1
+                    if "vault_secret" not in hits:
+                        hits.append("vault_secret")
+        for label, pat in _DLP_PATTERNS:
+            new_out, n = pat.subn(f"[REDACTED:{label.upper()}]", out)
+            if n > 0:
+                out = new_out
+                count += n
+                if label not in hits:
+                    hits.append(label)
+        return out
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, str):
+            return scrub_str(node)
+        if isinstance(node, list):
+            return [walk(x) for x in node]
+        if isinstance(node, dict):
+            return {k: walk(v) for k, v in node.items()}
+        return node
+
+    scrubbed = walk(parsed)
+    if count == 0:
+        return raw_body, 0, []
+    return json.dumps(scrubbed, ensure_ascii=False).encode("utf-8"), count, hits
+
+
+def resolve_gateway_trace_context(
+    db: Session,
+    sandbox: Sandbox,
+    headers: Any,
+) -> dict[str, str | None]:
+    """Resolve Playbook/Task attribution from explicit headers or the sandbox's single active running step."""
+    run_id = (headers.get("x-metis-playbook-run-id") or "").strip() or None
+    step_id = (headers.get("x-metis-playbook-step-id") or "").strip() or None
+    task_id = (headers.get("x-metis-mesh-task-id") or "").strip() or None
+    if not step_id and not run_id:
+        active_steps = list(
+            db.scalars(
+                select(PlaybookStepRun).where(
+                    PlaybookStepRun.sandbox_id == sandbox.id,
+                    PlaybookStepRun.status == "running",
+                )
+            ).all()
+        )
+        if len(active_steps) == 1:
+            st = active_steps[0]
+            run_id = st.run_id
+            step_id = st.id
+            task_id = task_id or st.task_id
+    return {
+        "playbook_run_id": run_id,
+        "playbook_step_id": step_id,
+        "mesh_task_id": task_id,
+    }
+
+
 def record_llm_usage(
     db: Session,
     *,
@@ -549,9 +1058,21 @@ def record_llm_usage(
     routed_mode: str,
     status_code: int,
     latency_ms: int,
+    cache_creation_tokens: int = 0,
+    playbook_run_id: str | None = None,
+    playbook_step_id: str | None = None,
+    mesh_task_id: str | None = None,
+    upstream_key_label: str | None = None,
+    dlp_redacted_count: int = 0,
 ) -> LlmUsageLedger:
     team_id = get_sandbox_primary_team_id(db, sandbox.id)
-    cost = compute_usage_cost(profile, input_tokens, output_tokens)
+    cost = compute_usage_cost(
+        profile,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+    )
     entry = LlmUsageLedger(
         sandbox_id=sandbox.id,
         sandbox_slug=sandbox.slug,
@@ -562,15 +1083,23 @@ def record_llm_usage(
         input_tokens=max(0, int(input_tokens)),
         output_tokens=max(0, int(output_tokens)),
         cache_read_tokens=max(0, int(cache_read_tokens)),
+        cache_creation_tokens=max(0, int(cache_creation_tokens)),
         total_tokens=max(0, int(total_tokens)),
         cost_amount=cost,
         routed_mode=routed_mode,
         status_code=status_code,
         latency_ms=max(0, int(latency_ms)),
+        playbook_run_id=playbook_run_id,
+        playbook_step_id=playbook_step_id,
+        mesh_task_id=mesh_task_id,
+        upstream_key_label=upstream_key_label,
+        dlp_redacted_count=max(0, int(dlp_redacted_count or 0)),
         created_at=utcnow(),
     )
     db.add(entry)
     db.commit()
+    if total_tokens > 0:
+        record_sandbox_tpm_usage(sandbox.id, total_tokens)
     return entry
 
 
@@ -583,6 +1112,7 @@ def build_finops_summary(
 ) -> dict[str, Any]:
     now = utcnow()
     day_start = _utc_day_start(now)
+    month_start = _utc_month_start(now)
     since = day_start - timedelta(days=max(1, min(days, 365)) - 1)
 
     sbx_ids = [s.id for s in visible_sandboxes]
@@ -598,6 +1128,8 @@ def build_finops_summary(
                 "cost": 0.0,
                 "requests": 0,
                 "fallback_requests": 0,
+                "error_requests": 0,
+                "cache_savings_estimate": 0.0,
             },
             "daily_series": [],
             "by_sandbox": [],
@@ -612,6 +1144,20 @@ def build_finops_summary(
     if team_id:
         stmt = stmt.where(LlmUsageLedger.team_id == team_id)
     rows = list(db.scalars(stmt.order_by(LlmUsageLedger.created_at.asc())).all())
+
+    prof_map = {p.id: p for p in db.scalars(select(LlmProfile)).all()}
+    month_rows = db.execute(
+        select(
+            LlmUsageLedger.sandbox_id,
+            func.coalesce(func.sum(LlmUsageLedger.cost_amount), 0.0),
+        )
+        .where(
+            LlmUsageLedger.sandbox_id.in_(sbx_ids),
+            LlmUsageLedger.created_at >= month_start,
+        )
+        .group_by(LlmUsageLedger.sandbox_id)
+    ).all()
+    month_cost_map = {sid: round(float(val or 0.0), 6) for sid, val in month_rows}
 
     # Map sandbox_id -> attached team_ids so team spend aggregation is exact even across multiple teams
     ts_links = list(
@@ -638,6 +1184,8 @@ def build_finops_summary(
     period_cache = 0
     period_cost = 0.0
     fallback_reqs = 0
+    error_reqs = 0
+    cache_savings_total = 0.0
 
     daily_map: dict[str, dict[str, Any]] = {}
     sbx_agg: dict[str, dict[str, Any]] = {}
@@ -653,6 +1201,16 @@ def build_finops_summary(
         period_cost += r.cost_amount
         if r.routed_mode == "fallback":
             fallback_reqs += 1
+        if int(r.status_code or 200) >= 400:
+            error_reqs += 1
+        if r.cache_read_tokens > 0 and r.llm_profile_id in prof_map:
+            prof_obj = prof_map[r.llm_profile_id]
+            in_p = float(getattr(prof_obj, "input_price_per_1m", None) or 0.0)
+            cr_p = getattr(prof_obj, "cache_read_price_per_1m", None)
+            if cr_p is not None and float(cr_p) < in_p:
+                cache_savings_total += (r.cache_read_tokens / 1_000_000.0) * (
+                    in_p - float(cr_p)
+                )
         if is_today:
             today_tokens += r.total_tokens
             today_cost += r.cost_amount
@@ -716,10 +1274,17 @@ def build_finops_summary(
             "requests": 0,
         }
         cost_limit = getattr(sbx, "daily_cost_limit", None)
+        monthly_cost_val = month_cost_map.get(sbx.id, 0.0)
+        monthly_cost_limit = getattr(sbx, "monthly_cost_limit", None)
         token_limit = getattr(sbx, "daily_token_limit", None)
         cost_pct = (
             round((st["today_cost"] / float(cost_limit)) * 100, 1)
             if cost_limit is not None and float(cost_limit) > 0
+            else None
+        )
+        monthly_pct = (
+            round((monthly_cost_val / float(monthly_cost_limit)) * 100, 1)
+            if monthly_cost_limit is not None and float(monthly_cost_limit) > 0
             else None
         )
         token_pct = (
@@ -737,6 +1302,13 @@ def build_finops_summary(
                 "today_tokens": st["today_tokens"],
                 "today_cost": st["today_cost"],
                 "daily_cost_limit": cost_limit,
+                "monthly_cost": monthly_cost_val,
+                "monthly_cost_limit": monthly_cost_limit,
+                "monthly_budget_percent": monthly_pct,
+                "rpm_limit": getattr(sbx, "rpm_limit", None),
+                "tpm_limit": getattr(sbx, "tpm_limit", None),
+                "max_concurrent_requests": getattr(sbx, "max_concurrent_requests", None),
+                "dlp_mode": getattr(sbx, "dlp_mode", None),
                 "cost_budget_percent": cost_pct,
                 "daily_limit": token_limit,
                 "budget_percent": cost_pct if cost_pct is not None else token_pct,
@@ -807,6 +1379,9 @@ def build_finops_summary(
             "cost": round(period_cost, 6),
             "requests": len(rows),
             "fallback_requests": fallback_reqs,
+            "error_requests": error_reqs,
+            "dlp_redactions": sum(int(getattr(r, "dlp_redacted_count", 0) or 0) for r in rows),
+            "cache_savings_estimate": round(cache_savings_total, 6),
         },
         "daily_series": daily_series,
         "by_sandbox": by_sandbox,

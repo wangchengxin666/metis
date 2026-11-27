@@ -40,6 +40,7 @@ import { useI18n } from '../../lib/i18nContext'
 import type {
   AuthMe,
   SandboxItem,
+  ToolApprovalRequestItem,
   WorkspaceInboxData,
   WorkspaceInboxTask,
   WorkspacePlaybookApproval,
@@ -93,6 +94,7 @@ export function InboxView({
 
   const [data, setData] = useState<WorkspaceInboxData | null>(null)
   const [sandboxes, setSandboxes] = useState<SandboxItem[]>([])
+  const [toolApprovals, setToolApprovals] = useState<ToolApprovalRequestItem[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
 
@@ -129,14 +131,20 @@ export function InboxView({
       if (refresh) setSyncing(true)
       else if (!silent) setLoading(true)
       try {
-        const [inboxRes, sbxRes] = await Promise.all([
+        const [inboxRes, sbxRes, toolRes] = await Promise.all([
           apiFetch<WorkspaceInboxData>(`/api/workspace/inbox${refresh ? '?refresh=true' : ''}`),
           apiFetch<{ items: SandboxItem[] }>(apiBase),
+          apiFetch<{ items: ToolApprovalRequestItem[] }>('/api/tool-approvals?status=pending').catch(
+            () => ({ items: [] as ToolApprovalRequestItem[] }),
+          ),
         ])
         setData(inboxRes)
         setSandboxes(sbxRes.items || [])
+        const pendingTools = toolRes.items || []
+        setToolApprovals(pendingTools)
         onPendingCountChange?.(
-          inboxRes.summary.action_required_count ?? inboxRes.summary.pending_approvals_count,
+          (inboxRes.summary.action_required_count ?? inboxRes.summary.pending_approvals_count) +
+            pendingTools.length,
         )
       } catch (err: any) {
         if (!silent) {
@@ -236,6 +244,34 @@ export function InboxView({
               : 'playbooks.stepRejected',
         ),
       )
+      setNotesMap((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      await loadInbox({ silent: true })
+    } catch (err: any) {
+      notify(err.message || t('admin.loadFailed'), 'error')
+    } finally {
+      setDecidingKey(null)
+    }
+  }
+
+  const handleToolApprovalDecision = async (
+    item: ToolApprovalRequestItem,
+    decision: 'approved' | 'rejected',
+  ) => {
+    const key = `tool:${item.id}`
+    setDecidingKey(key)
+    try {
+      await apiFetch(`/api/tool-approvals/${encodeURIComponent(item.id)}/decide`, {
+        method: 'POST',
+        body: JSON.stringify({
+          decision,
+          note: (notesMap[key] || '').trim(),
+        }),
+      })
+      notify(t('inbox.toolDecided', { decision }))
       setNotesMap((prev) => {
         const next = { ...prev }
         delete next[key]
@@ -381,7 +417,7 @@ export function InboxView({
   )
 
   const actionRequiredCount =
-    pendingApprovals.length + playbookApprovals.length + blockedTasks.length
+    pendingApprovals.length + playbookApprovals.length + blockedTasks.length + toolApprovals.length
 
   const currentTabGroups = activeTab === 'active' ? activeGroups : doneGroups
   const q = searchQuery.trim().toLowerCase()
@@ -1172,6 +1208,75 @@ export function InboxView({
               </div>
             )}
 
+            {/* 2.5 High-Risk Tool HITL Approvals */}
+            {toolApprovals.length > 0 && (
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-300">
+                  <ShieldAlert className="h-4 w-4 text-amber-400" />
+                  <span>{t('inbox.toolApprovalsTitle')}</span>
+                  <Badge variant="warning">{toolApprovals.length}</Badge>
+                </div>
+                <div className="space-y-3">
+                  {toolApprovals.map((item) => {
+                    const key = `tool:${item.id}`
+                    const busy = decidingKey === key
+                    return (
+                      <div
+                        key={key}
+                        className="rounded-[var(--brand-radius-md)] border border-amber-500/35 bg-amber-950/15 p-4 space-y-2.5"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="font-mono font-semibold text-zinc-100">
+                            @{item.sandbox_slug}
+                          </span>
+                          <Badge variant="warning">{item.tool_name}</Badge>
+                          <span className="text-zinc-400">{item.rule_name}</span>
+                        </div>
+                        {item.tool_args_summary && (
+                          <pre className="text-[11px] font-mono text-zinc-200 bg-zinc-950/70 rounded p-2 overflow-x-auto">
+                            {item.tool_args_summary}
+                          </pre>
+                        )}
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                          <Input
+                            className="flex-1 h-8 text-xs"
+                            placeholder={t('inbox.approvalNotePlaceholder')}
+                            value={notesMap[key] || ''}
+                            onChange={(e) =>
+                              setNotesMap((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                          />
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Button
+                              type="button"
+                              variant="emerald"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => void handleToolApprovalDecision(item, 'approved')}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              {t('inbox.toolApproveBtn')}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="border-rose-500/40 text-rose-300 hover:bg-rose-950/40"
+                              disabled={busy}
+                              onClick={() => void handleToolApprovalDecision(item, 'rejected')}
+                            >
+                              <XCircle className="h-3.5 w-3.5" />
+                              {t('inbox.toolRejectBtn')}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* 3. Mesh Task Approval Gates */}
             {pendingApprovals.length > 0 && (
               <div className="space-y-2.5">
@@ -1281,6 +1386,7 @@ export function InboxView({
                 </div>
               </div>
             )}
+
           </div>
         )
       ) : filteredGroups.length === 0 ? (

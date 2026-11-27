@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from ..docker_service import BaseSandboxRuntime
-from ..models import MemoryPromotion, Sandbox, SandboxTemplate, Team, TeamSandbox
-from ..schemas import MemoryPromoteRequest
+from ..models import (
+    MemoryKnowledgeEntry,
+    MemoryPromotion,
+    Sandbox,
+    SandboxTemplate,
+    Team,
+    TeamSandbox,
+)
+from ..schemas import MemoryKnowledgeCreate, MemoryPromoteRequest
 from .common import NotFoundError, audit, utcnow
 
 
@@ -158,6 +167,21 @@ def promote_sandbox_memory(
         promoted_by=actor,
     )
     db.add(promo)
+    db.flush()
+    db.add(
+        MemoryKnowledgeEntry(
+            source_type="promotion",
+            source_id=promo.id,
+            template_id=tpl.id if tpl else None,
+            team_id=team.id if team else None,
+            title=clean_title,
+            category=payload.memory_category.strip() or "workflow",
+            tags_csv=f"{source_sandbox.slug},{payload.memory_category.strip()}",
+            content=clean_content,
+            enabled=True,
+            created_by=actor,
+        )
+    )
     audit(
         db,
         "memory.promote_sop" if payload.target_type == "template_sop" else "memory.promote_team_doc",
@@ -175,3 +199,164 @@ def promote_sandbox_memory(
         "total": len(clean_rollout_ids),
         "results": rollout_results,
     }
+
+
+def serialize_knowledge_entry(e: MemoryKnowledgeEntry) -> dict[str, Any]:
+    return {
+        "id": e.id,
+        "source_type": e.source_type,
+        "source_id": e.source_id,
+        "template_id": e.template_id,
+        "team_id": e.team_id,
+        "title": e.title,
+        "category": e.category,
+        "tags_csv": e.tags_csv,
+        "content": e.content,
+        "enabled": bool(e.enabled),
+        "created_by": e.created_by,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+        "updated_at": e.updated_at.isoformat() if e.updated_at else None,
+    }
+
+
+def create_knowledge_entry(
+    db: Session,
+    payload: MemoryKnowledgeCreate,
+    *,
+    actor: str,
+) -> MemoryKnowledgeEntry:
+    entry = MemoryKnowledgeEntry(
+        source_type="manual",
+        template_id=(payload.template_id or "").strip() or None,
+        team_id=(payload.team_id or "").strip() or None,
+        title=payload.title.strip(),
+        category=payload.category.strip() or "workflow",
+        tags_csv=payload.tags_csv.strip(),
+        content=payload.content.strip(),
+        enabled=True,
+        created_by=actor,
+    )
+    db.add(entry)
+    audit(db, "memory.knowledge_create", target=entry.title[:64], actor=actor)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def list_knowledge_entries(
+    db: Session,
+    *,
+    team_id: str | None = None,
+    template_id: str | None = None,
+    limit: int = 80,
+) -> list[MemoryKnowledgeEntry]:
+    stmt = select(MemoryKnowledgeEntry).where(MemoryKnowledgeEntry.enabled == True)  # noqa: E712
+    if team_id:
+        stmt = stmt.where(
+            or_(
+                MemoryKnowledgeEntry.team_id == team_id,
+                MemoryKnowledgeEntry.team_id.is_(None),
+            )
+        )
+    if template_id:
+        stmt = stmt.where(
+            or_(
+                MemoryKnowledgeEntry.template_id == template_id,
+                MemoryKnowledgeEntry.template_id.is_(None),
+            )
+        )
+    stmt = stmt.order_by(MemoryKnowledgeEntry.updated_at.desc()).limit(max(1, min(limit, 300)))
+    return list(db.scalars(stmt).all())
+
+
+def delete_knowledge_entry(db: Session, entry_id: str, *, actor: str) -> None:
+    row = db.get(MemoryKnowledgeEntry, entry_id)
+    if row is None:
+        raise NotFoundError("知识记忆条目不存在")
+    audit(db, "memory.knowledge_delete", target=row.id, actor=actor, detail=f"title={row.title[:64]}")
+    db.delete(row)
+    db.commit()
+
+
+_WORD_RE = re.compile(r"[a-z0-9_.-]{2,}", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
+
+
+def _tokenize_knowledge(text: str) -> list[str]:
+    """Portable tokenizer producing lowercase ASCII words plus CJK bigrams/unigrams."""
+    raw = (text or "").lower()
+    tokens = _WORD_RE.findall(raw)
+    for seg in _CJK_RE.findall(raw):
+        if len(seg) == 1:
+            tokens.append(seg)
+        else:
+            for idx in range(len(seg)):
+                tokens.append(seg[idx])
+                if idx + 1 < len(seg):
+                    tokens.append(seg[idx : idx + 2])
+    return tokens
+
+
+def recall_relevant_memories(
+    db: Session,
+    query: str,
+    *,
+    team_id: str | None = None,
+    template_id: str | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Portable BM25-weighted Top-K organizational memory recall across PostgreSQL/MSSQL/MySQL/SQLite."""
+    q_tokens = set(_tokenize_knowledge(query))
+    if not q_tokens:
+        return []
+    candidates = list_knowledge_entries(
+        db, team_id=team_id, template_id=template_id, limit=250
+    )
+    if not candidates:
+        return []
+
+    doc_tokens_list: list[list[str]] = []
+    df: dict[str, int] = {}
+    for entry in candidates:
+        toks = _tokenize_knowledge(f"{entry.title} {entry.tags_csv} {entry.category} {entry.content}")
+        doc_tokens_list.append(toks)
+        for t in set(toks):
+            if t in q_tokens:
+                df[t] = df.get(t, 0) + 1
+
+    n_docs = len(candidates)
+    avgdl = max(1.0, sum(len(d) for d in doc_tokens_list) / float(n_docs))
+    k1 = 1.4
+    b = 0.75
+
+    scored: list[tuple[float, MemoryKnowledgeEntry]] = []
+    for entry, d_toks in zip(candidates, doc_tokens_list):
+        if not d_toks:
+            continue
+        tf_map: dict[str, int] = {}
+        for t in d_toks:
+            if t in q_tokens:
+                tf_map[t] = tf_map.get(t, 0) + 1
+        if not tf_map:
+            continue
+        dl = len(d_toks)
+        score = 0.0
+        for qt, tf in tf_map.items():
+            idf = math.log(1.0 + (n_docs - df.get(qt, 0) + 0.5) / (df.get(qt, 0) + 0.5))
+            denom = tf + k1 * (1.0 - b + b * (dl / avgdl))
+            score += idf * ((tf * (k1 + 1.0)) / denom)
+        if team_id and entry.team_id == team_id:
+            score *= 1.15
+        if template_id and entry.template_id == template_id:
+            score *= 1.15
+        if score > 0:
+            scored.append((score, entry))
+
+    scored.sort(key=lambda pair: (-pair[0], -(pair[1].updated_at.timestamp() if pair[1].updated_at else 0)))
+    return [
+        {
+            **serialize_knowledge_entry(entry),
+            "score": round(score, 4),
+        }
+        for score, entry in scored[: max(1, min(limit, 20))]
+    ]

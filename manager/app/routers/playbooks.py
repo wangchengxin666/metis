@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -21,7 +22,7 @@ from ..deps import (
     session_email,
     settings,
 )
-from ..models import Playbook, PlaybookRun, PlaybookStepRun, TeamMember
+from ..models import Playbook, PlaybookArtifact, PlaybookRun, PlaybookStepRun, TeamMember
 from ..schemas import (
     PlaybookCreate,
     PlaybookDraftRequest,
@@ -33,6 +34,7 @@ from ..schemas import (
     PlaybookUpdate,
 )
 from ..services.playbooks import (
+    build_playbook_run_trace,
     cancel_playbook_run,
     create_playbook,
     decide_playbook_step,
@@ -47,6 +49,7 @@ from ..services.playbooks import (
     skip_playbook_step,
     start_playbook_run,
     sync_playbook_run_progress,
+    trigger_playbook_webhook,
     update_playbook,
 )
 from ..services.teams import get_user_teams_summary, list_accessible_sandboxes
@@ -463,5 +466,133 @@ def api_skip_playbook_step(
             actor=actor,
         )
         return serialize_playbook_run(db, updated)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.get("/api/playbook-runs/{run_id}/artifacts")
+def api_list_playbook_run_artifacts(
+    run_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor, is_admin = _resolve_actor(request, db)
+    run = db.get(PlaybookRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Playbook 运行记录不存在")
+    if not _can_access_run(db, run, actor, is_admin):
+        raise HTTPException(status_code=403, detail="无权访问该 Playbook 交付物")
+    rows = list(
+        db.scalars(
+            select(PlaybookArtifact)
+            .where(PlaybookArtifact.run_id == run.id)
+            .order_by(PlaybookArtifact.created_at.asc())
+        ).all()
+    )
+    return {
+        "items": [
+            {
+                "id": a.id,
+                "step_id": a.step_id,
+                "stage_id": a.stage_id,
+                "source_sandbox_slug": a.source_sandbox_slug,
+                "source_path": a.source_path,
+                "file_name": a.file_name,
+                "content_type": a.content_type,
+                "size_bytes": int(a.size_bytes or 0),
+                "sha256": a.sha256,
+                "download_url": f"/api/playbook-runs/{run.id}/artifacts/{a.id}",
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in rows
+        ]
+    }
+
+
+@router.get("/api/playbook-runs/{run_id}/artifacts/{artifact_id}")
+def api_download_playbook_artifact(
+    run_id: str,
+    artifact_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor, is_admin = _resolve_actor(request, db)
+    run = db.get(PlaybookRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Playbook 运行记录不存在")
+    if not _can_access_run(db, run, actor, is_admin):
+        raise HTTPException(status_code=403, detail="无权下载该交付物")
+    art = db.get(PlaybookArtifact, artifact_id)
+    if not art or art.run_id != run.id:
+        raise HTTPException(status_code=404, detail="交付物不存在")
+    try:
+        raw = base64.b64decode((art.content_b64 or "").encode("ascii"))
+    except Exception:
+        raw = b""
+    return Response(
+        content=raw,
+        media_type=art.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{art.file_name}"'},
+    )
+
+
+@router.get("/api/playbook-runs/{run_id}/trace")
+def api_get_playbook_run_trace(
+    run_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor, is_admin = _resolve_actor(request, db)
+    run = db.get(PlaybookRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Playbook 运行记录不存在")
+    if not _can_access_run(db, run, actor, is_admin):
+        raise HTTPException(status_code=403, detail="无权查看该 Playbook 运行链路")
+    return build_playbook_run_trace(db, run)
+
+
+@router.post("/api/hooks/playbooks/{playbook_key}", status_code=201)
+async def api_trigger_playbook_webhook(
+    playbook_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Trigger a Playbook Run from an external system (GitLab, Jira, CI/CD) authenticated via webhook secret."""
+    pb = db.scalar(
+        select(Playbook).where(
+            Playbook.key == playbook_key.strip().lower(),
+            Playbook.enabled == True,  # noqa: E712
+        )
+    )
+    if not pb:
+        raise HTTPException(status_code=404, detail="Playbook 不存在或未启用")
+    raw_body = await request.body()
+    try:
+        payload_json = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except Exception:
+        payload_json = {}
+    if not isinstance(payload_json, dict):
+        payload_json = {}
+
+    secret_hdr = request.headers.get("x-metis-webhook-secret") or ""
+    sig_hdr = (
+        request.headers.get("x-hub-signature-256")
+        or request.headers.get("x-playbook-signature")
+        or ""
+    )
+    try:
+        run = trigger_playbook_webhook(
+            db,
+            settings,
+            resolve_docker(),
+            pb,
+            secret_header=secret_hdr,
+            sig_header=sig_hdr,
+            raw_body=raw_body,
+            payload_json=payload_json,
+        )
+        return serialize_playbook_run(db, run)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except Exception as exc:
         raise _manager_error(exc) from exc

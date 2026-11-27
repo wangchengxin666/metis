@@ -161,8 +161,16 @@ export function createMeshService({
   const maxFileBytes = Number(config.maxFileBytes) > 0 ? Number(config.maxFileBytes) : DEFAULT_MAX_FILE_BYTES
   const requestTimeoutMs = Number(config.requestTimeoutMs) > 0 ? Number(config.requestTimeoutMs) : 15 * 1000
   const fileTimeoutMs = Number(config.fileTimeoutMs) > 0 ? Number(config.fileTimeoutMs) : 120 * 1000
+  const wakeTimeoutMs = Number(config.wakeTimeoutMs) > 0 ? Number(config.wakeTimeoutMs) : 90 * 1000
   const agentWakeEnabled = config.agentWakeEnabled !== false
   const agentTurnTimeoutMs = Number(config.agentTurnTimeoutMs) > 0 ? Number(config.agentTurnTimeoutMs) : 15 * 60 * 1000
+
+  const managerUrl = String(config.managerUrl || env.METIS_MANAGER_URL || '').trim().replace(/\/+$/, '')
+  const gatewayAuthSecret = String(
+    config.gatewayAuthSecret || env.METIS_GATEWAY_AUTH_SECRET || env.DSH_DEFAULT_LLM_API_KEY || '',
+  ).trim()
+  const controlWakeEnabled = config.wakeOnMesh !== false && Boolean(managerUrl && gatewayAuthSecret)
+  const inflightWakeMap = new Map()
 
   const resolveShareableFile = createFileShareGuard({
     homeDir,
@@ -312,6 +320,133 @@ export function createMeshService({
     return { secret, endpointUrl }
   }
 
+  async function wakeSleepingPeer(targetSlug) {
+    const cleanTarget = sanitizeSlug(targetSlug)
+    if (!cleanTarget || !controlWakeEnabled) return { ok: false, skipped: true }
+    if (inflightWakeMap.has(cleanTarget)) {
+      return inflightWakeMap.get(cleanTarget)
+    }
+    const self = store.getSelf()
+    const promise = (async () => {
+      const ac = typeof AbortController === 'function' ? new AbortController() : null
+      const timer = ac ? setTimeout(() => ac.abort(new Error(`Wake peer timed out after ${wakeTimeoutMs}ms`)), wakeTimeoutMs) : null
+      try {
+        const res = await fetchImpl(
+          `${managerUrl}/api/internal/mesh/wake/${encodeURIComponent(cleanTarget)}`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json; charset=utf-8',
+              'x-metis-sandbox-slug': sanitizeSlug(env.METIS_SANDBOX_SLUG || self.slug),
+              'x-metis-gateway-auth': gatewayAuthSecret,
+            },
+            body: JSON.stringify({ requester: self.slug }),
+            signal: ac?.signal,
+          },
+        )
+        const data = await res.json().catch(() => ({}))
+        return { ok: res.ok && data.ok !== false, status: res.status, data }
+      } catch (err) {
+        return { ok: false, status: 502, error: err?.message || String(err) }
+      } finally {
+        if (timer) clearTimeout(timer)
+        inflightWakeMap.delete(cleanTarget)
+      }
+    })()
+    inflightWakeMap.set(cleanTarget, promise)
+    return promise
+  }
+
+  async function emitControlPlaneEvent(eventType, details = {}) {
+    if (!controlWakeEnabled) return
+    const self = store.getSelf()
+    const ac = typeof AbortController === 'function' ? new AbortController() : null
+    const timer = ac ? setTimeout(() => ac.abort(new Error('Control-plane event timeout')), 5000) : null
+    try {
+      await fetchImpl(`${managerUrl}/api/internal/mesh/events`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'x-metis-sandbox-slug': sanitizeSlug(env.METIS_SANDBOX_SLUG || self.slug),
+          'x-metis-gateway-auth': gatewayAuthSecret,
+        },
+        body: JSON.stringify({
+          event: eventType,
+          sandboxSlug: self.slug,
+          ...details,
+        }),
+        signal: ac?.signal,
+      })
+    } catch {
+      // Best-effort event callback; manager BackgroundWorker reconciles periodically as fallback
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  async function checkControlPlaneToolPolicy(toolName, argsSummary = '', context = {}) {
+    if (!controlWakeEnabled) {
+      return { ok: true, allowed: true, action: 'allow', rule_name: null, approval_id: null }
+    }
+    const self = store.getSelf()
+    const ac = typeof AbortController === 'function' ? new AbortController() : null
+    const timer = ac ? setTimeout(() => ac.abort(new Error('Tool policy check timeout')), 6000) : null
+    try {
+      const res = await fetchImpl(`${managerUrl}/api/internal/mesh/tool-check`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'x-metis-sandbox-slug': sanitizeSlug(env.METIS_SANDBOX_SLUG || self.slug),
+          'x-metis-gateway-auth': gatewayAuthSecret,
+        },
+        body: JSON.stringify({
+          tool_name: String(toolName || '').trim(),
+          args_summary: String(argsSummary || '').slice(0, 2000),
+          playbook_run_id: context.playbookRunId || '',
+          playbook_step_id: context.playbookStepId || '',
+        }),
+        signal: ac?.signal,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return { ok: false, allowed: true, action: 'allow', error: data.detail || `HTTP ${res.status}` }
+      }
+      return { ok: true, ...data }
+    } catch (err) {
+      return { ok: false, allowed: true, action: 'allow', error: err?.message || String(err) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  async function checkControlPlaneToolApprovalStatus(approvalId) {
+    if (!controlWakeEnabled || !approvalId) {
+      return { ok: false, error: 'Control plane unavailable or missing approvalId' }
+    }
+    const self = store.getSelf()
+    const ac = typeof AbortController === 'function' ? new AbortController() : null
+    const timer = ac ? setTimeout(() => ac.abort(new Error('Tool approval status timeout')), 6000) : null
+    try {
+      const res = await fetchImpl(
+        `${managerUrl}/api/internal/mesh/tool-check/${encodeURIComponent(String(approvalId))}`,
+        {
+          method: 'GET',
+          headers: {
+            'x-metis-sandbox-slug': sanitizeSlug(env.METIS_SANDBOX_SLUG || self.slug),
+            'x-metis-gateway-auth': gatewayAuthSecret,
+          },
+          signal: ac?.signal,
+        },
+      )
+      const data = await res.json().catch(() => ({}))
+      return { ok: res.ok, ...data }
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   async function postToPeer({
     targetSlug,
     endpointUrl,
@@ -339,31 +474,46 @@ export function createMeshService({
     const candidates = buildCandidateBaseUrls(endpointUrl, targetSlug, env, preferredUrl)
     let lastError = 'No reachable endpoint'
 
-    for (const baseUrl of candidates) {
-      const fullUrl = `${baseUrl}${path}`
-      const ac = typeof AbortController === 'function' ? new AbortController() : null
-      const timer = ac ? setTimeout(() => ac.abort(new Error(`Mesh request timed out after ${timeoutMs}ms`)), timeoutMs) : null
-      try {
-        const res = await fetchImpl(fullUrl, {
-          method: 'POST',
-          headers,
-          body,
-          signal: ac?.signal,
-        })
-        const data = await res.json().catch(() => ({}))
-        if (res.ok && data.ok !== false) {
-          if (targetSlug) reachableBaseUrlMap.set(sanitizeSlug(targetSlug), baseUrl)
-          return { ok: true, data, usedBaseUrl: baseUrl }
+    for (let pass = 0; pass < 2; pass++) {
+      let sawWakeableFailure = false
+      for (const baseUrl of candidates) {
+        const fullUrl = `${baseUrl}${path}`
+        const ac = typeof AbortController === 'function' ? new AbortController() : null
+        const timer = ac ? setTimeout(() => ac.abort(new Error(`Mesh request timed out after ${timeoutMs}ms`)), timeoutMs) : null
+        try {
+          const res = await fetchImpl(fullUrl, {
+            method: 'POST',
+            headers,
+            body,
+            signal: ac?.signal,
+          })
+          const data = await res.json().catch(() => ({}))
+          if (res.ok && data.ok !== false) {
+            if (targetSlug) reachableBaseUrlMap.set(sanitizeSlug(targetSlug), baseUrl)
+            return { ok: true, data, usedBaseUrl: baseUrl, wokePeer: pass > 0 }
+          }
+          lastError = data.error || `HTTP ${res.status}`
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 413 || res.status === 429) {
+            return { ok: false, status: res.status, error: lastError }
+          }
+          if (res.status === 502 || res.status === 503 || res.status === 504 || data?.sleeping) {
+            sawWakeableFailure = true
+          }
+        } catch (err) {
+          lastError = err?.message || String(err)
+          sawWakeableFailure = true
+        } finally {
+          if (timer) clearTimeout(timer)
         }
-        lastError = data.error || `HTTP ${res.status}`
-        if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 413 || res.status === 429) {
-          return { ok: false, status: res.status, error: lastError }
-        }
-      } catch (err) {
-        lastError = err?.message || String(err)
-      } finally {
-        if (timer) clearTimeout(timer)
       }
+
+      if (pass === 0 && targetSlug && controlWakeEnabled && sawWakeableFailure) {
+        const wakeRes = await wakeSleepingPeer(targetSlug)
+        if (wakeRes?.ok) {
+          continue
+        }
+      }
+      break
     }
 
     return { ok: false, status: 502, error: lastError }
@@ -1163,6 +1313,16 @@ export function createMeshService({
       }
     }
 
+    if (normalizedActor === 'agent' && room.type !== 'system') {
+      void emitControlPlaneEvent('message.agent', {
+        roomId: room.id,
+        threadId: message.threadId || '',
+        messageId: message.id,
+        taskId: message.taskId || '',
+        kind: message.kind || 'chat',
+      })
+    }
+
     return {
       ok: true,
       message: updatedMsg || message,
@@ -1882,6 +2042,15 @@ export function createMeshService({
       unblockedDependents = handoff.unblockedDependents
     }
 
+    if (isHandoffCandidate && !handoffDeferred) {
+      void emitControlPlaneEvent('task.updated', {
+        roomId: cleanRoomId,
+        taskId: updated.id,
+        status: updated.status,
+        summary: updated.summary || '',
+      })
+    }
+
     return {
       ok: true,
       task: updated,
@@ -1961,6 +2130,12 @@ export function createMeshService({
       hop: actor === 'agent' ? 1 : 0,
       mentionsOverride: [],
       text: cleanPrompt,
+    })
+
+    void emitControlPlaneEvent('approval.requested', {
+      roomId: cleanRoomId,
+      taskId: task.id,
+      status: task.status,
     })
 
     return {
@@ -2204,6 +2379,8 @@ export function createMeshService({
     updateTask,
     requestApproval,
     decideApproval,
+    checkControlPlaneToolPolicy,
+    checkControlPlaneToolApprovalStatus,
     flushOutbox,
     handleIncomingMeshHttp,
   }

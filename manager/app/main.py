@@ -10,7 +10,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from .db import SessionLocal, init_db
+from .coordination import cluster_lock
+from .db import SessionLocal, engine, get_database_backend, init_db
+from .db_migrate import migrate_sqlite_to_engine
 from .deps import (
     OIDC_ID_TOKEN_COOKIE,
     OIDC_PROMPT_LOGIN_COOKIE,
@@ -72,23 +74,46 @@ async def lifespan(_app: FastAPI):
         raise RuntimeError(
             "MANAGER_ADMIN_TOKEN must be set when MANAGER_AUTH_MODE=token"
         )
-    init_db()
-    with SessionLocal() as db:
-        ensure_bootstrap_admin(db, settings.manager_admin_email)
-        ensure_default_templates(db, settings)
-        ensure_default_playbooks(db)
-        ensure_default_mcp_servers(db)
-        ensure_default_skills(db)
-        ensure_sandbox_gateway_keys(db)
-        ensure_bootstrap_oidc_provider(db, settings)
-        if settings.manager_auth_mode == "oidc":
-            enabled_providers = list_oidc_providers(db, enabled_only=True)
-            if not enabled_providers and not settings.manager_admin_token:
-                raise RuntimeError(
-                    "MANAGER_AUTH_MODE=oidc requires at least one enabled OIDC provider "
-                    "(configure in Admin Console or set OIDC_ISSUER_URL/OIDC_DISCOVERY_URL + OIDC_CLIENT_ID) "
-                    "or MANAGER_ADMIN_TOKEN"
-                )
+    db_backend = get_database_backend(engine)
+    if db_backend == "sqlite":
+        if int(getattr(settings, "manager_workers", 1) or 1) > 1:
+            raise RuntimeError(
+                "SQLite cannot be used with MANAGER_WORKERS > 1; configure PostgreSQL or SQL Server."
+            )
+        if not bool(getattr(settings, "allow_sqlite", False)):
+            raise RuntimeError(
+                "SQLite is disabled; configure PostgreSQL (postgresql+psycopg://) or SQL Server "
+                "(mssql+pymssql://), or set ALLOW_SQLITE=true for local development."
+            )
+
+    with cluster_lock("cluster_bootstrap", ttl_seconds=90.0, wait_seconds=30.0):
+        try:
+            init_db()
+        except Exception:
+            # Handle rare concurrent initial DDL race cleanly across pods/workers
+            init_db()
+        auto_src = (getattr(settings, "auto_migrate_sqlite_path", "") or "").strip()
+        if auto_src and db_backend != "sqlite":
+            try:
+                migrate_sqlite_to_engine(auto_src, engine, only_if_target_empty=True)
+            except Exception as exc:
+                logger.warning("Auto-migration from legacy SQLite %s failed: %s", auto_src, exc)
+        with SessionLocal() as db:
+            ensure_bootstrap_admin(db, settings.manager_admin_email)
+            ensure_default_templates(db, settings)
+            ensure_default_playbooks(db)
+            ensure_default_mcp_servers(db)
+            ensure_default_skills(db)
+            ensure_sandbox_gateway_keys(db)
+            ensure_bootstrap_oidc_provider(db, settings)
+            if settings.manager_auth_mode == "oidc":
+                enabled_providers = list_oidc_providers(db, enabled_only=True)
+                if not enabled_providers and not settings.manager_admin_token:
+                    raise RuntimeError(
+                        "MANAGER_AUTH_MODE=oidc requires at least one enabled OIDC provider "
+                        "(configure in Admin Console or set OIDC_ISSUER_URL/OIDC_DISCOVERY_URL + OIDC_CLIENT_ID) "
+                        "or MANAGER_ADMIN_TOKEN"
+                    )
 
     worker_task: asyncio.Task | None = None
     if settings.background_tasks:

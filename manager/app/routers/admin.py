@@ -308,7 +308,13 @@ def create_profile(
         gateway_enabled=payload.gateway_enabled,
         input_price_per_1m=payload.input_price_per_1m,
         output_price_per_1m=payload.output_price_per_1m,
+        cache_read_price_per_1m=payload.cache_read_price_per_1m,
+        cache_creation_price_per_1m=payload.cache_creation_price_per_1m,
+        key_pool=payload.key_pool,
+        tpm_limit=payload.tpm_limit,
+        dlp_mode=payload.dlp_mode,
         fallback_llm_profile_id=payload.fallback_llm_profile_id,
+        circuit_breaker_enabled=payload.circuit_breaker_enabled,
     )
     return profile
 
@@ -343,7 +349,13 @@ def patch_profile(
         gateway_enabled=payload.gateway_enabled,
         input_price_per_1m=payload.input_price_per_1m,
         output_price_per_1m=payload.output_price_per_1m,
+        cache_read_price_per_1m=payload.cache_read_price_per_1m,
+        cache_creation_price_per_1m=payload.cache_creation_price_per_1m,
+        key_pool=payload.key_pool,
+        tpm_limit=payload.tpm_limit,
+        dlp_mode=payload.dlp_mode,
         fallback_llm_profile_id=payload.fallback_llm_profile_id,
+        circuit_breaker_enabled=payload.circuit_breaker_enabled,
         fields_set=fields_set,
     )
     if fields_set.intersection(

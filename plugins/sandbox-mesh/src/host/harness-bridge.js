@@ -1667,6 +1667,62 @@ export function wireHarnessRuntime(ctx, service, { logger = null } = {}) {
             }),
           }),
         ),
+        toolCtx.tools.register(
+          defineTool({
+            name: 'mesh_check_tool_policy',
+            description:
+              'Check enterprise control-plane Tool HITL policy before executing high-risk commands or external mutations (e.g. prod deployments, database DDL, force-push). If policy requires human approval, returns pending approvalId for Inbox/IM sign-off.',
+            parameters: {
+              toolName: {
+                type: 'string',
+                required: true,
+                description: 'Logical tool/action name (e.g. "deploy_prod", "sql_exec", "git_force_push").',
+              },
+              argsSummary: {
+                type: 'string',
+                description: 'Command or argument summary evaluated by policy regexes.',
+              },
+              approvalId: {
+                type: 'string',
+                description: 'Optional existing approvalId to poll approval status after a human decides.',
+              },
+            },
+            output: {
+              schema: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  allowed: { type: 'boolean' },
+                },
+              },
+              render: (_args, val) => [
+                {
+                  type: 'text',
+                  text: val.allowed
+                    ? `Policy check allowed (${val.action || 'allow'}${val.rule_name ? ` · rule: ${val.rule_name}` : ''}).`
+                    : `Policy hold (${val.action || val.status || 'blocked'}): ${val.reason || ''}${val.approval_id ? ` [approvalId=${val.approval_id}]` : ''}`,
+                },
+              ],
+            },
+            async execute(args) {
+              if (args.approvalId) {
+                const st = await service.checkControlPlaneToolApprovalStatus(args.approvalId)
+                return {
+                  ...st,
+                  allowed: st.status === 'approved',
+                  approval_id: st.id || args.approvalId,
+                }
+              }
+              return service.checkControlPlaneToolPolicy(args.toolName, args.argsSummary || '')
+            },
+            presentCall: (args) => ({
+              card: 'generic',
+              title: `Check HITL policy: ${args.toolName || args.approvalId || ''}`,
+              kind: 'other',
+              rawInput: String(args.argsSummary || args.approvalId || ''),
+            }),
+          }),
+        ),
       )
     })().catch((err) => {
       logger?.warn?.(`Failed to register sandbox-mesh tools: ${err?.message || err}`)

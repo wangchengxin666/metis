@@ -105,6 +105,11 @@ export interface SandboxItem {
   webhook_url?: string | null
   daily_token_limit?: number | null
   daily_cost_limit?: number | null
+  monthly_cost_limit?: number | null
+  rpm_limit?: number | null
+  tpm_limit?: number | null
+  max_concurrent_requests?: number | null
+  dlp_mode?: 'off' | 'redact' | 'block'
   budget_action?: 'block' | 'downgrade' | 'warn'
   has_gateway_api_key?: boolean
   ownership_mode?: 'personal' | 'shared'
@@ -352,7 +357,20 @@ export interface LlmProfileItem {
   gateway_enabled?: boolean
   input_price_per_1m?: number | null
   output_price_per_1m?: number | null
+  cache_read_price_per_1m?: number | null
+  cache_creation_price_per_1m?: number | null
   fallback_llm_profile_id?: string | null
+  circuit_breaker_enabled?: boolean
+  tpm_limit?: number | null
+  dlp_mode?: 'off' | 'redact' | 'block'
+  key_pool?: Array<{
+    id: string
+    label: string
+    base_url?: string | null
+    has_api_key: boolean
+    weight: number
+    enabled: boolean
+  }>
 }
 
 export interface PluginIndexSource {
@@ -413,6 +431,16 @@ export interface OverviewData {
   brand_favicon?: string
   brand_theme?: BrandThemeTokens
   sandbox_runtime?: string
+  database_backend?: string
+  coordination?: {
+    instance_id: string
+    workers: number
+    redis_configured: boolean
+    redis_connected: boolean
+    mode: string
+    scheduler_leader?: string | null
+    is_scheduler_leader: boolean
+  }
   local_images: LocalImageItem[]
   audit_logs: Array<{
     id: string
@@ -595,6 +623,7 @@ export type NotificationEventType =
   | 'sandbox.unhealthy'
   | 'budget.warning'
   | 'budget.exceeded'
+  | 'stage.timeout'
 
 export interface NotificationChannelItem {
   id: string
@@ -725,6 +754,8 @@ export interface FinOpsSummaryData {
     cost: number
     requests: number
     fallback_requests: number
+    error_requests?: number
+    cache_savings_estimate?: number
   }
   daily_series: Array<{
     date: string
@@ -741,6 +772,10 @@ export interface FinOpsSummaryData {
     today_tokens: number
     today_cost: number
     daily_cost_limit?: number | null
+    monthly_cost?: number
+    monthly_cost_limit?: number | null
+    monthly_budget_percent?: number | null
+    rpm_limit?: number | null
     cost_budget_percent?: number | null
     daily_limit?: number | null
     budget_percent?: number | null
@@ -769,6 +804,15 @@ export interface FinOpsSummaryData {
     cost: number
     requests: number
   }>
+  circuit_breakers?: Record<
+    string,
+    {
+      failures: number
+      open: boolean
+      cooldown_remaining_seconds: number
+      last_error?: string
+    }
+  >
 }
 
 export interface PlaybookInputField {
@@ -786,9 +830,14 @@ export interface PlaybookStageSpec {
   role_hint?: string
   template_key_hint?: string
   parallel_group?: string | null
+  depends_on?: string[]
+  timeout_seconds?: number | null
+  max_retries?: number
+  on_reject_goto?: string | null
   approval_required?: boolean
   prompt_template: string
   deliverable_hint?: string
+  skip_if?: string | null
 }
 
 export interface PlaybookItem {
@@ -803,6 +852,13 @@ export interface PlaybookItem {
   input_fields: PlaybookInputField[]
   stages: PlaybookStageSpec[]
   deliverables_checklist: string[]
+  schedule_cron?: string | null
+  schedule_enabled?: boolean
+  schedule_timezone?: string
+  schedule_inputs?: Record<string, string>
+  last_scheduled_at?: string | null
+  has_webhook_secret?: boolean
+  webhook_url?: string | null
   created_by?: string | null
   created_at?: string | null
   updated_at?: string | null
@@ -815,6 +871,13 @@ export interface PlaybookStepRunItem {
   stage_name: string
   role_hint?: string | null
   parallel_group?: string | null
+  depends_on?: string[]
+  timeout_seconds?: number | null
+  max_retries?: number
+  retry_count?: number
+  sla_warned_at?: string | null
+  on_reject_goto?: string | null
+  skip_if?: string | null
   sandbox_id?: string | null
   sandbox_slug?: string | null
   room_id?: string | null
@@ -829,6 +892,117 @@ export interface PlaybookStepRunItem {
   artifacts: string[]
   started_at?: string | null
   completed_at?: string | null
+}
+
+export interface PlaybookRelayedArtifactItem {
+  id: string
+  stage_id?: string | null
+  file_name: string
+  size_bytes: number
+  sha256?: string
+  source_sandbox_slug?: string | null
+  download_url?: string
+  created_at?: string | null
+}
+
+export interface PlaybookRunTraceEventItem {
+  id: string
+  model: string
+  routed_mode: string
+  upstream_key_label?: string | null
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  cost_amount: number
+  status_code: number
+  latency_ms: number
+  dlp_redacted_count: number
+  created_at?: string | null
+}
+
+export interface PlaybookRunTraceResponse {
+  run_id: string
+  playbook_key: string
+  title: string
+  status: string
+  total_llm_calls: number
+  total_tokens: number
+  total_cost_usd: number
+  total_dlp_redactions: number
+  stages: Array<{
+    step_id: string
+    stage_id: string
+    stage_name: string
+    sandbox_slug?: string | null
+    status: string
+    retry_count: number
+    duration_seconds?: number | null
+    llm_calls: number
+    tokens: number
+    cost_usd: number
+    fallback_calls: number
+    dlp_redactions: number
+    events: PlaybookRunTraceEventItem[]
+  }>
+  artifacts: Array<{
+    id: string
+    stage_id?: string | null
+    file_name: string
+    source_sandbox_slug?: string | null
+    source_path?: string | null
+    size_bytes: number
+    sha256?: string
+  }>
+}
+
+export interface ToolPolicyRuleItem {
+  id: string
+  name: string
+  enabled: boolean
+  tool_pattern: string
+  arg_regex?: string | null
+  action: 'require_approval' | 'block' | 'audit'
+  scope_sandbox_id?: string | null
+  description?: string | null
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ToolApprovalRequestItem {
+  id: string
+  sandbox_id: string
+  sandbox_slug: string
+  rule_id?: string | null
+  rule_name: string
+  playbook_run_id?: string | null
+  playbook_step_id?: string | null
+  tool_name: string
+  tool_args_summary: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  decided_by?: string | null
+  decision_note?: string | null
+  decided_at?: string | null
+  expires_at?: string | null
+  created_at?: string | null
+}
+
+export interface MemoryKnowledgeItem {
+  id: string
+  source_type: string
+  source_id?: string | null
+  template_id?: string | null
+  team_id?: string | null
+  title: string
+  category: string
+  tags_csv: string
+  content: string
+  enabled: boolean
+  score?: number
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface PlaybookRunItem {
@@ -852,6 +1026,7 @@ export interface PlaybookRunItem {
   completed_at?: string | null
   steps: PlaybookStepRunItem[]
   artifacts: Array<{ stage_name: string; value: string }>
+  relayed_artifacts?: PlaybookRelayedArtifactItem[]
 }
 
 export interface ScorecardData {

@@ -46,14 +46,17 @@ services:
       - "traefik.http.routers.dsh-manager.entrypoints=web"
       - "traefik.http.routers.dsh-manager.priority=1"
       - "traefik.http.services.dsh-manager.loadbalancer.server.port=9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - sandbox-net
 
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:17-alpine}
     container_name: dsh-postgres
-    profiles:
-      - postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-dsh}
@@ -69,11 +72,28 @@ services:
     networks:
       - sandbox-net
 
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: dsh-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - sandbox-net
+
 volumes:
   manager-data:
     name: dsh-manager-data
   postgres-data:
     name: dsh-postgres-data
+  redis-data:
+    name: dsh-redis-data
 
 networks:
   sandbox-net:

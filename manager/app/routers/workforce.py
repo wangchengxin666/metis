@@ -12,15 +12,18 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..db import get_db
 from ..deps import (
+    _ensure_active_user,
     _ensure_sandbox_awake,
+    _is_authenticated_admin,
     _manager_error,
     _require_sandbox_owner_or_admin,
     require_admin_api,
+    require_user_api,
     resolve_docker,
     session_email,
     settings,
 )
-from ..models import Sandbox, Team, TeamSandbox
+from ..models import PlaybookRun, PlaybookStepRun, Sandbox, Team, TeamSandbox, ToolApprovalRequest
 from ..schemas import (
     ApprovalDecisionRequest,
     CronJobCreateRequest,
@@ -31,9 +34,13 @@ from ..schemas import (
     TaskDispatchRequest,
     TaskStatusUpdateRequest,
     TeamAssembleRequest,
+    ToolApprovalDecisionRequest,
+    ToolPolicyRuleCreate,
+    ToolPolicyRuleUpdate,
     UserServiceCreateRequest,
     WebhookEventPayload,
 )
+from ..security import derive_sandbox_gateway_secret
 from ..services import (
     NotFoundError,
     audit,
@@ -47,7 +54,19 @@ from ..services import (
 )
 from ..services.integrations import parse_native_git_webhook, verify_github_signature
 from ..services.notifications import NotificationEvent, dispatch_notification_event
-from ..services.teams import ensure_team_for_assembly
+from ..services.playbooks import sync_playbook_run_progress
+from ..services.teams import ensure_team_for_assembly, list_accessible_sandboxes
+from ..services.tool_policy import (
+    create_tool_policy_rule,
+    decide_tool_approval,
+    delete_tool_policy_rule,
+    evaluate_tool_call,
+    list_tool_approvals,
+    list_tool_policy_rules,
+    serialize_tool_approval_request,
+    serialize_tool_policy_rule,
+    update_tool_policy_rule,
+)
 from ..services.workspace_hub import (
     refresh_sandbox_snapshot,
     refresh_sandboxes_snapshots,
@@ -788,5 +807,279 @@ def api_delete_snapshot(
         return {"ok": True}
     except HTTPException:
         raise
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+def _authenticate_mesh_sandbox(request: Request, db: Session) -> Sandbox:
+    slug = (request.headers.get("x-metis-sandbox-slug") or "").strip().lower()
+    token = (
+        request.headers.get("x-metis-gateway-auth")
+        or request.headers.get("x-metis-sandbox-token")
+        or ""
+    ).strip()
+    if not slug or not token:
+        raise HTTPException(status_code=401, detail="Missing sandbox internal auth headers")
+    sbx = db.scalar(
+        select(Sandbox).where(Sandbox.slug == slug, Sandbox.deleted_at.is_(None))
+    )
+    if sbx is None:
+        raise HTTPException(status_code=401, detail="Unknown sandbox")
+    expected_secret = derive_sandbox_gateway_secret(sbx.id, sbx.slug)
+    gw_key = (getattr(sbx, "gateway_api_key", None) or "").strip()
+    valid = hmac.compare_digest(token, expected_secret) or (
+        bool(gw_key) and hmac.compare_digest(token, gw_key)
+    )
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid sandbox internal auth token")
+    return sbx
+
+
+@router.post("/api/internal/mesh/wake/{target_slug}", include_in_schema=False)
+def api_internal_mesh_wake_peer(
+    target_slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Wake a sleeping peer sandbox on behalf of an authenticated sandbox-mesh container."""
+    caller = _authenticate_mesh_sandbox(request, db)
+    try:
+        target = load_sandbox_by_slug(db, target_slug.strip().lower())
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if target.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Target sandbox not found")
+
+    was_sleeping = target.status != "running"
+    try:
+        awake = _ensure_sandbox_awake(db, target)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+    if was_sleeping:
+        audit(
+            db,
+            "mesh.wake_peer",
+            target=awake.id,
+            actor=f"sandbox:{caller.slug}",
+            detail=f"from={caller.slug},target={awake.slug}",
+        )
+        db.commit()
+    return {
+        "ok": True,
+        "slug": awake.slug,
+        "status": awake.status,
+        "woke": was_sleeping,
+    }
+
+
+@router.post("/api/internal/mesh/events", include_in_schema=False)
+async def api_internal_mesh_event(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Receive instant task/turn events from sandbox-mesh to advance Playbooks without polling lag."""
+    caller = _authenticate_mesh_sandbox(request, db)
+    try:
+        raw = await request.body()
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    room_id = str(body.get("room_id") or body.get("roomId") or "").strip()
+    task_id = str(body.get("task_id") or body.get("taskId") or "").strip()
+
+    docker = resolve_docker()
+    if hasattr(docker, "inspect_workforce_runtime"):
+        _safe_refresh_snapshot(
+            db,
+            caller,
+            emit_notifications=True,
+            include_team_peers=False,
+            room_id=room_id or None,
+        )
+
+    active_runs = list(
+        db.scalars(
+            select(PlaybookRun).where(
+                PlaybookRun.status.in_(["running", "awaiting_approval"])
+            )
+        ).all()
+    )
+    matched_runs: list[PlaybookRun] = []
+    for run in active_runs:
+        steps = list(
+            db.scalars(
+                select(PlaybookStepRun).where(PlaybookStepRun.run_id == run.id)
+            ).all()
+        )
+        if any(
+            st.status in {"running", "awaiting_approval"}
+            and (
+                st.sandbox_id == caller.id
+                or (room_id and st.room_id == room_id)
+                or (task_id and st.task_id == task_id)
+            )
+            for st in steps
+        ):
+            matched_runs.append(run)
+
+    advanced = 0
+    for run in matched_runs:
+        try:
+            if sync_playbook_run_progress(db, settings, docker, run):
+                advanced += 1
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "synced_runs": len(matched_runs),
+        "advanced": advanced,
+    }
+
+
+@router.post("/api/internal/mesh/tool-check", include_in_schema=False)
+async def api_internal_mesh_tool_check(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Evaluate Tool-level HITL policies for an in-sandbox high-risk tool/command call."""
+    caller = _authenticate_mesh_sandbox(request, db)
+    try:
+        raw = await request.body()
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    tool_name = str(body.get("tool_name") or body.get("toolName") or "").strip()
+    if not tool_name:
+        raise HTTPException(status_code=400, detail="tool_name is required")
+    args_summary = str(body.get("args_summary") or body.get("argsSummary") or body.get("command") or "")
+    pb_run_id = str(body.get("playbook_run_id") or body.get("playbookRunId") or "").strip() or None
+    pb_step_id = str(body.get("playbook_step_id") or body.get("playbookStepId") or "").strip() or None
+    return evaluate_tool_call(
+        db,
+        settings,
+        caller,
+        tool_name=tool_name,
+        args_summary=args_summary,
+        playbook_run_id=pb_run_id,
+        playbook_step_id=pb_step_id,
+    )
+
+
+@router.get("/api/internal/mesh/tool-check/{approval_id}", include_in_schema=False)
+def api_internal_mesh_tool_check_status(
+    approval_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    caller = _authenticate_mesh_sandbox(request, db)
+    req = db.get(ToolApprovalRequest, approval_id)
+    if req is None or req.sandbox_id != caller.id:
+        raise HTTPException(status_code=404, detail="Tool approval request not found")
+    return serialize_tool_approval_request(req)
+
+
+@router.get("/api/tool-policies")
+def api_list_tool_policies(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    return {"items": [serialize_tool_policy_rule(r) for r in list_tool_policy_rules(db)]}
+
+
+@router.post("/api/tool-policies", status_code=201)
+def api_create_tool_policy(
+    payload: ToolPolicyRuleCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    actor = session_email(request) or settings.manager_admin_email
+    try:
+        rule = create_tool_policy_rule(db, payload, actor=actor)
+        return serialize_tool_policy_rule(rule)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.patch("/api/tool-policies/{rule_id}")
+def api_update_tool_policy(
+    rule_id: str,
+    payload: ToolPolicyRuleUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    actor = session_email(request) or settings.manager_admin_email
+    try:
+        rule = update_tool_policy_rule(db, rule_id, payload, actor=actor)
+        return serialize_tool_policy_rule(rule)
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.delete("/api/tool-policies/{rule_id}")
+def api_delete_tool_policy(
+    rule_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    actor = session_email(request) or settings.manager_admin_email
+    try:
+        delete_tool_policy_rule(db, rule_id, actor=actor)
+        return {"ok": True}
+    except Exception as exc:
+        raise _manager_error(exc) from exc
+
+
+@router.get("/api/tool-approvals")
+def api_list_tool_approvals(
+    request: Request,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    is_admin = _is_authenticated_admin(request, db)
+    if is_admin:
+        scoped_ids = None
+    else:
+        email = require_user_api(request)
+        _ensure_active_user(db, email)
+        scoped_ids = [s.id for s in list_accessible_sandboxes(db, email, False)]
+    rows = list_tool_approvals(db, status=status, sandbox_ids=scoped_ids, limit=limit)
+    return {"items": [serialize_tool_approval_request(r) for r in rows]}
+
+
+@router.post("/api/tool-approvals/{approval_id}/decide")
+def api_decide_tool_approval(
+    approval_id: str,
+    payload: ToolApprovalDecisionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    is_admin = _is_authenticated_admin(request, db)
+    if is_admin:
+        actor = session_email(request) or settings.manager_admin_email
+    else:
+        actor = require_user_api(request)
+        _ensure_active_user(db, actor)
+    req = db.get(ToolApprovalRequest, approval_id)
+    if req is None:
+        raise HTTPException(status_code=404, detail="工具操作审批记录不存在")
+    if not is_admin:
+        accessible_ids = {s.id for s in list_accessible_sandboxes(db, actor, False)}
+        if req.sandbox_id not in accessible_ids:
+            raise HTTPException(status_code=403, detail="无权审批该沙箱的工具操作请求")
+    try:
+        updated = decide_tool_approval(
+            db, approval_id, decision=payload.decision, note=payload.note, actor=actor
+        )
+        return serialize_tool_approval_request(updated)
     except Exception as exc:
         raise _manager_error(exc) from exc

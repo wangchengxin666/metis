@@ -801,7 +801,7 @@ def attach_sandbox_to_team(
                 select(TeamSandbox).where(
                     TeamSandbox.team_id == team.id,
                     TeamSandbox.sandbox_id != sandbox.id,
-                    TeamSandbox.is_moderator.is_(True),
+                    TeamSandbox.is_moderator == True,  # noqa: E712
                 )
             ).all()
         )

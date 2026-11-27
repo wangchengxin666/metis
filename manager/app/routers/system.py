@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, joinedload
 
-from ..db import get_db
+from ..coordination import coordination_health
+from ..db import get_database_backend, get_db
 from ..deps import (
     require_admin_api,
     resolve_docker,
@@ -172,6 +173,8 @@ def api_overview(
         "brand_logo_svg": brand_cfg["brand_logo_svg"],
         "brand_favicon": brand_cfg["brand_favicon"],
         "brand_theme": brand_cfg["brand_theme"],
+        "database_backend": get_database_backend(),
+        "coordination": coordination_health(db),
         "local_images": resolve_docker().list_local_images(),
         "audit_logs": [
             {
@@ -411,6 +414,20 @@ def api_branding_favicon(db: Session = Depends(get_db)):
         media_type="image/svg+xml",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.get("/api/system/cluster")
+def api_system_cluster_status(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api),
+):
+    """Expose distributed control-plane topology (DB dialect, Redis coordination, leader status)."""
+    return {
+        "database_backend": get_database_backend(),
+        "coordination": coordination_health(db),
+        "sandbox_runtime": settings.sandbox_runtime,
+        "workers_configured": max(1, int(getattr(settings, "manager_workers", 1) or 1)),
+    }
 
 
 # ---------------------------------------------------------------------------

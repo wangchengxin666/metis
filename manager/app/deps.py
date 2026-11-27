@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
+from .coordination import cluster_lock
 from .db import get_db
 from .docker_service import BaseSandboxRuntime, SandboxRuntimeError, create_runtime
 from .models import OidcProvider, PlatformAdmin, Sandbox, User
@@ -153,6 +154,11 @@ def sandbox_out(
         has_gateway_api_key=bool(gw_key),
         daily_token_limit=getattr(sandbox, "daily_token_limit", None),
         daily_cost_limit=getattr(sandbox, "daily_cost_limit", None),
+        monthly_cost_limit=getattr(sandbox, "monthly_cost_limit", None),
+        rpm_limit=getattr(sandbox, "rpm_limit", None),
+        tpm_limit=getattr(sandbox, "tpm_limit", None),
+        max_concurrent_requests=getattr(sandbox, "max_concurrent_requests", None),
+        dlp_mode=getattr(sandbox, "dlp_mode", None),
         budget_action=getattr(sandbox, "budget_action", None) or "block",
         project_team_name=getattr(sandbox, "project_team_name", None),
         team_ids=team_ids or [],
@@ -180,20 +186,21 @@ def _get_wake_lock(slug: str) -> threading.Lock:
 
 
 def _ensure_sandbox_awake(db: Session, sandbox: Sandbox) -> Sandbox:
-    """Start a stopped sandbox container under a per-slug lock and wait until healthy."""
+    """Start a stopped sandbox container under a cluster + per-slug lock and wait until healthy."""
     docker = resolve_docker()
-    with _get_wake_lock(sandbox.slug):
-        current = docker.status(sandbox)
-        if current != "running":
-            docker.start(sandbox)
-            audit(db, "sandbox.auto_wake", target=sandbox.id, detail=f"slug={sandbox.slug}")
-        docker.wait_healthy(sandbox)
-        sandbox.status = "running"
-        sandbox.last_seen_at = utcnow()
-        db.commit()
-        db.refresh(sandbox)
-        # Allow Traefik Docker provider a moment to pick up the running container labels.
-        time.sleep(0.4)
+    with cluster_lock(f"wake:{sandbox.slug}", ttl_seconds=60.0, wait_seconds=15.0):
+        with _get_wake_lock(sandbox.slug):
+            current = docker.status(sandbox)
+            if current != "running":
+                docker.start(sandbox)
+                audit(db, "sandbox.auto_wake", target=sandbox.id, detail=f"slug={sandbox.slug}")
+            docker.wait_healthy(sandbox)
+            sandbox.status = "running"
+            sandbox.last_seen_at = utcnow()
+            db.commit()
+            db.refresh(sandbox)
+            # Allow Traefik Docker provider a moment to pick up the running container labels.
+            time.sleep(0.4)
     return sandbox
 
 
